@@ -9,6 +9,62 @@
 
 use super::*;
 
+/// The row the declaration that OPENS a probe source stands on: the first line
+/// of the file.
+///
+/// Every probe source of this file that its tool reports at the head writes
+/// that declaration on the first line of the staged bytes, so the number is a
+/// fact of the fixture and not a value the probe chose.
+///
+/// The row stands in a macro beside the probes that hold it because each probe
+/// keeps its rows in a `&'static [&'static str]` built with `concat!`, and
+/// `concat!` takes literals alone.
+macro_rules! opening_declaration_row {
+    () => {
+        "1"
+    };
+}
+
+/// The row the declaration NESTED under the opening declaration stands on: the
+/// second line of the file.
+///
+/// Each nested probe source writes its member on the line directly under the
+/// type head that opens the file, so the number is a fact of the staged bytes.
+///
+/// It stands in a macro for the reason [`opening_declaration_row`] states.
+macro_rules! nested_declaration_row {
+    () => {
+        "2"
+    };
+}
+
+/// The row ruff stands a whole-module finding on: the first line of the file.
+///
+/// `D100` names the module itself, which carries no declaration line of its
+/// own, so ruff reports it at the head of the file rather than under a
+/// definition. That is a different reason from
+/// [`opening_declaration_row`], although both name the same line.
+///
+/// It stands in a macro for the reason [`opening_declaration_row`] states.
+macro_rules! python_module_row {
+    () => {
+        "1"
+    };
+}
+
+/// The row the first declaration of a Go probe source stands on: the third
+/// line of the file.
+///
+/// A Go file opens with its `package` clause and carries a blank line under
+/// it, so the `func Exported` head revive reports takes the third line.
+///
+/// It stands in a macro for the reason [`opening_declaration_row`] states.
+macro_rules! go_declaration_row {
+    () => {
+        "3"
+    };
+}
+
 /// Acceptance: every shipped missing-docs tool rule passes its fixture pair
 /// in doctor, and supersedes the `missing-docs` prompt rule.
 ///
@@ -464,10 +520,11 @@ const DART_BROKEN_RUN_SOURCE: &str = concat!("class BrokenRun {\n", "  void memb
 const DART_BROKEN_RUN_STAGED: &[(&str, &str)] = &[(DART_BROKEN_RUN_PATH, DART_BROKEN_RUN_SOURCE)];
 
 /// Each `path:line` entry the probe reports when both `dart` runs stand: the
-/// class on row 1 and the method on row 2 of [`DART_BROKEN_RUN_SOURCE`].
+/// class head that opens [`DART_BROKEN_RUN_SOURCE`], and the method head on the
+/// line under it.
 const DART_BROKEN_RUN_ROWS: &[&str] = &[
-    concat!(dart_broken_run_path!(), ":1"),
-    concat!(dart_broken_run_path!(), ":2"),
+    concat!(dart_broken_run_path!(), ":", opening_declaration_row!()),
+    concat!(dart_broken_run_path!(), ":", nested_declaration_row!()),
 ];
 
 /// The words the error of a `dart pub get` that could not run must carry.
@@ -1384,17 +1441,25 @@ const PYTHON_BACKSLASH_PATH: &str = "back\\slash.py";
 /// either, so ruff reports `D100` and `D103` on it.
 const PYTHON_BACKSLASH_SOURCE: &str = "def in_a_named_file() -> None:\n    return None\n";
 
+/// The definition line the `D103` of the backslash file stands on. It opens
+/// [`PYTHON_BACKSLASH_SOURCE`], so the row is read out of the staged bytes.
+const PYTHON_BACKSLASH_DECLARATION: &str = "def in_a_named_file() -> None:";
+
 /// Each `path:line` row a run over the judged file and the backslash file must
 /// report.
 ///
 /// ruff sorts its report by path, so `back\slash.py` stands above `judged.py`.
-/// Both of its rows stand at line 1: `D100` names the module, which has no
-/// definition line of its own, and the function it reports is the first line
-/// of the file.
+/// Both of its rows stand on the first line, for two different reasons: `D100`
+/// names the module, which carries no definition line of its own, and the
+/// function `D103` names opens the file.
 fn python_backslash_rows() -> Vec<String> {
     vec![
-        format!("{PYTHON_BACKSLASH_PATH}:1"),
-        format!("{PYTHON_BACKSLASH_PATH}:1"),
+        format!("{PYTHON_BACKSLASH_PATH}:{}", python_module_row!()),
+        expected_row(
+            PYTHON_BACKSLASH_PATH,
+            PYTHON_BACKSLASH_SOURCE,
+            PYTHON_BACKSLASH_DECLARATION,
+        ),
         python_missing_docs_judged_row(),
     ]
 }
@@ -1446,6 +1511,30 @@ fn the_shipped_python_missing_docs_tool_rule_reports_a_path_holding_a_backslash(
 /// scan then cannot open.
 const PYTHON_VANISHED_PATH: &str = "vanished.py";
 
+/// The row the stubbed ruff stands the finding of the vanished path on.
+///
+/// The path holds no file, so no staged source can carry the row. The stub
+/// therefore writes the head of a file, and
+/// [`the_shipped_python_missing_docs_tool_rule_keeps_the_findings_its_scan_cannot_carve`]
+/// reads the same number back, so this constant is what holds the report the
+/// stub wrote and the row the run must place to one value.
+const PYTHON_VANISHED_FINDING_ROW: &str = opening_declaration_row!();
+
+/// The code ruff writes for a public function that carries no docstring.
+const PYTHON_UNDOCUMENTED_FUNCTION_CODE: &str = "D103";
+
+/// The message ruff writes under [`PYTHON_UNDOCUMENTED_FUNCTION_CODE`].
+const PYTHON_UNDOCUMENTED_FUNCTION_MESSAGE: &str = "Missing docstring in public function";
+
+/// One entry of a stubbed ruff report: a `D103` of `path` on `row`.
+fn python_stub_report_entry(path: &str, row: &str) -> String {
+    format!(
+        "{{\"filename\": \"{path}\", \"location\": {{\"row\": {row}}}, \
+         \"code\": \"{PYTHON_UNDOCUMENTED_FUNCTION_CODE}\", \
+         \"message\": \"{PYTHON_UNDOCUMENTED_FUNCTION_MESSAGE}\"}}"
+    )
+}
+
 /// A stubbed ruff that exits 1 and reports one `D103` of a path that holds no
 /// file, beside the `D103` of the judged file.
 ///
@@ -1453,13 +1542,18 @@ const PYTHON_VANISHED_PATH: &str = "vanished.py";
 /// opens each path ruff wrote on its report, exactly as ruff spelled it, and
 /// ruff declines on stderr every path it could not open itself. So the fail-
 /// open needs a ruff that reports a file no reader can follow it to.
-const PYTHON_VANISHED_REPORT_ANSWER: &str = concat!(
-    r#"  printf '[{"filename": "vanished.py", "location": {"row": 1}, "code": "D103", "#,
-    r#""message": "Missing docstring in public function"}, {"filename": "judged.py", "#,
-    r#""location": {"row": 4}, "code": "D103", "#,
-    r#""message": "Missing docstring in public function"}]'"#,
-    "\n  exit 1"
-);
+///
+/// The row of the judged entry is read out of [`PYTHON_JUDGED_SOURCE`] rather
+/// than written as a number, because the test holds the run to the row
+/// [`python_missing_docs_judged_row`] reads out of those same bytes, and the
+/// two must never drift apart.
+fn python_vanished_report_answer() -> String {
+    let judged_row = declaration_line(PYTHON_JUDGED_SOURCE, PYTHON_JUDGED_DECLARATION);
+    let vanished = python_stub_report_entry(PYTHON_VANISHED_PATH, PYTHON_VANISHED_FINDING_ROW);
+    let judged = python_stub_report_entry(PYTHON_JUDGED_PATH, &judged_row.to_string());
+
+    format!("  printf '[{vanished}, {judged}]'\n  exit 1")
+}
 
 /// Acceptance: the shipped Python missing-docs tool rule keeps every finding
 /// of a file its definition-line scan could not read.
@@ -1486,7 +1580,7 @@ fn the_shipped_python_missing_docs_tool_rule_keeps_the_findings_its_scan_cannot_
         &[(PYTHON_JUDGED_PATH, PYTHON_JUDGED_SOURCE)],
         &[PYTHON_JUDGED_PATH],
         PYTHON_TOOL_BINARY_NAME,
-        PYTHON_VANISHED_REPORT_ANSWER,
+        &python_vanished_report_answer(),
     );
     let outcome = run
         .outcome
@@ -1495,7 +1589,7 @@ fn the_shipped_python_missing_docs_tool_rule_keeps_the_findings_its_scan_cannot_
     assert_eq!(
         run.placed,
         vec![
-            format!("{PYTHON_VANISHED_PATH}:1"),
+            format!("{PYTHON_VANISHED_PATH}:{PYTHON_VANISHED_FINDING_ROW}"),
             python_missing_docs_judged_row(),
         ],
         "the finding of the file the scan could not read must stand beside the one it read"
@@ -1650,12 +1744,17 @@ const PYTHON_UNREAD_FILES: &[(&str, &str)] = &[
 
 /// Each finding the Python missing-docs script reports over the two files it
 /// is given, as `path:line`.
+///
+/// The nested file answers three: `D100` for the module, `D101` for the class
+/// that opens it, and `D102` for the method on the line under the class head.
+/// The file at the root answers two: `D100` for the module, and `D103` for the
+/// function that opens it.
 const PYTHON_READ_FINDINGS: &[&str] = &[
-    "deep/nested/other.py:1",
-    "deep/nested/other.py:1",
-    "deep/nested/other.py:2",
-    "top.py:1",
-    "top.py:1",
+    concat!("deep/nested/other.py:", python_module_row!()),
+    concat!("deep/nested/other.py:", opening_declaration_row!()),
+    concat!("deep/nested/other.py:", nested_declaration_row!()),
+    concat!("top.py:", python_module_row!()),
+    concat!("top.py:", opening_declaration_row!()),
 ];
 
 /// The `missing-docs-python` probe over a run that is given no file.
@@ -2248,11 +2347,14 @@ const SWIFT_UNREAD_FILES: &[(&str, &str)] = &[
 
 /// Each finding the Swift missing-docs script reports over the two files it
 /// is given, as `path:line`.
+///
+/// Each file answers two: the type head that opens it, and the member on the
+/// line under that head.
 const SWIFT_READ_FINDINGS: &[&str] = &[
-    "deep/nested/Other.swift:1",
-    "deep/nested/Other.swift:2",
-    "Top.swift:1",
-    "Top.swift:2",
+    concat!("deep/nested/Other.swift:", opening_declaration_row!()),
+    concat!("deep/nested/Other.swift:", nested_declaration_row!()),
+    concat!("Top.swift:", opening_declaration_row!()),
+    concat!("Top.swift:", nested_declaration_row!()),
 ];
 
 /// The `missing-docs-swift` probe over a run that is given no file.
@@ -2304,7 +2406,13 @@ const TYPESCRIPT_MISSING_DOCS_UNREAD_FILES: &[(&str, &str)] = &[
 
 /// Each finding the TypeScript missing-docs script reports over the two files
 /// it is given, as `path:line`.
-const TYPESCRIPT_MISSING_DOCS_READ_FINDINGS: &[&str] = &["deep/nested/other.ts:1", "top.ts:1"];
+///
+/// Both files hold the same bytes, and the exported function that opens them
+/// is the one declaration `jsdoc/require-jsdoc` reports.
+const TYPESCRIPT_MISSING_DOCS_READ_FINDINGS: &[&str] = &[
+    concat!("deep/nested/other.ts:", opening_declaration_row!()),
+    concat!("top.ts:", opening_declaration_row!()),
+];
 
 /// The `missing-docs-typescript` probe over a run that is given no file.
 const TYPESCRIPT_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
@@ -2506,7 +2614,13 @@ const GO_MISSING_DOCS_UNREAD_FILES: &[(&str, &str)] = &[
 
 /// Each finding the Go missing-docs script reports over the two files it is
 /// given, as `path:line`.
-const GO_MISSING_DOCS_READ_FINDINGS: &[&str] = &["top.go:3", "deep/nested/other.go:3"];
+///
+/// Both files hold the same bytes, and the exported function under the
+/// `package` clause is the one declaration revive reports.
+const GO_MISSING_DOCS_READ_FINDINGS: &[&str] = &[
+    concat!("top.go:", go_declaration_row!()),
+    concat!("deep/nested/other.go:", go_declaration_row!()),
+];
 
 /// The `missing-docs-go` probe over a run that is given no file.
 const GO_MISSING_DOCS_EMPTY_RUN_PROBE: ShippedEmptyRun = ShippedEmptyRun {
@@ -2553,11 +2667,14 @@ const DART_MISSING_DOCS_UNREAD_FILES: &[(&str, &str)] = &[
 
 /// Each finding the Dart missing-docs script reports over the two files it is
 /// given, as `path:line`.
+///
+/// Both files hold the same bytes, and each answers two: the class head that
+/// opens the file, and the method on the line under it.
 const DART_MISSING_DOCS_READ_FINDINGS: &[&str] = &[
-    "deep/nested/other.dart:1",
-    "deep/nested/other.dart:2",
-    "top.dart:1",
-    "top.dart:2",
+    concat!("deep/nested/other.dart:", opening_declaration_row!()),
+    concat!("deep/nested/other.dart:", nested_declaration_row!()),
+    concat!("top.dart:", opening_declaration_row!()),
+    concat!("top.dart:", nested_declaration_row!()),
 ];
 
 /// The `missing-docs-dart` probe over a run that is given no file.

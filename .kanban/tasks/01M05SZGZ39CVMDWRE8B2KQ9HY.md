@@ -86,6 +86,120 @@ comments:
     evidence: cargo fmt --check (exit 0); cargo clippy --workspace --all-targets -- -D warnings (exit 0); cargo nextest run --workspace — 14137 passed, 0 failed, 0 skipped
     next: ready for review
   timestamp: 2026-08-17T04:28:20.189484+00:00
+- actor: claude-code
+  id: 01m06zzjv9mjc8mfkb9p9kdpn5
+  text: |-
+    ### review — findings
+    - evidence: 3 findings, 3 confirmed, 2 refuted, 9 attempted. Scope `review sha HEAD~1..HEAD` (c759e69f0). crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:1396, :1459, :1498 — all `magic-numbers/no-magic-numbers`.
+    - next: correct the cause in the whole file, then run /review again.
+  timestamp: 2026-08-17T04:34:22.697207+00:00
+- actor: claude-code
+  id: 01m07007xxc38pm8hcpvma85t7
+  text: |
+    ### finish iteration 1 — findings
+    - implement: changed — 2 files (missing-docs-python.md, missing_docs.rs). The two jq filters and the awk scan became one embedded Python program. The doctor check is now `which ruff python3 mktemp`.
+    - test: green — cargo nextest run --workspace, 14137 passed, 0 failed. fmt and clippy clean. RED/GREEN proof done on the backslash probe. 9 of the 12 tests still drive real ruff.
+    - commit: c759e69f0
+    - review: findings — missing_docs.rs:1396, missing_docs.rs:1459, missing_docs.rs:1498. One cause: a line number written as a bare literal in a string.
+  timestamp: 2026-08-17T04:34:44.285103+00:00
+- actor: claude-code
+  id: 01m070j9b3zg5p58hf5sr0x6yk
+  text: |-
+    The three findings name one cause: a line number written as a bare literal in
+    a string. I read every line of `missing_docs.rs` and found 21 such literals at
+    9 positions, not 3. The three the review printed are three of them.
+
+    The whole list, and the value each names:
+
+    | position | what it was | where the number comes from |
+    |---|---|---|
+    | `DART_BROKEN_RUN_ROWS` | `":1"`, `":2"` | the class head opens `DART_BROKEN_RUN_SOURCE`, the method head stands under it |
+    | `python_backslash_rows` | `":1"` twice | `D100` names the module; `D103` names the function that opens the file |
+    | `PYTHON_VANISHED_REPORT_ANSWER` | `"row": 1`, `"row": 4` | the stub row of a path holding no file; the `def` line of `PYTHON_JUDGED_SOURCE` |
+    | the vanished assertion | `":1"` | the same stub row, which must agree with the report |
+    | `PYTHON_READ_FINDINGS` | `":1"` x4, `":2"` | module, class, method of the two unread Python files |
+    | `SWIFT_READ_FINDINGS` | `":1"` x2, `":2"` x2 | the type head and the member under it |
+    | `TYPESCRIPT_MISSING_DOCS_READ_FINDINGS` | `":1"` x2 | the exported function that opens each file |
+    | `GO_MISSING_DOCS_READ_FINDINGS` | `":3"` x2 | a Go file opens with a `package` clause and a blank line |
+    | `DART_MISSING_DOCS_READ_FINDINGS` | `":1"` x2, `":2"` x2 | the class head and the method under it |
+
+    Each probe holds its rows in a `&'static [&'static str]` built with `concat!`,
+    and `concat!` takes literals alone, so a row of a static probe cannot read a
+    `const usize`. The file already answers that shape: `dart_broken_run_path!`
+    stands as a macro beside the constant that holds it, for that stated reason. I
+    named the rows the same way — 4 macros, each with a doc comment that says which
+    bytes of which fixture put the declaration on that line:
+
+    - `opening_declaration_row!` — the declaration that OPENS a probe source.
+    - `nested_declaration_row!` — the member on the line directly under it.
+    - `python_module_row!` — where ruff stands a `D100`, which names the module and
+      carries no declaration line of its own. Same line, different reason.
+    - `go_declaration_row!` — the third line, under the `package` clause.
+
+    Two positions take a better answer than a name, because the number can be READ
+    out of the fixture:
+
+    - `python_backslash_rows` now calls `expected_row` for the `D103`, so the row
+      is counted out of `PYTHON_BACKSLASH_SOURCE`.
+    - `PYTHON_VANISHED_REPORT_ANSWER` was a `concat!` of raw strings and is now
+      `python_vanished_report_answer()`. Its judged row calls `declaration_line` on
+      `PYTHON_JUDGED_SOURCE`, so the stub report and the row the test reads back
+      can never drift apart. It writes the same bytes as before.
+
+    Three more constants came out of the same rewrite, because the stub spelled
+    each of them twice: `PYTHON_UNDOCUMENTED_FUNCTION_CODE`,
+    `PYTHON_UNDOCUMENTED_FUNCTION_MESSAGE`, and `python_stub_report_entry`, which
+    builds one entry of the report.
+
+    Every constant names the value the test measured before. `cargo nextest run -p
+    swissarmyhammer-validators`: 795 passed, 0 failed, 0 skipped. `cargo fmt --all
+    --check` and `cargo clippy --workspace --all-targets -- -D warnings` are clean.
+    No `.unwrap()`, `.expect(` or `panic!(` was added.
+  timestamp: 2026-08-17T04:44:35.555798+00:00
+- actor: claude-code
+  id: 01m070jfmhtnejvj3886m41jmp
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs. 21 bare literal line numbers removed at 9 positions. New names: `opening_declaration_row!`, `nested_declaration_row!`, `python_module_row!`, `go_declaration_row!`, `PYTHON_BACKSLASH_DECLARATION`, `PYTHON_VANISHED_FINDING_ROW`, `PYTHON_UNDOCUMENTED_FUNCTION_CODE`, `PYTHON_UNDOCUMENTED_FUNCTION_MESSAGE`, `python_stub_report_entry`, `python_vanished_report_answer`. `cargo nextest run -p swissarmyhammer-validators`: 795 passed, 0 failed. fmt and clippy clean.
+    - next: /review
+  timestamp: 2026-08-17T04:44:42.001350+00:00
+- actor: claude-code
+  id: 01m0711pjyfv5pygt3fty7v6gk
+  text: |-
+    ### test — green (iteration 2)
+
+    Verified all 5 claims by measurement, against `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs` diffed at `git diff HEAD` (working tree vs commit c759e69f0).
+
+    1. **`PYTHON_VANISHED_REPORT_ANSWER` → `python_vanished_report_answer()` writes the same bytes.** Read the old constant with `git show HEAD:<path>`:
+       `  printf '[{"filename": "vanished.py", "location": {"row": 1}, "code": "D103", "message": "Missing docstring in public function"}, {"filename": "judged.py", "location": {"row": 4}, "code": "D103", "message": "Missing docstring in public function"}]'\n  exit 1`
+       Hand-expanded the new function: `python_stub_report_entry(PYTHON_VANISHED_PATH="vanished.py", PYTHON_VANISHED_FINDING_ROW="1")` and `python_stub_report_entry(PYTHON_JUDGED_PATH="judged.py", &declaration_line(PYTHON_JUDGED_SOURCE, PYTHON_JUDGED_DECLARATION).to_string())`. `PYTHON_JUDGED_SOURCE` is `"""A documented module."""\n\n\ndef undocumented_function() -> None:\n    return None\n` — 3 newlines before the `def` line, so `declaration_line` (pre-existing helper in `shipped.rs`) returns `4`. Confirmed the Rust line-continuation backslashes in the format string strip the newline and all leading whitespace of the next line (per the Rust reference), so no stray spaces enter the string. Byte-for-byte, the expanded new output is identical to the old constant.
+
+    2. **All 9 positions name the same value as before.** Read each old literal via `git show HEAD:<path>` and diffed against the new macro/const expansion:
+       - `DART_BROKEN_RUN_ROWS`: old `:1`,`:2` → `opening_declaration_row!()`="1", `nested_declaration_row!()`="2" ✓
+       - `python_backslash_rows`: old `:1`,`:1` → `python_module_row!()`="1"; `expected_row(PYTHON_BACKSLASH_PATH, PYTHON_BACKSLASH_SOURCE, PYTHON_BACKSLASH_DECLARATION)` — declaration is at offset 0 in the source, `declaration_line` returns 1 → ":1" ✓
+       - `PYTHON_VANISHED_REPORT_ANSWER`: row 1, row 4 → covered in (1) ✓
+       - the vanished assertion: old `:1` → `PYTHON_VANISHED_FINDING_ROW` = `opening_declaration_row!()` = "1" ✓
+       - `PYTHON_READ_FINDINGS`: old `1,1,2,1,1` → `python_module_row!(),opening_declaration_row!(),nested_declaration_row!(),python_module_row!(),opening_declaration_row!()` = `1,1,2,1,1` ✓
+       - `SWIFT_READ_FINDINGS`: old `1,2,1,2` → `opening_declaration_row!(),nested_declaration_row!()` x2 = `1,2,1,2` ✓
+       - `TYPESCRIPT_MISSING_DOCS_READ_FINDINGS`: old `1,1` → `opening_declaration_row!()` x2 = `1,1` ✓
+       - `GO_MISSING_DOCS_READ_FINDINGS`: old `3,3` → `go_declaration_row!()` x2 = `3,3` ✓
+       - `DART_MISSING_DOCS_READ_FINDINGS`: old `1,2,1,2` → `opening_declaration_row!(),nested_declaration_row!()` x2 = `1,2,1,2` ✓
+
+    3. **Every macro/constant's doc comment says WHY, not just the value.** Read all 4 macros (`opening_declaration_row!`, `nested_declaration_row!`, `python_module_row!`, `go_declaration_row!`) and the new constants (`PYTHON_BACKSLASH_DECLARATION`, `PYTHON_VANISHED_FINDING_ROW`, `PYTHON_UNDOCUMENTED_FUNCTION_CODE`, `PYTHON_UNDOCUMENTED_FUNCTION_MESSAGE`) plus `python_stub_report_entry`/`python_vanished_report_answer`. Each names which fixture bytes put the declaration on that line (e.g. "A Go file opens with its `package` clause and carries a blank line under it, so the `func Exported` head... takes the third line"), not merely "this is 3". No shortfalls found.
+
+    4. **No `.unwrap()`/`.expect(`/`panic!(` added.** `git diff HEAD -- <path> | grep '^+' | grep -E '\.unwrap\(|\.expect\(|panic!\('` — no matches.
+
+    5. **No bare literal line number left anywhere in the file.** Swept with `grep -noE '"[a-zA-Z0-9_./]*:[0-9]+"'` and `grep -noE '"row":? ?\{?[0-9]+'` over the whole file — zero matches. The only remaining bare digit literals are the 4 macro bodies themselves (single source of truth, by design, matching the file's pre-existing `dart_broken_run_path!` pattern) and unrelated values (exit codes, fixture source bytes like `return 1`/`return 2`, `configVersion: 2`) that are not line numbers.
+
+    Full verification:
+    - `cargo fmt --check` — exit 0, clean
+    - `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, clean
+    - `cargo nextest run --workspace` — 14137 tests run: 14137 passed, 0 failed, 0 skipped (36 slow, 1 leaky — not failures)
+    - `cargo nextest run -p swissarmyhammer-validators shipped::missing_docs` — 55 passed, 0 failed
+
+    evidence: cargo fmt --check (exit 0); cargo clippy --workspace --all-targets -- -D warnings (exit 0); cargo nextest run --workspace — 14137 passed, 0 failed, 0 skipped; cargo nextest run -p swissarmyhammer-validators shipped::missing_docs — 55 passed, 0 failed
+    next: ready for review
+  timestamp: 2026-08-17T04:53:00.638253+00:00
 position_column: doing
 position_ordinal: '8280'
 title: missing-docs-python reports a path with a doubled backslash, because jq @tsv escapes it
@@ -127,3 +241,14 @@ The work:
   finding at the REAL path.
 
 Found while implementing `^hqe8qwv`. #tool-validators #objectivity
+
+## Review Findings (2026-08-16 23:29)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 1 file(s) reviewed, 4 not reviewed.
+
+> 4 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 4 file(s)
+
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:1396` `magic-numbers/no-magic-numbers` — Hardcoded line number `1` in format string should be a named constant for clarity and reusability. Extract `1` to a named constant like `const EXPECTED_LINE_NUMBER: &str = "1"` and use it in the format calls.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:1459` `magic-numbers/no-magic-numbers` — Hardcoded line number `4` in JSON string should be a named constant to clarify what line number ruff reports findings for. Define a constant like `const JUDGED_FILE_FUNCTION_LINE: u32 = 4` and interpolate it into the JSON, or add a clearer comment explaining why line 4 is used.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:1498` `magic-numbers/no-magic-numbers` — Hardcoded line number `1` in format string should be a named constant for clarity and reusability. Extract `1` to a named constant like `const EXPECTED_LINE_NUMBER: &str = "1"` and use it in the format calls.
