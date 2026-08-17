@@ -225,22 +225,101 @@ fn init_profile_writes_store_readme_and_deinit_removes_it() {
         "real builtin sets must materialize beside the README"
     );
 
-    // A user-authored set keeps the store directory alive across deinit, but
-    // the builtin README is still removed (it is builtin-owned).
-    let user_set_manifest = validators_root.join("my-team-rules/VALIDATOR.md");
-    std::fs::create_dir_all(user_set_manifest.parent().unwrap()).unwrap();
-    std::fs::write(&user_set_manifest, "USER SET").unwrap();
-
     deinit_profile(&validators_only_profile(), InitScope::User, None, &reporter);
 
     assert!(
         !readme.exists(),
         "deinit must remove the builtin discovery README"
     );
+    assert!(
+        !validators_root.exists(),
+        "a store this install wrote alone is empty after deinit, so the store \
+         directory goes with it: {validators_root:?}"
+    );
+}
+
+/// The name of the validator set the pre-merge roster held. An older binary
+/// deployed it, and the current roster names no such set, so no embedded file
+/// path reaches it. Only a deinit that reads the STORE can clear it.
+const RETIRED_SET_NAME: &str = "no-secrets";
+
+/// The body of each file a user is held to keep across deinit. One value
+/// stands for every such file, so a survivor is checked by its content and not
+/// by its presence alone.
+const USER_AUTHORED_CONTENT: &str = "USER AUTHORED";
+
+/// `deinit_profile` clears every validator set the store holds — the set an
+/// older binary wrote included — and it removes nothing else.
+///
+/// The store is `.validators/`, and its unit is the SET: a subdirectory that
+/// carries a `VALIDATOR.md`. Deinit removes each such directory whole, so a
+/// rule a user added inside a set goes with the set. Store content that is not
+/// a set stays: a loose file at the store root, and a directory with no
+/// manifest. Each survivor keeps the store directory itself alive.
+#[test]
+#[serial(cwd)]
+fn deinit_profile_clears_every_validator_set_and_keeps_what_is_not_a_set() {
+    let env = IsolatedTestEnvironment::new().expect("an isolated HOME");
+    let reporter = NullReporter;
+    let validators_root = env.home_path().join(".validators");
+
+    init_profile(&validators_only_profile(), InitScope::User, None, &reporter);
+
+    // The set an older binary deployed, in the shape that binary wrote.
+    let retired_set = validators_root.join(RETIRED_SET_NAME);
+    std::fs::create_dir_all(retired_set.join("rules")).expect("stage the retired set");
+    std::fs::write(
+        retired_set.join("VALIDATOR.md"),
+        format!("---\nname: {RETIRED_SET_NAME}\n---\n"),
+    )
+    .expect("stage the retired set manifest");
+    std::fs::write(
+        retired_set.join("rules").join("no-secrets.md"),
+        "AN OLDER BINARY WROTE THIS RULE",
+    )
+    .expect("stage the retired set rule");
+
+    // A rule a user added inside a builtin set.
+    let user_rule_in_builtin_set = validators_root.join("code-hygiene/rules/my-rule.md");
+    std::fs::write(&user_rule_in_builtin_set, USER_AUTHORED_CONTENT).expect("stage the user rule");
+
+    // Store content that is not a validator set: a loose file at the store
+    // root, and a directory that carries no manifest.
+    let loose_file = validators_root.join("my-notes.md");
+    std::fs::write(&loose_file, USER_AUTHORED_CONTENT).expect("stage the loose file");
+    let manifest_less_dir = validators_root.join("drafts");
+    std::fs::create_dir_all(&manifest_less_dir).expect("stage the manifest-less directory");
+    let draft_file = manifest_less_dir.join("draft.md");
+    std::fs::write(&draft_file, USER_AUTHORED_CONTENT).expect("stage the draft file");
+
+    deinit_profile(&validators_only_profile(), InitScope::User, None, &reporter);
+
+    assert!(
+        !retired_set.exists(),
+        "deinit must clear a set no current roster names: {retired_set:?}"
+    );
+    assert!(
+        !validators_root.join("code-hygiene").exists(),
+        "deinit must clear each builtin set whole"
+    );
+    assert!(
+        !user_rule_in_builtin_set.exists(),
+        "a rule inside a set goes with the set: {user_rule_in_builtin_set:?}"
+    );
+    assert!(
+        !validators_root.join("README.md").exists(),
+        "deinit must remove the builtin discovery README"
+    );
+
     assert_eq!(
-        std::fs::read_to_string(&user_set_manifest).unwrap(),
-        "USER SET",
-        "deinit must leave user-authored sets untouched"
+        std::fs::read_to_string(&loose_file).expect("the loose file stands"),
+        USER_AUTHORED_CONTENT,
+        "a loose file at the store root is not a set, so deinit leaves it"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&draft_file).expect("the draft file stands"),
+        USER_AUTHORED_CONTENT,
+        "a directory with no manifest is not a set, so deinit leaves it"
     );
 }
 

@@ -208,8 +208,24 @@ comments:
     - evidence: 3 files — crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, .../tests/shipped/missing_docs.rs, .../tests/shipped/stuttering_name_go.rs. Both `reuse/reuse` findings are closed by ONE shared function `verify_go_rule_declines_a_forbidden_path`. `cargo nextest run -p swissarmyhammer-validators`: 820 run, 820 passed, 0 skipped. fmt and clippy clean. Each test proved to fail for its own rule alone and to stay green for the other.
     - next: /review
   timestamp: 2026-08-17T11:16:43.400713+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m07qvz332bs2ynrw4r3y3axw
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` over commit 30f1885c0. 18 rules ran, 0 findings, 0 failed. The 2 items from the 2026-08-17 06:00 section are checked.
+    - next: none. The card moved to `done`.
+  timestamp: 2026-08-17T11:31:49.987158+00:00
+- actor: claude-code
+  id: 01m07qwjtf2vsahqmsarry6r61
+  text: |
+    ### finish iteration 2 — clean
+    - implement: changed — 3 files. One shared function, `verify_go_rule_declines_a_forbidden_path`, holds both Go decline probes. Each test file calls it with one line. This is NOT the ^8nbxwq5 conflict: the two probes carry the same SHAPE and differ only in the rule, the judged source and the row that follows from it.
+    - test: green — cargo nextest run --workspace, 14162 passed, 0 failed. fmt and clippy clean. The shared function was proved to hold every condition the two old builders held, and each test still fails for its own rule alone.
+    - commit: 30f1885c0
+    - review: clean — 18 rules, 0 findings. Both prior findings checked.
+  timestamp: 2026-08-17T11:32:10.191312+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffa680
 title: missing-docs-go and stuttering-name-go read a Go file nobody may read as a clean file
 ---
 Found while implementing `^jttzhnd`.
