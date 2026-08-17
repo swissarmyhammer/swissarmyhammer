@@ -10,7 +10,13 @@ supersedes: magic-numbers
 tool:
   scope: workspace
   run: |
-    cache="${TMPDIR:-/tmp}/sah-golangci-lint-$(printf '%s' "$PWD" | cksum | tr -dc '0-9')"
+    caches="${TMPDIR:-/tmp}/sah-golangci-lint"
+    digest="$(printf '%s' "$PWD" | shasum -a 256)"
+    cache="$caches/${digest%% *}"
+    mkdir -p "$cache"
+    touch "$cache"
+    stale_days=5
+    find "$caches" -mindepth 1 -maxdepth 1 -type d -mtime "+$stale_days" -exec rm -rf {} + 2>/dev/null || true
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     config="$work/golangci.yml"
@@ -35,7 +41,7 @@ tool:
       jq -c '(.Issues // [])[] | select(.FromLinter == "mnd")
              | {file: .Pos.Filename, line: .Pos.Line, message: .Text}'
   doctor:
-    check_command: "which golangci-lint go jq mktemp"
+    check_command: "which golangci-lint go jq mktemp shasum mkdir touch find"
     check_version_command: "golangci-lint --version"
   install:
     commands:
@@ -141,6 +147,20 @@ workspace — so the rule reports nothing and names no reason. With a cache of i
 own the same run reported its own path. Two checkouts of one repository are the
 everyday form of this, and a review runs in a worktree.
 
+### The name separates every workspace, which a checksum did not
+
+Two workspaces reach one cache directory when they reach one NAME, and the
+paragraph above is what happens then. So the name is a sha-256 digest of `$PWD`,
+written whole. The name was `printf '%s' "$PWD" | cksum | tr -dc '0-9'` before,
+which is a 32-bit checksum with the byte COUNT glued on after it; every
+temporary workspace of one test run holds the same number of bytes, so the whole
+keyspace was the checksum. `function-length-go` records the measurement and the
+acceptance test that holds it.
+
+The digest is taken of `$PWD` and of nothing else, so it is not a nonce: this
+rule and `function-length-go` reach the SAME directory for one workspace, which
+is what makes them share one lock.
+
 The scope is `workspace` because `mnd` needs a loaded package to read, and
 `./...` loads the whole module. The engine keeps only the findings in the changed
 files.
@@ -150,15 +170,45 @@ Selection in the pipe is attribution, not exemption. `golangci-lint` also emits
 belong to the build, not to this rule. To exempt one literal, write
 `//nolint:mnd // <reason>` on it in the code.
 
-## The temporary directory the configuration stands in
+## The two directories under `TMPDIR`
 
-The script names two directories under `TMPDIR`, and each has an owner.
-The golangci-lint cache is named after the working directory and stands
-between runs on purpose. The configuration directory `mktemp -d` makes is
-the run's own, and `trap 'rm -rf "$work"' EXIT` removes it. The scope is
-`workspace`, so this script takes no file argument.
+The script names two directories under `TMPDIR`, and each has an owner. The
+configuration directory `mktemp -d` makes is the run's own, and
+`trap 'rm -rf "$work"' EXIT` removes it. The cache stands under
+`$TMPDIR/sah-golangci-lint`, which is one entry however many workspaces the
+machine holds. The scope is `workspace`, so this script takes no file argument.
+
+The golangci-lint cache is named after the working directory and stands between
+runs on purpose. The LOCK stands INSIDE that directory, so a directory of its
+own for each run would give each run a lock of its own and no run would wait for
+another — the `allow-serial-runners` measurement above is what that costs. The
+reason still holds, so the cache stays and the run that made it never removes
+it.
 
 Measured over a Go module of one file: the first run raised the count of
 entries under `TMPDIR` by 2 before the trap, one for the cache and one for
 the configuration, and each run after it raised the count by 1. After the
-trap the count stays unchanged.
+trap the configuration is gone and the cache stays.
+
+### The sweep, which is what a cache nobody removes needs
+
+A run over a temporary workspace leaves one directory behind, and that workspace
+never runs again. Measured on one machine on 2026-08-16: 6609 such directories,
+422804 KiB. golangci-lint states the lifetime itself —
+`internal/go/cache/cache.go` sets `trimLimit = 5 * 24 * time.Hour` — and it
+applies that limit INSIDE a cache directory it is given, never to a directory
+nobody names again.
+
+So the script sweeps the directories past that limit, and no others:
+
+    stale_days=5
+    find "$caches" -mindepth 1 -maxdepth 1 -type d -mtime "+$stale_days" -exec rm -rf {} + 2>/dev/null || true
+
+`touch "$cache"` runs first, so the age the sweep reads is the last RUN of that
+workspace, and `-mindepth 1` keeps `$caches` itself out of the sweep. The caches
+stand under one directory of their own so that the sweep reads their entries and
+not every entry of `TMPDIR`: measured, 2.58 s over a `TMPDIR` of 324623 entries
+against 0.01 s over 7000 caches under their own parent.
+
+`function-length-go` records the whole measurement, and the two rules sweep the
+same directories because they name them the same way.

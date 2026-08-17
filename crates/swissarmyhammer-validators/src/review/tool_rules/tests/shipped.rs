@@ -13,8 +13,8 @@
 //! cargo report, and the Swift one builds the package's test targets; the
 //! function-length family stands one module for each language it drives.
 //! Each module then stays small enough for a reviewer, and for the review
-//! engine, to read whole. `scope_roster`, `temp_directory` and `zero_argument`
-//! are the three
+//! engine, to read whole. `golangci_cache`, `scope_roster`, `temp_directory`
+//! and `zero_argument` are the four
 //! modules that are not a rule family: each reads the shipped script of EVERY
 //! rule, because the contract it holds is about the set and not about one
 //! language. `scope_roster` states which of those set-wide guards reads which
@@ -32,6 +32,7 @@ mod function_length_python;
 mod function_length_rust;
 mod function_length_swift;
 mod function_length_typescript;
+mod golangci_cache;
 mod magic_numbers;
 mod missing_docs;
 mod missing_docs_rust;

@@ -11,7 +11,13 @@ tool:
   scope: workspace
   run: |
     set -e
-    cache="${TMPDIR:-/tmp}/sah-golangci-lint-$(printf '%s' "$PWD" | cksum | tr -dc '0-9')"
+    caches="${TMPDIR:-/tmp}/sah-golangci-lint"
+    digest="$(printf '%s' "$PWD" | shasum -a 256)"
+    cache="$caches/${digest%% *}"
+    mkdir -p "$cache"
+    touch "$cache"
+    stale_days=5
+    find "$caches" -mindepth 1 -maxdepth 1 -type d -mtime "+$stale_days" -exec rm -rf {} + 2>/dev/null || true
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
     config="$work/golangci.yml"
@@ -68,7 +74,7 @@ tool:
     done < "$work/lint.err"
     cat "$work/reported.json"
   doctor:
-    check_command: "which golangci-lint go jq cat mktemp"
+    check_command: "which golangci-lint go jq cat mktemp shasum mkdir touch find"
     check_version_command: "golangci-lint --version"
   install:
     commands:
@@ -279,6 +285,40 @@ fails OPEN. The acceptance test
 the generated-code probe over two workspaces for that reason, and
 `magic-numbers-go` records the same measurement for `mnd`.
 
+### The name separates every workspace, which a checksum did not
+
+Two workspaces reach one cache directory when they reach one NAME, and the table
+above is what happens then. So the name is a sha-256 digest of `$PWD`, written
+whole:
+
+    caches="${TMPDIR:-/tmp}/sah-golangci-lint"
+    digest="$(printf '%s' "$PWD" | shasum -a 256)"
+    cache="$caches/${digest%% *}"
+
+The name was `printf '%s' "$PWD" | cksum | tr -dc '0-9'` before. That is a
+32-bit checksum with the byte COUNT glued on after it. Every temporary workspace
+of one test run holds the same number of bytes, so the count states nothing
+across them and the whole keyspace is the checksum. Measured over 200000 paths
+of the shape `tempfile` writes: the checksum name gave 199996 distinct
+directories — 4 collisions, which is the birthday count over 2^32 — and the
+digest name gave 200000.
+
+Measured with golangci-lint 2.12.2 over two directories whose paths carry the
+same checksum over the same number of bytes, run one after the other:
+
+| the name | cache directories | what the second run reported |
+|---|---|---|
+| the checksum | 1 | the FIRST directory's `plain/staged.go` |
+| the digest | 2 | its own `plain/staged.go` |
+
+The digest is taken of `$PWD` and of nothing else, so it is not a nonce: the two
+rules of this set that drive golangci-lint reach the SAME directory for one
+workspace, which is what makes them share one lock. The acceptance test
+`the_shipped_go_function_length_tool_rule_reads_the_workspace_one_checksum_merged`
+stages that pair and holds each run to reporting its own position. It SEARCHES
+for the pair, because the working directory is a temporary path no constant can
+name.
+
 The scope is `workspace` because golangci-lint loads packages, not loose files,
 and `./...` loads the whole module. The engine keeps only the findings in the
 changed files.
@@ -289,18 +329,99 @@ run rather than dropping it — the section "A run that measured no function"
 below states why. Every exemption this rule makes stands in the configuration,
 where golangci-lint decides it.
 
-## The temporary directory the configuration stands in
+## The two directories under `TMPDIR`
 
 The script names two directories under `TMPDIR`, and each has an owner. The
-golangci-lint cache is named after the working directory and stands between runs
-on purpose. The configuration directory `mktemp -d` makes is the run's own, and
-`trap 'rm -rf "$work"' EXIT` removes it. The scope is `workspace`, so this
-script takes no file argument.
+configuration directory `mktemp -d` makes is the run's own, and
+`trap 'rm -rf "$work"' EXIT` removes it. The cache stands under
+`$TMPDIR/sah-golangci-lint`, which is one entry however many workspaces the
+machine holds. The scope is `workspace`, so this script takes no file argument.
+
+The golangci-lint cache is named after the working directory and stands between
+runs on purpose, and the purpose is two measured things.
+
+- The LOCK stands INSIDE that directory. A directory of its own for each run
+  would give each run a lock of its own, so no run would wait for another, and
+  the `allow-serial-runners` table above is what that costs.
+- A WARM cache is what makes row 3 of the unreadable-file table below
+  DETERMINISTIC. A run whose cache holds the answer reports its findings and
+  declines one item, every time. A run whose cache is cold answers that way only
+  when a race inside golangci-lint falls its way, which the same section
+  measures.
+
+Both reasons still hold, so the cache stays and the run that made it never
+removes it.
 
 Measured over a Go module of one file: the first run raised the count of entries
 under `TMPDIR` by 2 before the trap, one for the cache and one for the
 configuration, and each run after it raised the count by 1. After the trap the
 configuration is gone and the cache stays.
+
+### The sweep, which is what a cache nobody removes needs
+
+A run over a temporary workspace leaves one directory behind, and that workspace
+never runs again. Measured on one machine on 2026-08-16: 6609 such directories,
+422804 KiB, mean 64 KiB. None of them stood over three days old — not because
+this rule removed one, but because the platform swept them. A machine that
+sweeps no temporary directory grows without bound.
+
+golangci-lint states the lifetime itself. `internal/go/cache/cache.go` sets
+`trimLimit = 5 * 24 * time.Hour`, and `Trim` drops every entry whose last use
+stands before `now - trimLimit - mtimeInterval`. It does that INSIDE a cache
+directory it is given, and it never removes a directory nobody names again.
+
+So the script sweeps the directories past that limit, and no others:
+
+    stale_days=5
+    find "$caches" -mindepth 1 -maxdepth 1 -type d -mtime "+$stale_days" -exec rm -rf {} + 2>/dev/null || true
+
+`touch "$cache"` runs first, so the age the sweep reads is the last RUN of that
+workspace and not whatever golangci-lint last wrote inside it. Every entry of a
+directory nothing has touched for that long was itself last used at least that
+long ago, so such a directory holds nothing golangci-lint would have kept. A
+shorter cut would throw away entries the tool still serves, which is why the
+number is the tool's own.
+
+Measured with `find -mtime +5` over directories staged at 0, 1, 4, 5, 5.5, 6, 7
+and 30 days: it removed the last three and kept the first five, so the cut is at
+six days. At the measured rate of about 3300 runs a day the sweep therefore
+holds the count near six days of runs, which is the price of keeping every entry
+the tool would still serve.
+
+`-mindepth 1` keeps `$caches` itself out of the sweep. Without it the parent
+directory matches `-type d` as well, and a parent nothing has touched for six
+days would take every cache under it.
+
+### Why the caches stand under one directory of their own
+
+The sweep reads a directory, so where the caches STAND decides what it costs.
+The earlier shape named each cache at the top of `TMPDIR`, and `find` then had
+to read every entry of `TMPDIR` to find them. Measured on one machine holding
+324623 entries there:
+
+| the sweep | time |
+|---|---|
+| `TMPDIR`, the caches named at the top of it | 2.58 s |
+| the caches under one directory of their own, 7000 of them | 0.01 s |
+
+A bare `ls` of that same `TMPDIR` takes 1.83 s, so the flat shape cannot be
+made cheap: the cost IS reading the directory. 2.58 s stands in front of every
+run of both Go rules, and it is the run's own latency rather than the tool's.
+
+The parent directory answers the count as well. `TMPDIR` holds ONE entry for
+this set however many workspaces the machine has linted, where the flat shape
+held 6609.
+
+Measured with 40 stale directories, while another process removed ten of them
+under the sweep: `find` exited 0 and left none of the 40. The `2>/dev/null` and
+the `|| true` answer that race. A directory that goes away under `find` is
+already swept, and a sweep is housekeeping rather than measurement, so it must
+never break a run that judged the code.
+
+The acceptance test
+`the_shipped_go_function_length_tool_rule_sweeps_a_stale_cache_directory` stages
+one directory nothing has touched for thirty days beside one touched now, and
+holds the run to removing the first and keeping the second.
 
 ## A run that measured no function
 
@@ -313,8 +434,8 @@ holding one function of 170 statements:
 |---|---|---|---|
 | every function under the gate | 0 | `Issues: []` | 0 bytes |
 | one function over the gate | 1 | one `funlen` row | 0 bytes |
-| a `.go` file nobody may read, the cache cold | 7 | `Issues: []` | one `level=error` line |
-| the same file, the cache already holding the other package | 1 | the `funlen` row | one `level=error` line |
+| a workspace whose one package nobody may read | 7 | `Issues: []` | one `level=error` line |
+| the same file beside a package the run DID measure | 1 | the `funlen` row | one `level=error` line |
 | a `.go` file that does not parse | 1 | one `typecheck` row ALONE | 0 bytes |
 | a workspace holding no `go.mod` | 7 | `Issues: []` | one `level=error` line |
 | a module holding no `.go` file | 5 | 0 bytes | one `level=error` line |
@@ -363,26 +484,52 @@ same report: `Report.Linters` carries 121 entries, and `Enabled: true` stands on
 not `funlen` as this same broken run, rather than naming `typecheck` and staying
 silent for a row this rule never met.
 
-### A file it cannot read, which the CACHE answers for
+### A file it cannot read, which costs the run the package it never read
 
 golangci-lint refuses a `.go` file it cannot open another way. It writes
 `level=error msg="[linters_context] typechecking error: open <path>: permission
-denied"` to stderr, and it writes no row for that file. What the RUN then
-reports for the OTHER packages depends on its cache. Measured with golangci-lint
-2.12.2 over ONE workspace holding the function of 170 statements beside a
-package whose one file carries mode 000, run three times in this order:
+denied"` to stderr, and it writes no row for that file. A workspace whose ONE
+package is that package therefore measures nothing at all: `Issues: []` at exit
+7, which the status gate above breaks. Measured over such a workspace with the
+cache directory made empty for every round, 20 rounds at `GOMAXPROCS=1` and 20
+at `GOMAXPROCS=18`: 40 of 40 answered that way.
 
-| the run | exit | the report |
-|---|---|---|
-| the file unreadable, the cache cold | 7 | `Issues: []` |
-| the file readable | 1 | the `funlen` row |
-| the file unreadable again | 1 | the `funlen` row |
+What the run reports for the OTHER packages of the workspace is a RACE, and the
+cache is not what decides it. Measured with golangci-lint 2.12.2 over ONE
+workspace holding the function of 170 statements beside a package whose one file
+carries mode 000, the cache directory made empty for every round and removed
+after it:
 
-A package golangci-lint cannot load costs the run every finding it measured
-FRESH, and `saveIssuesToCache` runs only for a run that met no error, so row 3
-answers out of the cache row 2 filled. Row 1 is therefore a run that measured
-nothing, which the status gate above breaks. Row 3 is a run that judged the code
-and could not judge ONE item.
+| the run | rounds | reported the `funlen` row | reported nothing |
+|---|---|---|---|
+| `GOMAXPROCS=1` | 40 | 25 | 15 |
+| `GOMAXPROCS=2` | 40 | 0 | 40 |
+| `GOMAXPROCS=18` | 40 | 0 | 40 |
+
+A cache that is empty by construction cannot make that split.
+`pkg/goanalysis/runner.go` gives every package of one run ONE context and a
+`loadSem` of `runtime.GOMAXPROCS(-1)` places. In
+`pkg/goanalysis/runner_checker.go` the method `(act *action) analyze` answers
+`analysis skipped: IllTypedError` for the action of the package nobody may read.
+In `pkg/goanalysis/runner_loadingpackage.go` the `errgroup` hands that error up,
+and the method `(lp *loadingPackage) analyze` calls `cancel()` on the shared
+context. A package that has not yet passed
+`select { case <-ctx.Done(): return; case loadSem <- struct{}{}: }` is dropped
+without a word. So which packages a run measures is a race between the failing
+package and the sound ones, and heavy load on the machine moves it.
+
+A CACHE the run can read decides it, and that is the one shape that is
+deterministic. Measured over one workspace linted with the file readable and
+then with the file unreadable, over the cache the first run filled, 20 rounds at
+`GOMAXPROCS=1` and 20 at `GOMAXPROCS=18`: 40 of 40 reported the `funlen` row at
+exit 1. `saveIssuesToCache` runs only for a run that met no error, so the
+readable run is what fills that cache.
+
+Both answers are sound for this rule, and the shipped script was driven over 24
+fresh workspaces at `GOMAXPROCS=1` to hold them: 6 broke with
+`golangci-lint exited 7 and measured no function`, and 18 reported the one
+`funlen` row at exit 0 with one `sah-diagnostic:` line naming the file. No run
+answered a third shape, and 40 of 40 runs at the default concurrency broke.
 
 The script writes each line golangci-lint put on stderr under the marker
 `builtin/validators/README.md` states, at exit 0:
@@ -404,17 +551,19 @@ lines there as well — measured with `wsl` added to the shipped `enable` list,
 three warning lines at exit 1 — and the shipped configuration names no
 deprecated linter.
 
-Two acceptance tests hold the two rows.
+Two acceptance tests hold the two shapes, and each one stages the workspace that
+makes its shape deterministic.
 `the_shipped_go_function_length_tool_rule_breaks_on_a_file_it_may_not_read`
-stages the function of 170 statements beside a file nobody may read, over a
-fresh workspace whose cache is therefore cold, and holds the run to breaking and
-to placing no finding.
+stages a workspace whose ONE package is the package nobody may read, and holds
+the run to breaking and to placing no finding. It stages no second package,
+because that is the shape the race above reaches: measured, a probe holding a
+readable function beside the unreadable package failed 5 of 6 rounds under
+`GOMAXPROCS=1`.
 `the_shipped_go_function_length_tool_rule_declines_a_file_it_may_not_read` holds
-the other row: it hands the script the bytes the warm run answered with, and
+the other shape: it hands the script the bytes the warm run answered with, and
 holds the run to reporting the finding AND to stating one diagnostic that names
-the file. The second test stages those bytes rather than the workspace, because
-the cache state that makes row 3 is what one earlier run left behind, and a
-probe over a fresh workspace always reads a cold one.
+the file. It stages those bytes rather than the workspace, because a workspace
+whose cache is cold reaches that answer only when the race falls its way.
 
 ## The carve-outs the prompt rule states
 
