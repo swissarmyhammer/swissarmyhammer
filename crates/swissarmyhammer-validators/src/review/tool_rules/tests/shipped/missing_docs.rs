@@ -480,7 +480,7 @@ fn the_shipped_dart_missing_docs_tool_rule_reads_one_package_config_for_each_pac
     );
 }
 
-/// The binary both runs of the shipped Dart script call.
+/// The binary every run of the shipped Dart script calls.
 const DART_BINARY_NAME: &str = "dart";
 
 /// The word `dart pub get` takes as its first argument.
@@ -686,7 +686,7 @@ fn the_shipped_dart_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
 ///
 /// It stands under `lib/`, which is the one position `public_member_api_docs`
 /// reads.
-const DART_LANGUAGE_VERSION_PATH: &str = "lib/language_version.dart";
+const DART_MISSING_DOCS_LANGUAGE_VERSION_PATH: &str = "lib/language_version.dart";
 
 /// A Dart library whose first declaration is an `extension type`, beside a
 /// plain class holding the same two undocumented member kinds.
@@ -699,7 +699,7 @@ const DART_LANGUAGE_VERSION_PATH: &str = "lib/language_version.dart";
 /// The plain class is what makes the loss readable. A run that lost the
 /// extension type still answers three rows, so silence is never the signal —
 /// the missing rows are.
-const DART_LANGUAGE_VERSION_SOURCE: &str = concat!(
+const DART_MISSING_DOCS_LANGUAGE_VERSION_SOURCE: &str = concat!(
     "extension type Meters(int value) {\n",
     "  int get doubled => value + value;\n",
     "\n",
@@ -713,13 +713,14 @@ const DART_LANGUAGE_VERSION_SOURCE: &str = concat!(
     "}\n",
 );
 
-/// The head of each member [`DART_LANGUAGE_VERSION_SOURCE`] leaves
+/// The head of each member [`DART_MISSING_DOCS_LANGUAGE_VERSION_SOURCE`]
+/// leaves
 /// undocumented.
 ///
 /// The first three stand inside the `extension type` and the last three inside
 /// the plain class. The lint reports the extension type itself, its getter and
 /// its method, and reports nothing for the representation field `value`.
-const DART_LANGUAGE_VERSION_HEADS: &[&str] = &[
+const DART_MISSING_DOCS_LANGUAGE_VERSION_HEADS: &[&str] = &[
     "extension type Meters",
     "int get doubled",
     "void report()",
@@ -751,12 +752,12 @@ const DART_LANGUAGE_VERSION_HEADS: &[&str] = &[
 /// to all six, so a fixed floor can never come back unmeasured.
 #[test]
 fn the_shipped_dart_missing_docs_tool_rule_reports_a_member_of_a_newer_declaration() {
-    let expected: Vec<String> = DART_LANGUAGE_VERSION_HEADS
+    let expected: Vec<String> = DART_MISSING_DOCS_LANGUAGE_VERSION_HEADS
         .iter()
         .map(|head| {
             expected_row(
-                DART_LANGUAGE_VERSION_PATH,
-                DART_LANGUAGE_VERSION_SOURCE,
+                DART_MISSING_DOCS_LANGUAGE_VERSION_PATH,
+                DART_MISSING_DOCS_LANGUAGE_VERSION_SOURCE,
                 head,
             )
         })
@@ -766,11 +767,78 @@ fn the_shipped_dart_missing_docs_tool_rule_reports_a_member_of_a_newer_declarati
     verify_staged_rows_report(
         FLUTTER_PROJECT_TYPES,
         DART_MISSING_DOCS_RULE,
-        &[(DART_LANGUAGE_VERSION_PATH, DART_LANGUAGE_VERSION_SOURCE)],
+        &[(
+            DART_MISSING_DOCS_LANGUAGE_VERSION_PATH,
+            DART_MISSING_DOCS_LANGUAGE_VERSION_SOURCE,
+        )],
         &expected,
         "the probe package states the language version of the installed SDK, so the \
          analyzer parses the extension type and reports its three members beside the \
          three of the plain class",
+    );
+}
+
+/// The word `dart --version` takes as its first argument.
+///
+/// It tells the run that reads the language version from the two runs that
+/// build and judge the probe package, so a stub can break that one run and
+/// leave the other two standing.
+const DART_MISSING_DOCS_VERSION_SUBCOMMAND: &str = "--version";
+
+/// Where the one file the no-version probe stages stands, as the work-list
+/// holds it.
+///
+/// The script never reaches `dart analyze` over this file — the break happens
+/// before the probe package is built — so its content answers for nothing
+/// beyond giving the run one file to judge.
+const DART_MISSING_DOCS_NO_VERSION_PATH: &str = "lib/no_version.dart";
+
+/// [`DART_MISSING_DOCS_NO_VERSION_PATH`]'s source: one undocumented public
+/// class holding one undocumented method.
+const DART_MISSING_DOCS_NO_VERSION_SOURCE: &str =
+    concat!("class NoVersion {\n", "  void member() {}\n", "}\n");
+
+/// The one file the no-version probe stages.
+const DART_MISSING_DOCS_NO_VERSION_STAGED: &[(&str, &str)] = &[(
+    DART_MISSING_DOCS_NO_VERSION_PATH,
+    DART_MISSING_DOCS_NO_VERSION_SOURCE,
+)];
+
+/// The words the error of a `dart --version` that names no version must carry.
+const DART_MISSING_DOCS_NO_VERSION_ERROR: &[&str] =
+    &[DART_MISSING_DOCS_RULE, "dart --version names no version"];
+
+/// The probe of a `dart --version` that names no version, and the words its
+/// error must carry.
+const DART_MISSING_DOCS_NO_VERSION_PROBE: ShippedStagedTree = ShippedStagedTree {
+    run: ShippedRun {
+        project_types: FLUTTER_PROJECT_TYPES,
+        rule: DART_MISSING_DOCS_RULE,
+        expected: DART_MISSING_DOCS_NO_VERSION_ERROR,
+    },
+    staged: DART_MISSING_DOCS_NO_VERSION_STAGED,
+    reason: "a `dart --version` that names no version leaves the probe package unable to \
+             state the language version it parses with, and the run must not guess one",
+};
+
+/// Acceptance: the shipped Dart missing-docs tool rule BREAKS when
+/// `dart --version` names no version.
+///
+/// The script reads the installed SDK's language version out of
+/// `dart --version` because a fixed floor hides real code as the language
+/// moves. A `dart --version` this script cannot read a version out of leaves
+/// it with no constraint to derive, and the run must not guess one: it names
+/// the failure and exits, rather than writing a probe package whose
+/// `environment: sdk:` states a version nobody measured.
+#[cfg(unix)]
+#[test]
+#[serial_test::serial(env)]
+fn the_shipped_dart_missing_docs_tool_rule_breaks_when_dart_version_names_no_version() {
+    verify_shipped_tree_breaks_with_stub(
+        &DART_MISSING_DOCS_NO_VERSION_PROBE,
+        DART_BINARY_NAME,
+        &format!(" && [ \"$1\" = \"{DART_MISSING_DOCS_VERSION_SUBCOMMAND}\" ]"),
+        "  printf '%s\\n' 'Dart CLI has no version line here'\n  exit 0",
     );
 }
 
