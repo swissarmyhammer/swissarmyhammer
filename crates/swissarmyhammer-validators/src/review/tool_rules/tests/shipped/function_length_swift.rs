@@ -336,26 +336,27 @@ fn swift_undecodable_source() -> &'static [u8] {
 /// the clean answer this rule must not give for a file it never read.
 const SWIFT_LENGTH_FORBIDDEN_SOURCE: &str = concat!("func hidden() {\n", "    let _ = 1\n", "}\n");
 
-/// Holds the shipped Swift function-length run to judging
-/// `Sources/Judged.swift` and to stating the one path it could not judge,
-/// through the real swiftlint pipeline.
+/// The `function-length-swift` probe over a refusing path beside
+/// `Sources/Judged.swift`.
 ///
 /// The judged file carries one function over the length gate, so the run has a
 /// finding to lose. Losing it is what a nonzero exit over a declined item
 /// costs, and staying silent about the path is what reads that path as a clean
 /// file.
-fn verify_swift_length_declines(unreadable: &ShippedUnreadableFile) {
+fn swift_length_decline_probe() -> ShippedDeclineProbe {
     let head = format!("func {SWIFT_STAGED_FUNCTION_NAME}(");
-    let judged = expected_row(SWIFT_LENGTH_JUDGED_PATH, swift_staged_source(), &head);
 
-    verify_unreadable_file_is_declined(
-        SWIFT_PROJECT_TYPES,
-        SWIFT_FUNCTION_LENGTH_RULE,
-        &[(SWIFT_LENGTH_JUDGED_PATH, swift_staged_source())],
-        SWIFT_LENGTH_UNREADABLE_PATH,
-        unreadable,
-        &[&judged],
-    );
+    ShippedDeclineProbe {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_FUNCTION_LENGTH_RULE,
+        judged: vec![(SWIFT_LENGTH_JUDGED_PATH, swift_staged_source().to_string())],
+        path: SWIFT_LENGTH_UNREADABLE_PATH,
+        expected: vec![expected_row(
+            SWIFT_LENGTH_JUDGED_PATH,
+            swift_staged_source(),
+            &head,
+        )],
+    }
 }
 
 /// Acceptance: the shipped Swift function-length tool rule DECLINES a path that
@@ -371,7 +372,10 @@ fn verify_swift_length_declines(unreadable: &ShippedUnreadableFile) {
 /// tests the path itself, and states it under the marker.
 #[test]
 fn the_shipped_swift_function_length_tool_rule_declines_a_path_that_holds_no_file() {
-    verify_swift_length_declines(&ShippedUnreadableFile::Absent);
+    verify_unreadable_file_is_declined(
+        &swift_length_decline_probe(),
+        &ShippedUnreadableFile::Absent,
+    );
 }
 
 /// Acceptance: the shipped Swift function-length tool rule DECLINES a Swift
@@ -387,9 +391,10 @@ fn the_shipped_swift_function_length_tool_rule_declines_a_path_that_holds_no_fil
 /// open it — so the answer has to come from what swiftlint itself said.
 #[test]
 fn the_shipped_swift_function_length_tool_rule_declines_a_file_it_cannot_decode() {
-    verify_swift_length_declines(&ShippedUnreadableFile::Undecodable(
-        swift_undecodable_source(),
-    ));
+    verify_unreadable_file_is_declined(
+        &swift_length_decline_probe(),
+        &ShippedUnreadableFile::Undecodable(swift_undecodable_source()),
+    );
 }
 
 /// Acceptance: the shipped Swift function-length tool rule DECLINES a Swift
@@ -405,17 +410,20 @@ fn the_shipped_swift_function_length_tool_rule_declines_a_file_it_cannot_decode(
 #[cfg(unix)]
 #[test]
 fn the_shipped_swift_function_length_tool_rule_declines_a_file_it_may_not_read() {
-    verify_swift_length_declines(&ShippedUnreadableFile::Forbidden(
-        SWIFT_LENGTH_FORBIDDEN_SOURCE,
-    ));
+    verify_unreadable_file_is_declined(
+        &swift_length_decline_probe(),
+        &ShippedUnreadableFile::Forbidden(SWIFT_LENGTH_FORBIDDEN_SOURCE),
+    );
 }
 
-/// Holds the shipped Swift function-length run to reporting no finding, and to
-/// stating one diagnostic for the refusing path, when the run has no other
-/// file to judge.
+/// The `function-length-swift` probe over a refusing path with no other file
+/// beside it.
+///
+/// A run over this probe reports no finding, and states one diagnostic for the
+/// refusing path.
 ///
 /// This run takes a different branch of the script than
-/// [`verify_swift_length_declines`] does. With a healthy file beside the
+/// [`swift_length_decline_probe`] does. With a healthy file beside the
 /// refusing path, swiftlint always has a body to measure, so `status` is 0 or
 /// 2 with a report, and the script never reaches its `measured -eq 0` check.
 /// Alone, the refusing path leaves swiftlint no file to lint at all: for
@@ -425,15 +433,14 @@ fn the_shipped_swift_function_length_tool_rule_declines_a_file_it_may_not_read()
 /// exits 0 with an empty report, so the branch is not the one this proves —
 /// but the pre-flight diagnostic line still fires, and the run still must
 /// report nothing.
-fn verify_swift_length_declines_alone(unreadable: &ShippedUnreadableFile) {
-    verify_unreadable_file_is_declined(
-        SWIFT_PROJECT_TYPES,
-        SWIFT_FUNCTION_LENGTH_RULE,
-        &[],
-        SWIFT_LENGTH_UNREADABLE_PATH,
-        unreadable,
-        &[],
-    );
+fn swift_length_decline_alone_probe() -> ShippedDeclineProbe {
+    ShippedDeclineProbe {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_FUNCTION_LENGTH_RULE,
+        judged: Vec::new(),
+        path: SWIFT_LENGTH_UNREADABLE_PATH,
+        expected: Vec::new(),
+    }
 }
 
 /// Acceptance: the shipped Swift function-length tool rule reports no finding,
@@ -449,7 +456,10 @@ fn verify_swift_length_declines_alone(unreadable: &ShippedUnreadableFile) {
 /// by way of a project `excluded:` list or a hollow directory.
 #[test]
 fn the_shipped_swift_function_length_tool_rule_declines_a_path_that_holds_no_file_alone() {
-    verify_swift_length_declines_alone(&ShippedUnreadableFile::Absent);
+    verify_unreadable_file_is_declined(
+        &swift_length_decline_alone_probe(),
+        &ShippedUnreadableFile::Absent,
+    );
 }
 
 /// Acceptance: the shipped Swift function-length tool rule reports no finding,
@@ -463,9 +473,10 @@ fn the_shipped_swift_function_length_tool_rule_declines_a_path_that_holds_no_fil
 /// entry.
 #[test]
 fn the_shipped_swift_function_length_tool_rule_declines_a_file_it_cannot_decode_alone() {
-    verify_swift_length_declines_alone(&ShippedUnreadableFile::Undecodable(
-        swift_undecodable_source(),
-    ));
+    verify_unreadable_file_is_declined(
+        &swift_length_decline_alone_probe(),
+        &ShippedUnreadableFile::Undecodable(swift_undecodable_source()),
+    );
 }
 
 /// Acceptance: the shipped Swift function-length tool rule reports no finding,
@@ -479,9 +490,10 @@ fn the_shipped_swift_function_length_tool_rule_declines_a_file_it_cannot_decode_
 #[cfg(unix)]
 #[test]
 fn the_shipped_swift_function_length_tool_rule_declines_a_file_it_may_not_read_alone() {
-    verify_swift_length_declines_alone(&ShippedUnreadableFile::Forbidden(
-        SWIFT_LENGTH_FORBIDDEN_SOURCE,
-    ));
+    verify_unreadable_file_is_declined(
+        &swift_length_decline_alone_probe(),
+        &ShippedUnreadableFile::Forbidden(SWIFT_LENGTH_FORBIDDEN_SOURCE),
+    );
 }
 
 /// The `function-length-swift` probe over a file whose name holds the words of

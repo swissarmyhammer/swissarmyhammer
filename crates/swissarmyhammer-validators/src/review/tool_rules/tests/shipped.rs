@@ -1899,34 +1899,80 @@ fn verify_declined_item_reads(
     );
 }
 
-/// Drives the shipped script of `rule` over every file of `judged` and the
-/// path `path`, which refuses a reader the way `unreadable` states, and holds
-/// that run to reporting the rows `expected` names AND to stating one
-/// diagnostic that names `path`.
+/// What one rule's probe of a refusing path states, with the way the path
+/// refuses left out.
+///
+/// Every language states the same five things and nothing else: which project
+/// types put the rule in the plan, which rule the run belongs to, which files
+/// the run CAN judge, which path refuses the reader, and which rows the judged
+/// files hold. The way the path refuses is the ONE value that changes between
+/// the tests of a rule, so it reaches [`verify_unreadable_file_is_declined`]
+/// beside the probe rather than inside it.
+///
+/// The text fields own their bytes. A language builds its judged source and
+/// its expected rows at run time — `python_procedure`, `dart_procedure` and
+/// `expected_row` each hand back a `String` — so a probe that borrowed them
+/// could not outlive the call that built it.
+struct ShippedDeclineProbe {
+    /// The project types the rule is planned for.
+    project_types: &'static [&'static str],
+
+    /// The tool rule that must plan the run.
+    rule: &'static str,
+
+    /// Each file the run CAN judge, as a `(path, source)` pair. A probe of a
+    /// run that has no file beside the refusing path holds none.
+    judged: Vec<(&'static str, String)>,
+
+    /// Where the refusing path stands inside the probe repository.
+    path: &'static str,
+
+    /// One `path:line` row for each finding the judged files hold, which the
+    /// run must still report. A probe with no judged file holds none.
+    expected: Vec<String>,
+}
+
+/// Drives the shipped script `probe` names over every file of `probe.judged`
+/// and over `probe.path`, which refuses a reader the way `unreadable` states,
+/// and holds that run to reporting the rows `probe.expected` names AND to
+/// stating one diagnostic that names `probe.path`.
 ///
 /// The refusing path takes staging no `(path, text)` pair can state, because
 /// the probe writes bytes that are not UTF-8, takes every permission off the
 /// file, or writes no file at all.
+///
+/// ONE function serves every language. A rule states its own bound values as a
+/// [`ShippedDeclineProbe`], and each test of that rule hands the same probe
+/// here beside one shape of [`ShippedUnreadableFile`].
 fn verify_unreadable_file_is_declined(
-    project_types: &[&str],
-    rule: &str,
-    judged: &[(&str, &str)],
-    path: &str,
+    probe: &ShippedDeclineProbe,
     unreadable: &ShippedUnreadableFile,
-    expected: &[&str],
 ) {
+    let judged: Vec<(&str, &str)> = probe
+        .judged
+        .iter()
+        .map(|(file, source)| (*file, source.as_str()))
+        .collect();
+    let expected: Vec<&str> = probe.expected.iter().map(String::as_str).collect();
     let named: Vec<&str> = judged
         .iter()
         .map(|(file, _)| *file)
-        .chain(std::iter::once(path))
+        .chain(std::iter::once(probe.path))
         .collect();
-    let prepare = |repo: &Path| stage_probe_unreadable(repo, path, unreadable);
+    let prepare = |repo: &Path| stage_probe_unreadable(repo, probe.path, unreadable);
     let staging = ShippedStaging {
         prepare: &prepare,
-        ..ShippedStaging::of(judged)
+        ..ShippedStaging::of(&judged)
     };
 
-    verify_declined_item_is_stated(project_types, rule, &staging, &named, path, expected);
+    verify_declined_item_is_stated(
+        probe.project_types,
+        probe.rule,
+        &staging,
+        &named,
+        probe.path,
+        &expected,
+    );
 }
 
 /// Drives the shipped script of `rule` over every file of `staged`, and holds

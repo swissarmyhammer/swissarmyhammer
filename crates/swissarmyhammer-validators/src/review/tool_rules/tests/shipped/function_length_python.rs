@@ -355,24 +355,22 @@ const PYTHON_LENGTH_UNDECODABLE_SOURCE: &[u8] = b"def short_function():\n    ret
 /// for a file it never read.
 const PYTHON_LENGTH_FORBIDDEN_SOURCE: &str = "def short_function():\n    return 1\n";
 
-/// Holds the shipped Python function-length run to judging `judged.py` and to
-/// stating the one path it could not read, through the real ruff pipeline.
+/// The `function-length-python` probe over a refusing path beside `judged.py`.
 ///
 /// The judged file carries one function over the gate, so the run has a finding
 /// to lose. Losing it is what a nonzero exit over a declined item costs, and
 /// staying silent about the path is what reads that path as a clean file.
-fn verify_python_length_declines(path: &str, unreadable: &ShippedUnreadableFile) {
+fn python_length_decline_probe() -> ShippedDeclineProbe {
     let judged = python_procedure("long_procedure", OVER_THE_GATE_STATEMENTS);
     let expected = python_expected_row(PYTHON_LENGTH_JUDGED_PATH, &judged, "long_procedure");
 
-    verify_unreadable_file_is_declined(
-        PYTHON_PROJECT_TYPES,
-        PYTHON_FUNCTION_LENGTH_RULE,
-        &[(PYTHON_LENGTH_JUDGED_PATH, &judged)],
-        path,
-        unreadable,
-        &[&expected],
-    );
+    ShippedDeclineProbe {
+        project_types: PYTHON_PROJECT_TYPES,
+        rule: PYTHON_FUNCTION_LENGTH_RULE,
+        judged: vec![(PYTHON_LENGTH_JUDGED_PATH, judged)],
+        path: PYTHON_LENGTH_UNREADABLE_PATH,
+        expected: vec![expected],
+    }
 }
 
 /// Acceptance: the shipped Python function-length tool rule DECLINES a path
@@ -385,8 +383,8 @@ fn verify_python_length_declines(path: &str, unreadable: &ShippedUnreadableFile)
 /// the engine read a path ruff never opened as a clean file.
 #[test]
 fn the_shipped_python_function_length_tool_rule_declines_a_path_that_holds_no_file() {
-    verify_python_length_declines(
-        PYTHON_LENGTH_UNREADABLE_PATH,
+    verify_unreadable_file_is_declined(
+        &python_length_decline_probe(),
         &ShippedUnreadableFile::Absent,
     );
 }
@@ -402,8 +400,8 @@ fn the_shipped_python_function_length_tool_rule_declines_a_path_that_holds_no_fi
 /// open it — so the answer has to come from what ruff itself said.
 #[test]
 fn the_shipped_python_function_length_tool_rule_declines_a_file_it_cannot_decode() {
-    verify_python_length_declines(
-        PYTHON_LENGTH_UNREADABLE_PATH,
+    verify_unreadable_file_is_declined(
+        &python_length_decline_probe(),
         &ShippedUnreadableFile::Undecodable(PYTHON_LENGTH_UNDECODABLE_SOURCE),
     );
 }
@@ -420,8 +418,8 @@ fn the_shipped_python_function_length_tool_rule_declines_a_file_it_cannot_decode
 #[cfg(unix)]
 #[test]
 fn the_shipped_python_function_length_tool_rule_declines_a_file_it_may_not_read() {
-    verify_python_length_declines(
-        PYTHON_LENGTH_UNREADABLE_PATH,
+    verify_unreadable_file_is_declined(
+        &python_length_decline_probe(),
         &ShippedUnreadableFile::Forbidden(PYTHON_LENGTH_FORBIDDEN_SOURCE),
     );
 }

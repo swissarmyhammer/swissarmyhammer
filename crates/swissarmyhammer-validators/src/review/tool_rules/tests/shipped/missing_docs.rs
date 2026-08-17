@@ -670,23 +670,27 @@ class Undecodable {\n\
 const DART_MISSING_DOCS_FORBIDDEN_SOURCE: &str =
     concat!("class _Forbidden {\n", "  void _member() {}\n", "}\n");
 
-/// Holds the shipped Dart missing-docs run to judging the staged library and to
-/// stating the one path it could not judge, through the real `dart analyze`
-/// pipeline.
+/// The `missing-docs-dart` probe over a refusing path beside the staged
+/// library.
 ///
 /// The staged library is the one [`DART_BROKEN_RUN_STAGED`] holds: one
 /// undocumented public class and one undocumented method, so the run has two
 /// rows to lose. Losing them is what a nonzero exit over a declined item costs,
 /// and staying silent about the path is what reads that path as a clean file.
-fn verify_dart_missing_docs_declines(unreadable: &ShippedUnreadableFile) {
-    verify_unreadable_file_is_declined(
-        FLUTTER_PROJECT_TYPES,
-        DART_MISSING_DOCS_RULE,
-        DART_BROKEN_RUN_STAGED,
-        DART_MISSING_DOCS_UNREADABLE_PATH,
-        unreadable,
-        DART_BROKEN_RUN_ROWS,
-    );
+fn dart_missing_docs_decline_probe() -> ShippedDeclineProbe {
+    ShippedDeclineProbe {
+        project_types: FLUTTER_PROJECT_TYPES,
+        rule: DART_MISSING_DOCS_RULE,
+        judged: DART_BROKEN_RUN_STAGED
+            .iter()
+            .map(|(path, source)| (*path, (*source).to_string()))
+            .collect(),
+        path: DART_MISSING_DOCS_UNREADABLE_PATH,
+        expected: DART_BROKEN_RUN_ROWS
+            .iter()
+            .map(|row| (*row).to_string())
+            .collect(),
+    }
 }
 
 /// Acceptance: the shipped Dart missing-docs tool rule DECLINES a path that
@@ -699,7 +703,10 @@ fn verify_dart_missing_docs_declines(unreadable: &ShippedUnreadableFile) {
 /// No such file or directory` and exit 1.
 #[test]
 fn the_shipped_dart_missing_docs_tool_rule_declines_a_path_that_holds_no_file() {
-    verify_dart_missing_docs_declines(&ShippedUnreadableFile::Absent);
+    verify_unreadable_file_is_declined(
+        &dart_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Absent,
+    );
 }
 
 /// Acceptance: the shipped Dart missing-docs tool rule DECLINES a Dart file it
@@ -714,9 +721,10 @@ fn the_shipped_dart_missing_docs_tool_rule_declines_a_path_that_holds_no_file() 
 /// and the `iconv` test is what answers it.
 #[test]
 fn the_shipped_dart_missing_docs_tool_rule_declines_a_file_it_cannot_decode() {
-    verify_dart_missing_docs_declines(&ShippedUnreadableFile::Undecodable(
-        DART_MISSING_DOCS_UNDECODABLE_SOURCE,
-    ));
+    verify_unreadable_file_is_declined(
+        &dart_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Undecodable(DART_MISSING_DOCS_UNDECODABLE_SOURCE),
+    );
 }
 
 /// Acceptance: the shipped Dart missing-docs tool rule DECLINES a Dart file it
@@ -731,9 +739,10 @@ fn the_shipped_dart_missing_docs_tool_rule_declines_a_file_it_cannot_decode() {
 #[cfg(unix)]
 #[test]
 fn the_shipped_dart_missing_docs_tool_rule_declines_a_file_it_may_not_read() {
-    verify_dart_missing_docs_declines(&ShippedUnreadableFile::Forbidden(
-        DART_MISSING_DOCS_FORBIDDEN_SOURCE,
-    ));
+    verify_unreadable_file_is_declined(
+        &dart_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Forbidden(DART_MISSING_DOCS_FORBIDDEN_SOURCE),
+    );
 }
 
 /// Where the Dart library that uses a declaration newer than the earlier probe
@@ -1523,23 +1532,19 @@ const PYTHON_UNDECODABLE_SOURCE: &[u8] =
 /// not give for a file it never read.
 const PYTHON_FORBIDDEN_SOURCE: &str = "\"\"\"A documented module.\"\"\"\n";
 
-/// Holds the shipped Python missing-docs run to judging `judged.py` and to
-/// stating the one path it could not read, through the real ruff pipeline.
+/// The `missing-docs-python` probe over a refusing path beside `judged.py`.
 ///
 /// The judged file carries one undocumented function, so the run has a finding
 /// to lose. Losing it is what a nonzero exit over a declined item costs, and
 /// staying silent about the path is what reads that path as a clean file.
-fn verify_python_missing_docs_declines(unreadable: &ShippedUnreadableFile) {
-    let expected = python_missing_docs_judged_row();
-
-    verify_unreadable_file_is_declined(
-        PYTHON_PROJECT_TYPES,
-        PYTHON_MISSING_DOCS_RULE,
-        &[(PYTHON_JUDGED_PATH, PYTHON_JUDGED_SOURCE)],
-        PYTHON_UNREADABLE_PATH,
-        unreadable,
-        &[&expected],
-    );
+fn python_missing_docs_decline_probe() -> ShippedDeclineProbe {
+    ShippedDeclineProbe {
+        project_types: PYTHON_PROJECT_TYPES,
+        rule: PYTHON_MISSING_DOCS_RULE,
+        judged: vec![(PYTHON_JUDGED_PATH, PYTHON_JUDGED_SOURCE.to_string())],
+        path: PYTHON_UNREADABLE_PATH,
+        expected: vec![python_missing_docs_judged_row()],
+    }
 }
 
 /// Acceptance: the shipped Python missing-docs tool rule DECLINES a path that
@@ -1553,7 +1558,10 @@ fn verify_python_missing_docs_declines(unreadable: &ShippedUnreadableFile) {
 /// what ruff itself said.
 #[test]
 fn the_shipped_python_missing_docs_tool_rule_declines_a_path_that_holds_no_file() {
-    verify_python_missing_docs_declines(&ShippedUnreadableFile::Absent);
+    verify_unreadable_file_is_declined(
+        &python_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Absent,
+    );
 }
 
 /// Acceptance: the shipped Python missing-docs tool rule DECLINES a file whose
@@ -1572,9 +1580,10 @@ fn the_shipped_python_missing_docs_tool_rule_declines_a_path_that_holds_no_file(
 /// line as tool chatter. The file read as CLEAN.
 #[test]
 fn the_shipped_python_missing_docs_tool_rule_declines_a_file_it_cannot_decode() {
-    verify_python_missing_docs_declines(&ShippedUnreadableFile::Undecodable(
-        PYTHON_UNDECODABLE_SOURCE,
-    ));
+    verify_unreadable_file_is_declined(
+        &python_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Undecodable(PYTHON_UNDECODABLE_SOURCE),
+    );
 }
 
 /// Acceptance: the shipped Python missing-docs tool rule DECLINES a file it may
@@ -1590,7 +1599,10 @@ fn the_shipped_python_missing_docs_tool_rule_declines_a_file_it_cannot_decode() 
 #[cfg(unix)]
 #[test]
 fn the_shipped_python_missing_docs_tool_rule_declines_a_file_it_may_not_read() {
-    verify_python_missing_docs_declines(&ShippedUnreadableFile::Forbidden(PYTHON_FORBIDDEN_SOURCE));
+    verify_unreadable_file_is_declined(
+        &python_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Forbidden(PYTHON_FORBIDDEN_SOURCE),
+    );
 }
 
 /// Where the directory nobody may read stands inside the probe repository.
@@ -2382,15 +2394,14 @@ const SWIFT_MISSING_DOCS_FORBIDDEN_SOURCE: &str = concat!(
     "}\n"
 );
 
-/// Holds the shipped Swift missing-docs run to judging `Sources/Judged.swift`
-/// and to stating the one path it could not judge, through the real swiftlint
-/// pipeline.
+/// The `missing-docs-swift` probe over a refusing path beside
+/// `Sources/Judged.swift`.
 ///
 /// The judged file carries one undocumented public structure and one
 /// undocumented stored property, so the run has two findings to lose. Losing
 /// them is what a nonzero exit over a declined item costs, and staying silent
 /// about the path is what reads that path as a clean file.
-fn verify_swift_missing_docs_declines(unreadable: &ShippedUnreadableFile) {
+fn swift_missing_docs_decline_probe() -> ShippedDeclineProbe {
     let structure = expected_row(
         SWIFT_MISSING_DOCS_JUDGED_PATH,
         SWIFT_STAGED_DECLARATIONS,
@@ -2402,14 +2413,16 @@ fn verify_swift_missing_docs_declines(unreadable: &ShippedUnreadableFile) {
         SWIFT_STAGED_PROPERTY_HEAD,
     );
 
-    verify_unreadable_file_is_declined(
-        SWIFT_PROJECT_TYPES,
-        SWIFT_MISSING_DOCS_RULE,
-        &[(SWIFT_MISSING_DOCS_JUDGED_PATH, SWIFT_STAGED_DECLARATIONS)],
-        SWIFT_MISSING_DOCS_UNREADABLE_PATH,
-        unreadable,
-        &[&structure, &property],
-    );
+    ShippedDeclineProbe {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MISSING_DOCS_RULE,
+        judged: vec![(
+            SWIFT_MISSING_DOCS_JUDGED_PATH,
+            SWIFT_STAGED_DECLARATIONS.to_string(),
+        )],
+        path: SWIFT_MISSING_DOCS_UNREADABLE_PATH,
+        expected: vec![structure, property],
+    }
 }
 
 /// Acceptance: the shipped Swift missing-docs tool rule DECLINES a path that
@@ -2422,7 +2435,10 @@ fn verify_swift_missing_docs_declines(unreadable: &ShippedUnreadableFile) {
 /// So the script tests the path itself, and states it under the marker.
 #[test]
 fn the_shipped_swift_missing_docs_tool_rule_declines_a_path_that_holds_no_file() {
-    verify_swift_missing_docs_declines(&ShippedUnreadableFile::Absent);
+    verify_unreadable_file_is_declined(
+        &swift_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Absent,
+    );
 }
 
 /// Acceptance: the shipped Swift missing-docs tool rule DECLINES a Swift file
@@ -2438,9 +2454,10 @@ fn the_shipped_swift_missing_docs_tool_rule_declines_a_path_that_holds_no_file()
 /// open it — so the answer has to come from what swiftlint itself said.
 #[test]
 fn the_shipped_swift_missing_docs_tool_rule_declines_a_file_it_cannot_decode() {
-    verify_swift_missing_docs_declines(&ShippedUnreadableFile::Undecodable(
-        SWIFT_MISSING_DOCS_UNDECODABLE_SOURCE,
-    ));
+    verify_unreadable_file_is_declined(
+        &swift_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Undecodable(SWIFT_MISSING_DOCS_UNDECODABLE_SOURCE),
+    );
 }
 
 /// Acceptance: the shipped Swift missing-docs tool rule DECLINES a Swift file
@@ -2456,9 +2473,10 @@ fn the_shipped_swift_missing_docs_tool_rule_declines_a_file_it_cannot_decode() {
 #[cfg(unix)]
 #[test]
 fn the_shipped_swift_missing_docs_tool_rule_declines_a_file_it_may_not_read() {
-    verify_swift_missing_docs_declines(&ShippedUnreadableFile::Forbidden(
-        SWIFT_MISSING_DOCS_FORBIDDEN_SOURCE,
-    ));
+    verify_unreadable_file_is_declined(
+        &swift_missing_docs_decline_probe(),
+        &ShippedUnreadableFile::Forbidden(SWIFT_MISSING_DOCS_FORBIDDEN_SOURCE),
+    );
 }
 
 /// The `missing-docs-swift` probe over a file whose name holds the words of

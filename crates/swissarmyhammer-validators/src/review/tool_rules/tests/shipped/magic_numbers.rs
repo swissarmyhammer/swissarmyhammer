@@ -813,28 +813,29 @@ const SWIFT_MAGIC_NUMBERS_FORBIDDEN_SOURCE: &str = concat!(
     "}\n",
 );
 
-/// Holds the shipped Swift magic-numbers run to judging `Sources/Judged.swift`
-/// and to stating the one path it could not judge, through the real swiftlint
-/// pipeline.
+/// The `magic-numbers-swift` probe over a refusing path beside
+/// `Sources/Judged.swift`.
 ///
 /// The judged file carries one unnamed literal, so the run has a finding to
 /// lose. Losing it is what a nonzero exit over a declined item costs, and
 /// staying silent about the path is what reads that path as a clean file.
-fn verify_swift_magic_numbers_declines(unreadable: &ShippedUnreadableFile) {
+fn swift_magic_numbers_decline_probe() -> ShippedDeclineProbe {
     let literal = expected_row(
         SWIFT_MAGIC_NUMBERS_JUDGED_PATH,
         SWIFT_MAGIC_NUMBERS_STAGED,
         SWIFT_MAGIC_NUMBERS_LITERAL_HEAD,
     );
 
-    verify_unreadable_file_is_declined(
-        SWIFT_PROJECT_TYPES,
-        SWIFT_MAGIC_NUMBERS_RULE,
-        &[(SWIFT_MAGIC_NUMBERS_JUDGED_PATH, SWIFT_MAGIC_NUMBERS_STAGED)],
-        SWIFT_MAGIC_NUMBERS_UNREADABLE_PATH,
-        unreadable,
-        &[&literal],
-    );
+    ShippedDeclineProbe {
+        project_types: SWIFT_PROJECT_TYPES,
+        rule: SWIFT_MAGIC_NUMBERS_RULE,
+        judged: vec![(
+            SWIFT_MAGIC_NUMBERS_JUDGED_PATH,
+            SWIFT_MAGIC_NUMBERS_STAGED.to_string(),
+        )],
+        path: SWIFT_MAGIC_NUMBERS_UNREADABLE_PATH,
+        expected: vec![literal],
+    }
 }
 
 /// Acceptance: the shipped Swift magic-numbers tool rule DECLINES a path that
@@ -847,7 +848,10 @@ fn verify_swift_magic_numbers_declines(unreadable: &ShippedUnreadableFile) {
 /// the script tests the path itself, and states it under the marker.
 #[test]
 fn the_shipped_swift_magic_numbers_tool_rule_declines_a_path_that_holds_no_file() {
-    verify_swift_magic_numbers_declines(&ShippedUnreadableFile::Absent);
+    verify_unreadable_file_is_declined(
+        &swift_magic_numbers_decline_probe(),
+        &ShippedUnreadableFile::Absent,
+    );
 }
 
 /// Acceptance: the shipped Swift magic-numbers tool rule DECLINES a Swift file
@@ -862,9 +866,10 @@ fn the_shipped_swift_magic_numbers_tool_rule_declines_a_path_that_holds_no_file(
 /// swiftlint's own message instead.
 #[test]
 fn the_shipped_swift_magic_numbers_tool_rule_declines_a_file_it_cannot_decode() {
-    verify_swift_magic_numbers_declines(&ShippedUnreadableFile::Undecodable(
-        SWIFT_MAGIC_NUMBERS_UNDECODABLE_SOURCE,
-    ));
+    verify_unreadable_file_is_declined(
+        &swift_magic_numbers_decline_probe(),
+        &ShippedUnreadableFile::Undecodable(SWIFT_MAGIC_NUMBERS_UNDECODABLE_SOURCE),
+    );
 }
 
 /// Acceptance: the shipped Swift magic-numbers tool rule DECLINES a Swift file
@@ -880,9 +885,10 @@ fn the_shipped_swift_magic_numbers_tool_rule_declines_a_file_it_cannot_decode() 
 #[cfg(unix)]
 #[test]
 fn the_shipped_swift_magic_numbers_tool_rule_declines_a_file_it_may_not_read() {
-    verify_swift_magic_numbers_declines(&ShippedUnreadableFile::Forbidden(
-        SWIFT_MAGIC_NUMBERS_FORBIDDEN_SOURCE,
-    ));
+    verify_unreadable_file_is_declined(
+        &swift_magic_numbers_decline_probe(),
+        &ShippedUnreadableFile::Forbidden(SWIFT_MAGIC_NUMBERS_FORBIDDEN_SOURCE),
+    );
 }
 
 /// The `magic-numbers-swift` probe over a file whose name holds the words of
@@ -1163,27 +1169,23 @@ const PYTHON_MAGIC_NUMBERS_UNDECODABLE_SOURCE: &[u8] = b"VALUE = '\xff\xfe'\n";
 /// this rule must not give for a file it never read.
 const PYTHON_MAGIC_NUMBERS_FORBIDDEN_SOURCE: &str = "LIMIT = 42\n";
 
-/// Holds the shipped Python magic-numbers run to judging `judged.py` and to
-/// stating the one path it could not read, through the real ruff pipeline.
+/// The `magic-numbers-python` probe over a refusing path beside `judged.py`.
 ///
 /// The judged file carries one unnamed comparison literal, so the run has a
 /// finding to lose. Losing it is what a nonzero exit over a declined item
 /// costs, and staying silent about the path is what reads that path as a clean
 /// file.
-fn verify_python_magic_numbers_declines(unreadable: &ShippedUnreadableFile) {
-    let expected = python_magic_numbers_judged_row();
-
-    verify_unreadable_file_is_declined(
-        PYTHON_PROJECT_TYPES,
-        PYTHON_MAGIC_NUMBERS_RULE,
-        &[(
+fn python_magic_numbers_decline_probe() -> ShippedDeclineProbe {
+    ShippedDeclineProbe {
+        project_types: PYTHON_PROJECT_TYPES,
+        rule: PYTHON_MAGIC_NUMBERS_RULE,
+        judged: vec![(
             PYTHON_MAGIC_NUMBERS_JUDGED_PATH,
-            PYTHON_MAGIC_NUMBERS_JUDGED_SOURCE,
+            PYTHON_MAGIC_NUMBERS_JUDGED_SOURCE.to_string(),
         )],
-        PYTHON_MAGIC_NUMBERS_UNREADABLE_PATH,
-        unreadable,
-        &[&expected],
-    );
+        path: PYTHON_MAGIC_NUMBERS_UNREADABLE_PATH,
+        expected: vec![python_magic_numbers_judged_row()],
+    }
 }
 
 /// Acceptance: the shipped Python magic-numbers tool rule DECLINES a path that
@@ -1197,7 +1199,10 @@ fn verify_python_magic_numbers_declines(unreadable: &ShippedUnreadableFile) {
 /// has to come from what ruff itself said.
 #[test]
 fn the_shipped_python_magic_numbers_tool_rule_declines_a_path_that_holds_no_file() {
-    verify_python_magic_numbers_declines(&ShippedUnreadableFile::Absent);
+    verify_unreadable_file_is_declined(
+        &python_magic_numbers_decline_probe(),
+        &ShippedUnreadableFile::Absent,
+    );
 }
 
 /// Acceptance: the shipped Python magic-numbers tool rule DECLINES a file whose
@@ -1214,9 +1219,10 @@ fn the_shipped_python_magic_numbers_tool_rule_declines_a_path_that_holds_no_file
 /// file read as CLEAN.
 #[test]
 fn the_shipped_python_magic_numbers_tool_rule_declines_a_file_it_cannot_decode() {
-    verify_python_magic_numbers_declines(&ShippedUnreadableFile::Undecodable(
-        PYTHON_MAGIC_NUMBERS_UNDECODABLE_SOURCE,
-    ));
+    verify_unreadable_file_is_declined(
+        &python_magic_numbers_decline_probe(),
+        &ShippedUnreadableFile::Undecodable(PYTHON_MAGIC_NUMBERS_UNDECODABLE_SOURCE),
+    );
 }
 
 /// Acceptance: the shipped Python magic-numbers tool rule DECLINES a file it
@@ -1232,9 +1238,10 @@ fn the_shipped_python_magic_numbers_tool_rule_declines_a_file_it_cannot_decode()
 #[cfg(unix)]
 #[test]
 fn the_shipped_python_magic_numbers_tool_rule_declines_a_file_it_may_not_read() {
-    verify_python_magic_numbers_declines(&ShippedUnreadableFile::Forbidden(
-        PYTHON_MAGIC_NUMBERS_FORBIDDEN_SOURCE,
-    ));
+    verify_unreadable_file_is_declined(
+        &python_magic_numbers_decline_probe(),
+        &ShippedUnreadableFile::Forbidden(PYTHON_MAGIC_NUMBERS_FORBIDDEN_SOURCE),
+    );
 }
 
 /// Where the directory nobody may read stands inside the probe repository.

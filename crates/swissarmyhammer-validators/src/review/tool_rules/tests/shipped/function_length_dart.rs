@@ -263,15 +263,14 @@ fn the_shipped_dart_function_length_tool_rule_declines_a_file_it_cannot_parse() 
     );
 }
 
-/// Holds the shipped Dart function-length run to measuring `lib/judged.dart`
-/// and to stating the one path it could not read, through the real
-/// `dart_code_linter` pipeline.
+/// The `function-length-dart` probe over a refusing path beside
+/// `lib/judged.dart`.
 ///
 /// The measured file carries one function over the gate, so the run has a
 /// finding to lose. Losing it is what a nonzero exit over a declined item
 /// costs, and staying silent about the path is what reads that path as a clean
 /// file.
-fn verify_dart_length_declines(path: &str, unreadable: &ShippedUnreadableFile) {
+fn dart_length_decline_probe() -> ShippedDeclineProbe {
     let judged = dart_procedure(DART_LENGTH_JUDGED_DECLARATION, OVER_THE_GATE_LINES);
     let expected = dart_expected_row(
         DART_LENGTH_JUDGED_PATH,
@@ -279,14 +278,13 @@ fn verify_dart_length_declines(path: &str, unreadable: &ShippedUnreadableFile) {
         DART_LENGTH_JUDGED_DECLARATION,
     );
 
-    verify_unreadable_file_is_declined(
-        FLUTTER_PROJECT_TYPES,
-        DART_FUNCTION_LENGTH_RULE,
-        &[(DART_LENGTH_JUDGED_PATH, &judged)],
-        path,
-        unreadable,
-        &[&expected],
-    );
+    ShippedDeclineProbe {
+        project_types: FLUTTER_PROJECT_TYPES,
+        rule: DART_FUNCTION_LENGTH_RULE,
+        judged: vec![(DART_LENGTH_JUDGED_PATH, judged)],
+        path: DART_LENGTH_UNREADABLE_PATH,
+        expected: vec![expected],
+    }
 }
 
 /// Acceptance: the shipped Dart function-length tool rule DECLINES a path that
@@ -298,7 +296,10 @@ fn verify_dart_length_declines(path: &str, unreadable: &ShippedUnreadableFile) {
 /// read it as a clean file.
 #[test]
 fn the_shipped_dart_function_length_tool_rule_declines_a_path_that_holds_no_file() {
-    verify_dart_length_declines(DART_LENGTH_UNREADABLE_PATH, &ShippedUnreadableFile::Absent);
+    verify_unreadable_file_is_declined(
+        &dart_length_decline_probe(),
+        &ShippedUnreadableFile::Absent,
+    );
 }
 
 /// Acceptance: the shipped Dart function-length tool rule DECLINES a file
@@ -311,8 +312,8 @@ fn the_shipped_dart_function_length_tool_rule_declines_a_path_that_holds_no_file
 /// Dart file gives.
 #[test]
 fn the_shipped_dart_function_length_tool_rule_declines_a_file_it_cannot_decode() {
-    verify_dart_length_declines(
-        DART_LENGTH_UNREADABLE_PATH,
+    verify_unreadable_file_is_declined(
+        &dart_length_decline_probe(),
         &ShippedUnreadableFile::Undecodable(DART_LENGTH_UNDECODABLE_SOURCE),
     );
 }
@@ -325,8 +326,8 @@ fn the_shipped_dart_function_length_tool_rule_declines_a_file_it_cannot_decode()
 #[cfg(unix)]
 #[test]
 fn the_shipped_dart_function_length_tool_rule_declines_a_file_it_may_not_read() {
-    verify_dart_length_declines(
-        DART_LENGTH_UNREADABLE_PATH,
+    verify_unreadable_file_is_declined(
+        &dart_length_decline_probe(),
         &ShippedUnreadableFile::Forbidden(DART_LENGTH_FORBIDDEN_SOURCE),
     );
 }
