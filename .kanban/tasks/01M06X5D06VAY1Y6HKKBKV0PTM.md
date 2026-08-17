@@ -120,6 +120,94 @@ comments:
     - evidence: 5 files — builtin/validators/code-hygiene/rules/missing-docs-go.md, builtin/validators/code-hygiene/rules/stuttering-name-go.md, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, .../tests/shipped/missing_docs.rs, .../tests/shipped/stuttering_name_go.rs. `cargo nextest run -p swissarmyhammer-validators`: 820 tests run, 820 passed, 0 skipped. `cargo nextest run -p mirdan`: 503 passed. `cargo clippy -p swissarmyhammer-validators --all-targets`: 0 warnings. RED before both new tests ("it stated []"), GREEN after, and each test proved to fail for its own rule alone.
     - next: /review
   timestamp: 2026-08-17T10:12:27.327665+00:00
+- actor: claude-code
+  id: 01m07ph4ger2jy7kw67qbnrfbn
+  text: |
+    ### review — findings
+    - evidence: 2 findings — crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:1256, crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:1285
+    - scope: review sha HEAD~1..HEAD (64fc37380)
+    - next: Remove the duplicate code from the new Go decline tests. Make one shared probe builder and one shared test helper. Then run the review again.
+  timestamp: 2026-08-17T11:08:26.510424+00:00
+- actor: claude-code
+  id: 01m07phr6fpy043bb2rctq7103
+  text: |
+    ### finish iteration 1 — findings
+    - implement: changed — 5 files. Each script filters its argument list under `[ -e ] && [ ! -r ]`, states one marked line for each such path, and exits 0. The absent path still breaks the run. The survey found 3 silent shapes and 5 loud ones. Both tests use the shared decline helper.
+    - test: green — cargo nextest run --workspace, 14162 passed, 0 failed. fmt and clippy clean. The test step re-drove real revive and confirmed it truly writes 0 bytes and makes no record for a mode-000 file. Each test was proved to fail for its own rule alone.
+    - commit: 64fc37380
+    - review: findings — 2. missing_docs.rs:1256 and :1285, both `reuse/reuse`: the new `go_missing_docs_decline_probe()` and its test repeat the pair in stuttering_name_go.rs.
+  timestamp: 2026-08-17T11:08:46.671840+00:00
+- actor: claude-code
+  id: 01m07q03b5stbdkbnsg3vd7srm
+  text: |
+    Both findings worked. This pair is NOT the `^8nbxwq5` conflict.
+
+    **The two builders read side by side.** `ShippedDeclineProbe` holds five
+    fields. The probe of `missing-docs-go` and the probe of `stuttering-name-go`
+    answered:
+
+    | the field | missing-docs-go | stuttering-name-go | same? |
+    |---|---|---|---|
+    | `project_types` | `GO_PROJECT_TYPES` | `GO_PROJECT_TYPES` | yes |
+    | `rule` | `GO_MISSING_DOCS_RULE` | `GO_STUTTERING_NAME_RULE` | no |
+    | `judged` | one pair: `judged.go` + `type Plain struct{}` | one pair: `judged.go` + `type StagedType struct{}` | the path yes, the source no |
+    | `path` | `GO_FORBIDDEN_PATH` | `GO_FORBIDDEN_PATH` | yes |
+    | `expected` | one row: `go_missing_docs_judged_row()` | one row: `go_stuttering_name_judged_row()` | no |
+
+    The judged source must differ: `missing-docs-go` needs a name that does NOT
+    repeat its package, so revive answers under `comments` alone; `stuttering-name-go`
+    needs a name that DOES repeat it. Each source therefore holds exactly ONE
+    finding of its own rule.
+
+    **Why this is the opposite case of `^8nbxwq5`.** There, one rule carried TWO
+    heads and the others carried one, so the probes did not share a SHAPE and no
+    factory could hold them. Here both probes carry the same shape: one judged
+    file, one expected row, one refusing path, one project-type list. Only the
+    VALUES differ, and three of the five fields carry one value for both rules. A
+    builder that fixes those three and takes the other two is a real reduction, not
+    the same struct literal under a longer signature.
+
+    **What was made.** ONE function in `shipped.rs`, beside `GO_FORBIDDEN_PATH` and
+    `GO_FORBIDDEN_SOURCE`:
+
+        #[cfg(unix)]
+        fn verify_go_rule_declines_a_forbidden_path(
+            rule: &'static str,
+            judged: (&'static str, &'static str),
+            judged_row: String,
+        )
+
+    It builds the probe and drives `verify_unreadable_file_is_declined` with
+    `ShippedUnreadableFile::Forbidden(GO_FORBIDDEN_SOURCE)`. One function answers
+    BOTH findings: the probe builder of each file is gone, and each test body is
+    now one call of three arguments. Two functions — a builder and a wrapper of the
+    verify call — would leave the builder with one caller and add a step that
+    carries nothing, so one function holds the pair.
+
+    `GO_FORBIDDEN_PATH` already carried the sentence "ONE path and ONE source serve
+    the refusing-path probe of both rules", so the shared function stands where
+    that pair stands.
+
+    **Proof each test still holds its OWN rule.** The marked line of one rule was
+    taken away, both tests were run, and the line was written back word for word:
+
+    | the line taken away | missing-docs test | stuttering-name test |
+    |---|---|---|
+    | `missing-docs-go` `printf 'sah-diagnostic: ...'` | FAIL, "it stated []" | PASS |
+    | `stuttering-name-go` `printf 'sah-diagnostic: ...'` | PASS | FAIL, "it stated []" |
+
+    `git status` shows both rule bodies unchanged after the two rounds.
+
+    `cargo nextest run -p swissarmyhammer-validators`: 820 tests run, 820 passed,
+    0 skipped. `cargo fmt --check` clean, `cargo clippy --all-targets` 0 warnings.
+  timestamp: 2026-08-17T11:16:36.837968+00:00
+- actor: claude-code
+  id: 01m07q09r8mttqv2f8ansdq46w
+  text: |
+    ### implement — changed
+    - evidence: 3 files — crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs, .../tests/shipped/missing_docs.rs, .../tests/shipped/stuttering_name_go.rs. Both `reuse/reuse` findings are closed by ONE shared function `verify_go_rule_declines_a_forbidden_path`. `cargo nextest run -p swissarmyhammer-validators`: 820 run, 820 passed, 0 skipped. fmt and clippy clean. Each test proved to fail for its own rule alone and to stay green for the other.
+    - next: /review
+  timestamp: 2026-08-17T11:16:43.400713+00:00
 position_column: doing
 position_ordinal: '8280'
 title: missing-docs-go and stuttering-name-go read a Go file nobody may read as a clean file
@@ -168,3 +256,13 @@ The work:
 - State the measurement in both rule bodies.
 
 #tool-validators #objectivity
+
+## Review Findings (2026-08-17 06:00)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 3 file(s) reviewed, 4 not reviewed.
+
+> 4 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 4 file(s)
+
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:1256` `reuse/reuse` — Function duplicates `go_stuttering_name_decline_probe()` which already exists in the parallel test file `stuttering_name_go.rs`. The two functions are 95% identical, differing only in `rule` constant and the `expected` row function; they should be consolidated into a single parameterized builder. Extract a generic `go_decline_probe(rule: &str, judged_row_fn: fn() -> Row)` helper function in `shipped.rs` or a shared location, then have both `go_missing_docs_decline_probe()` and `go_stuttering_name_decline_probe()` call it with their rule-specific parameters.
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:1285` `reuse/reuse` — Test function is 96% identical to `the_shipped_go_stuttering_name_tool_rule_declines_a_file_it_may_not_read()` in `stuttering_name_go.rs`. Both call the same shared helper `verify_unreadable_file_is_declined()` with only the probe builder differing; test logic should be extracted to avoid duplication. Extract a shared `go_rule_declines_unreadable_file(probe: &ShippedDeclineProbe)` helper function that wraps the call to `verify_unreadable_file_is_declined()`, then have both test functions call this helper with their respective probes.

@@ -2044,6 +2044,45 @@ const GO_FORBIDDEN_PATH: &str = "forbidden.go";
 /// difference between the run that read the file and the run that did not.
 const GO_FORBIDDEN_SOURCE: &str = concat!("package staged\n", "\n", "type forbidden struct{}\n");
 
+/// Drives the shipped script of the Go tool rule `rule` over the `(path,
+/// source)` pair `judged` beside [`GO_FORBIDDEN_PATH`], which no reader may
+/// open, and holds that run to reporting `judged_row` AND to stating one
+/// diagnostic that names the refusing path.
+///
+/// `missing-docs-go` and `stuttering-name-go` run the same revive `exported`
+/// rule over the same shape, so the probe of the two rules differs in the rule
+/// and in the judged file alone. Each rule owns a finding of its OWN judged
+/// source — an undocumented exported type for one, an exported name that
+/// repeats its package name for the other — and `judged_row` is the row that
+/// finding stands on. The project types, the refusing path and the source
+/// behind it are ONE value for both rules, so this function holds them.
+///
+/// The judged row is what a nonzero exit over a declined item costs, and
+/// staying silent about the refusing path is what reads that path as a clean
+/// file. The run must therefore keep the row AND state the path.
+///
+/// The probe takes every permission off the refusing file, which is a mode, so
+/// it runs on unix alone.
+#[cfg(unix)]
+fn verify_go_rule_declines_a_forbidden_path(
+    rule: &'static str,
+    judged: (&'static str, &'static str),
+    judged_row: String,
+) {
+    let (judged_path, judged_source) = judged;
+
+    verify_unreadable_file_is_declined(
+        &ShippedDeclineProbe {
+            project_types: GO_PROJECT_TYPES,
+            rule,
+            judged: vec![(judged_path, judged_source.to_string())],
+            path: GO_FORBIDDEN_PATH,
+            expected: vec![judged_row],
+        },
+        &ShippedUnreadableFile::Forbidden(GO_FORBIDDEN_SOURCE),
+    );
+}
+
 /// The project types a Node.js workspace carries, as the plan holds them.
 const NODEJS_PROJECT_TYPES: &[&str] = &["nodejs"];
 
