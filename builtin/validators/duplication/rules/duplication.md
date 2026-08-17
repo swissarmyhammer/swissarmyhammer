@@ -68,6 +68,35 @@ The language-specific rules in this validator give concrete per-language shapes
 of forced boilerplate. When a file in scope is in one of those languages, apply
 that rule's carve-outs alongside this rule before reporting a finding in it.
 
-The fix is always the same: extract a shared function and parameterize the
-difference. Do not flag a need for a *speculative* abstraction with no real
-second consumer — that is over-engineering, a separate concern.
+## Where the Fix Goes
+
+An **index-backed row** is a pair with one half outside the change: the block
+this change wrote, and a block that was there before. The review is about the
+changed code, so the fix goes in the changed code.
+
+That row tells you which half is which. It points at the counterpart, and it
+names the side the change edited:
+
+    src/existing.rs:41 `old_compute` @ 0.98 — the change edited src/new.rs;
+    fix that side, not this copy — pub fn old_compute(input: &[f64]) -> f64 {…
+
+There are two cases, and they get different fixes:
+
+1. **The counterpart is already a shared function.** Call it from the changed
+   code. Delete the copy the change added. Do not rewrite the counterpart.
+2. **No shared function exists yet.** Extract one from the changed code, and
+   parameterize the difference.
+
+Do not edit the counterpart to make the two halves agree. The counterpart is
+outside this change, and an edit there is a different piece of work. Report it
+as a separate task.
+
+A **changed-set row** (case 3, paste-into-two-new-files) is different: both
+halves are new, and both sit inside this change. Its detail reads
+`changed-set duplicate of <name> in <file>` — there is no "outside this
+change" counterpart to protect, because the change wrote both copies. Extract
+one shared function from the pasted block, call it from both sites, and delete
+both copies.
+
+Do not flag a need for a *speculative* abstraction with no real second consumer
+— that is over-engineering, a separate concern.

@@ -69,7 +69,8 @@ use crate::review::tree_sitter_probes::{
 };
 use swissarmyhammer_code_context::{
     find_duplicates_in, get_callgraph, load_all_embedded_chunks, search_loaded, CallGraphDirection,
-    CallGraphOptions, ChunkRef, FindDuplicatesOptions, LoadedChunk, SearchCodeOptions,
+    CallGraphOptions, ChunkRef, DuplicateMatch, FindDuplicatesOptions, LoadedChunk,
+    SearchCodeOptions,
 };
 
 /// Whether a probe yields a deterministically checkable fact or an
@@ -740,13 +741,10 @@ async fn run_duplicates(
             .groups
             .iter()
             .flat_map(|group| {
-                group.duplicates.iter().map(|dup| ProbeRow {
-                    file_path: dup.chunk.file_path.clone(),
-                    symbol: dup.chunk.symbol_path.clone(),
-                    line: Some(dup.chunk.start_line),
-                    similarity: Some(dup.similarity),
-                    detail: Some(snippet(&dup.chunk.text)),
-                })
+                group
+                    .duplicates
+                    .iter()
+                    .map(|dup| index_duplicate_row(file, dup))
             })
             .collect();
         out.push(ProbeResult {
@@ -762,6 +760,43 @@ async fn run_duplicates(
     out.push(changed_set_duplicates(entry, file_change, embedder, options.min_similarity).await?);
 
     Ok(out)
+}
+
+/// The direction clause a duplicate-pair evidence row carries: which half of
+/// the pair the change edited, then what that half means for the site the row
+/// points at.
+///
+/// A duplicate is a PAIR, and only one half of it is under review. Every
+/// duplicate probe points its row at the OTHER half, so a row without this
+/// clause names a file and a similarity and never states where the remedy
+/// belongs. It belongs on the half the change edited.
+fn pair_direction(edited: impl std::fmt::Display, counterpart: impl std::fmt::Display) -> String {
+    format!("the change edited {edited}; {counterpart}")
+}
+
+/// One index-backed duplicate as an evidence row: where the counterpart sits,
+/// how close the two are, which side the change edited, and a snippet of the
+/// counterpart's text.
+///
+/// `changed_file` is the file the probe is bound to — the half of the pair
+/// under review — so the row alone states which file to edit. This row makes no
+/// claim that the counterpart is unchanged: [`find_duplicates_in`] compares a
+/// file's chunks against the whole corpus, which holds the other chunks of that
+/// same file.
+fn index_duplicate_row(changed_file: &str, duplicate: &DuplicateMatch) -> ProbeRow {
+    ProbeRow {
+        file_path: duplicate.chunk.file_path.clone(),
+        symbol: duplicate.chunk.symbol_path.clone(),
+        line: Some(duplicate.chunk.start_line),
+        similarity: Some(duplicate.similarity),
+        detail: Some(pair_direction(
+            changed_file,
+            format!(
+                "fix that side, not this copy — {}",
+                snippet(&duplicate.chunk.text)
+            ),
+        )),
+    }
 }
 
 /// Compare the changed blocks against each other, flagging near-identical
@@ -973,9 +1008,9 @@ fn clone_sibling_row(sibling: &CloneSite, mirror: &MirroredMember) -> ProbeRow {
         symbol: sibling.symbol_path.clone(),
         line: Some(sibling.start_line),
         similarity: Some(mirror.similarity),
-        detail: Some(format!(
-            "the change edited {}; this near-copy of it is unchanged",
-            mirror.site
+        detail: Some(pair_direction(
+            &mirror.site,
+            "this near-copy of it is unchanged",
         )),
     }
 }
@@ -1128,20 +1163,56 @@ mod tests {
 
     // --- shared probe-evidence renderer --------------------------------
 
+    /// The changed file the row-format fixtures bind their result to: the half
+    /// of a duplicate pair that is under review.
+    const RENDERED_CHANGED_FILE: &str = "src/a.rs";
+
+    /// The file the counterpart sits in: the half of the pair the row points
+    /// at, which is never the file under review.
+    const RENDERED_COUNTERPART_FILE: &str = "src/b.rs";
+
+    /// The symbol the counterpart carries.
+    const RENDERED_COUNTERPART_SYMBOL: &str = "dupe";
+
+    /// The line the counterpart starts on. Every row-format fixture pins this
+    /// one line, so the rendered text they assert on differs only where the
+    /// code that builds the row differs.
+    const RENDERED_COUNTERPART_LINE: u32 = 42;
+
+    /// The similarity the row-format fixtures pin: near-verbatim, and under
+    /// 1.00 so the two-decimal rendering shows both of its digits.
+    const RENDERED_COUNTERPART_SIMILARITY: f32 = 0.94;
+
     /// A `callers` (fact) result with one caller row carrying every optional
     /// field, so the rendered row exercises line/symbol/similarity/detail.
     fn rich_result() -> ProbeResult {
         ProbeResult {
             name: "duplicates".to_string(),
             kind: ProbeKind::Fact,
-            target: "src/a.rs".to_string(),
+            target: RENDERED_CHANGED_FILE.to_string(),
             rows: vec![ProbeRow {
-                file_path: "src/b.rs".to_string(),
-                symbol: Some("dupe".to_string()),
-                line: Some(42),
-                similarity: Some(0.94),
+                file_path: RENDERED_COUNTERPART_FILE.to_string(),
+                symbol: Some(RENDERED_COUNTERPART_SYMBOL.to_string()),
+                line: Some(RENDERED_COUNTERPART_LINE),
+                similarity: Some(RENDERED_COUNTERPART_SIMILARITY),
                 detail: Some("matched block".to_string()),
             }],
+        }
+    }
+
+    /// The index hit the `duplicates` probe points a row at: a near-copy of a
+    /// block in the changed file, sitting in another file of the corpus.
+    fn indexed_counterpart() -> DuplicateMatch {
+        DuplicateMatch {
+            chunk: ChunkRef {
+                file_path: RENDERED_COUNTERPART_FILE.to_string(),
+                start_line: RENDERED_COUNTERPART_LINE,
+                // A one-line chunk: the row renders the start line only.
+                end_line: RENDERED_COUNTERPART_LINE,
+                symbol_path: Some(RENDERED_COUNTERPART_SYMBOL.to_string()),
+                text: "fn dupe() {}".to_string(),
+            },
+            similarity: RENDERED_COUNTERPART_SIMILARITY,
         }
     }
 
@@ -1166,6 +1237,30 @@ mod tests {
             out,
             "- probe `duplicates` (fact) on `src/a.rs`:\n\
              \x20 - src/b.rs:42 `dupe` @ 0.94 — matched block\n\n"
+        );
+    }
+
+    /// A duplicate is a pair, and the row points at the half the change did NOT
+    /// edit. The rendered row must therefore name the half it DID edit, or the
+    /// row alone leaves a reader with no answer to "which file do I fix?".
+    #[test]
+    fn an_index_duplicate_row_renders_the_side_the_change_edited() {
+        let result = ProbeResult {
+            rows: vec![index_duplicate_row(
+                RENDERED_CHANGED_FILE,
+                &indexed_counterpart(),
+            )],
+            ..rich_result()
+        };
+
+        let mut out = String::new();
+        render_probe_evidence(&mut out, &[result], false);
+
+        assert_eq!(
+            out,
+            "- probe `duplicates` on `src/a.rs`:\n\
+             \x20 - src/b.rs:42 `dupe` @ 0.94 — the change edited src/a.rs; \
+             fix that side, not this copy — fn dupe() {}\n\n"
         );
     }
 
@@ -1301,6 +1396,22 @@ mod tests {
                 .any(|row| row.file_path == "src/existing.rs"),
             "expected the index hit at src/existing.rs, got: {:?}",
             file_result.rows
+        );
+
+        // The row names the counterpart, so it must also name the side the
+        // change touched. The remedy lands on that side, never on the
+        // counterpart the change never opened.
+        let details: Vec<&str> = file_result
+            .rows
+            .iter()
+            .filter(|row| row.file_path == "src/existing.rs")
+            .filter_map(|row| row.detail.as_deref())
+            .collect();
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.starts_with("the change edited src/new.rs;")),
+            "the row must name the changed side, got: {details:?}"
         );
     }
 
