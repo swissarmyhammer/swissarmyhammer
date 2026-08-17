@@ -775,45 +775,21 @@ fn the_shipped_swift_magic_numbers_tool_rule_breaks_beside_a_project_version_mis
     verify_shipped_run_breaks(&SWIFT_MAGIC_NUMBERS_VERSION_MISMATCH_PROBE);
 }
 
-/// Where the Swift file that is never written stands inside the probe
+/// Where the Swift file the magic-numbers run CAN judge stands, beside each
+/// refusing path.
+const SWIFT_MAGIC_NUMBERS_JUDGED_PATH: &str = "Sources/Judged.swift";
+
+/// Where the path the magic-numbers run cannot judge stands inside the probe
 /// repository.
-const SWIFT_MAGIC_NUMBERS_ABSENT_PATH: &str = "Sources/Absent.swift";
-
-/// What the one error of an absent file must name.
-const SWIFT_MAGIC_NUMBERS_ABSENT_ERROR: &[&str] = &[
-    "magic-numbers-swift cannot read",
-    SWIFT_MAGIC_NUMBERS_ABSENT_PATH,
-];
-
-/// The `magic-numbers-swift` probe over a path that holds no file.
-const SWIFT_MAGIC_NUMBERS_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: SWIFT_PROJECT_TYPES,
-        rule: SWIFT_MAGIC_NUMBERS_RULE,
-        expected: SWIFT_MAGIC_NUMBERS_ABSENT_ERROR,
-    },
-    prompt_rule: MAGIC_NUMBERS_PROMPT_RULE,
-    change_purpose: "a Swift file that is not there",
-    path: SWIFT_MAGIC_NUMBERS_ABSENT_PATH,
-    source: None,
-    support: NO_SUPPORT_FILES,
-};
-
-/// Acceptance: the shipped Swift magic-numbers tool rule BREAKS on a file it
-/// cannot read, through the real swiftlint pipeline.
 ///
-/// swiftlint exits 1 for a path that is not there and writes nothing to
-/// stdout. A pipeline takes the exit status of its LAST command, and that
-/// command was `jq`, so the earlier pipe exited 0 and reported nothing — a run
-/// answering zero for a reason other than a clean file.
-#[test]
-fn the_shipped_swift_magic_numbers_tool_rule_breaks_on_a_file_it_cannot_read() {
-    verify_shipped_run_breaks(&SWIFT_MAGIC_NUMBERS_ABSENT_PROBE);
-}
+/// One name serves all three shapes: the same path holds no file, holds bytes
+/// that are not UTF-8, or holds source nobody may read, so the way it refuses
+/// is the one difference between the three probes.
+const SWIFT_MAGIC_NUMBERS_UNREADABLE_PATH: &str = "Sources/Unreadable.swift";
 
-/// Where the Swift file swiftlint cannot decode stands inside the probe
-/// repository.
-const SWIFT_MAGIC_NUMBERS_UNDECODABLE_PATH: &str = "Sources/Latin1.swift";
+/// The head of the line [`SWIFT_MAGIC_NUMBERS_STAGED`] states its unnamed
+/// literal on.
+const SWIFT_MAGIC_NUMBERS_LITERAL_HEAD: &str = "return status == 404";
 
 /// A Swift file written in Latin-1 rather than in UTF-8.
 ///
@@ -826,47 +802,87 @@ public func check(_ status: Int) -> Bool {\n\
 return status == 404\n\
 }\n";
 
-/// What the one error of a file swiftlint cannot decode must name: the rule's
-/// own line, and swiftlint's own message, which carries the path.
-const SWIFT_MAGIC_NUMBERS_UNDECODABLE_ERROR: &[&str] = &[
-    "magic-numbers-swift: swiftlint could not read the contents of a file this run names",
-    "Could not read contents of",
-    "Latin1.swift",
-];
-
-/// The `magic-numbers-swift` probe over a Swift file swiftlint cannot decode.
-const SWIFT_MAGIC_NUMBERS_UNDECODABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: SWIFT_PROJECT_TYPES,
-        rule: SWIFT_MAGIC_NUMBERS_RULE,
-        expected: SWIFT_MAGIC_NUMBERS_UNDECODABLE_ERROR,
-    },
-    prompt_rule: MAGIC_NUMBERS_PROMPT_RULE,
-    change_purpose: "a Swift file that is not UTF-8",
-    path: SWIFT_MAGIC_NUMBERS_UNDECODABLE_PATH,
-    source: Some(SWIFT_MAGIC_NUMBERS_UNDECODABLE_SOURCE),
-    support: NO_SUPPORT_FILES,
-};
-
-/// Acceptance: the shipped Swift magic-numbers tool rule BREAKS on a Swift
-/// file swiftlint cannot decode, through the real swiftlint pipeline.
+/// A Swift file swiftlint could read if the mode let it.
 ///
-/// The file is readable, so the `[ ! -r "$file" ]` guard admits it and
-/// swiftlint reads it. Measured with swiftlint 0.65.0 over this file:
-/// swiftlint writes ``Could not read contents of `<path>` `` to stderr, writes
-/// an empty JSON array to stdout, and exits 0 — the status and the report of a
-/// clean file. So the script read a file swiftlint never read as a clean file,
-/// and the unnamed literal reached the engine as a clean tree.
+/// The one literal it holds stands in the `allowed_numbers` list the rule
+/// states, so a run that DID read this file would report no finding — which is
+/// the clean answer this rule must not give for a file it never read.
+const SWIFT_MAGIC_NUMBERS_FORBIDDEN_SOURCE: &str = concat!(
+    "public func one(_ status: Int) -> Bool {\n",
+    "    return status == 1\n",
+    "}\n",
+);
+
+/// Holds the shipped Swift magic-numbers run to judging `Sources/Judged.swift`
+/// and to stating the one path it could not judge, through the real swiftlint
+/// pipeline.
 ///
-/// Measured over the same file beside one file that holds a finding: swiftlint
-/// writes the same stderr line, writes 1 entry, and exits 0 as
-/// well. The child states `severity: warning`, so no finding of this rule
-/// reaches error severity and swiftlint never exits 2. Every row of the
-/// measurement is therefore the status and the report of a healthy run, and
-/// only stderr tells the two apart.
+/// The judged file carries one unnamed literal, so the run has a finding to
+/// lose. Losing it is what a nonzero exit over a declined item costs, and
+/// staying silent about the path is what reads that path as a clean file.
+fn verify_swift_magic_numbers_declines(unreadable: &ShippedUnreadableFile) {
+    let literal = expected_row(
+        SWIFT_MAGIC_NUMBERS_JUDGED_PATH,
+        SWIFT_MAGIC_NUMBERS_STAGED,
+        SWIFT_MAGIC_NUMBERS_LITERAL_HEAD,
+    );
+
+    verify_unreadable_file_is_declined(
+        SWIFT_PROJECT_TYPES,
+        SWIFT_MAGIC_NUMBERS_RULE,
+        &[(SWIFT_MAGIC_NUMBERS_JUDGED_PATH, SWIFT_MAGIC_NUMBERS_STAGED)],
+        SWIFT_MAGIC_NUMBERS_UNREADABLE_PATH,
+        unreadable,
+        &[&literal],
+    );
+}
+
+/// Acceptance: the shipped Swift magic-numbers tool rule DECLINES a path that
+/// holds no file, through the real swiftlint pipeline.
+///
+/// Measured with swiftlint 0.65.0 over such a path beside one file that holds a
+/// finding: 1 entry on stdout, 0 bytes on stderr, and exit 0. swiftlint says
+/// NOTHING about the path it dropped — measured again with `--quiet` taken off,
+/// it writes `Linting 'Judged.swift' (1/1)` and no word of the other path. So
+/// the script tests the path itself, and states it under the marker.
 #[test]
-fn the_shipped_swift_magic_numbers_tool_rule_breaks_on_a_file_it_cannot_decode() {
-    verify_shipped_run_breaks(&SWIFT_MAGIC_NUMBERS_UNDECODABLE_PROBE);
+fn the_shipped_swift_magic_numbers_tool_rule_declines_a_path_that_holds_no_file() {
+    verify_swift_magic_numbers_declines(&ShippedUnreadableFile::Absent);
+}
+
+/// Acceptance: the shipped Swift magic-numbers tool rule DECLINES a Swift file
+/// swiftlint cannot decode, through the real swiftlint pipeline.
+///
+/// Measured with swiftlint 0.65.0 over this file beside one file that holds a
+/// finding: swiftlint writes ``Could not read contents of `<path>` `` to
+/// stderr, writes 1 entry to stdout, and exits 0 — the status and the report of
+/// a healthy run. The child states `severity: warning`, so no finding of this
+/// rule reaches error severity and swiftlint never exits 2. So neither the
+/// status nor the report tells this file from a clean one, and the script reads
+/// swiftlint's own message instead.
+#[test]
+fn the_shipped_swift_magic_numbers_tool_rule_declines_a_file_it_cannot_decode() {
+    verify_swift_magic_numbers_declines(&ShippedUnreadableFile::Undecodable(
+        SWIFT_MAGIC_NUMBERS_UNDECODABLE_SOURCE,
+    ));
+}
+
+/// Acceptance: the shipped Swift magic-numbers tool rule DECLINES a Swift file
+/// it may not read, through the real swiftlint pipeline.
+///
+/// Measured with swiftlint 0.65.0 over this file beside one file that holds a
+/// finding: swiftlint writes the same ``Could not read contents of `<path>` ``
+/// line, writes 1 entry, and exits 0. The mode and the decode reach swiftlint
+/// as one message, so one reading of stderr answers both.
+///
+/// The probe takes every permission off the file, which is a mode, so it runs
+/// on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_swift_magic_numbers_tool_rule_declines_a_file_it_may_not_read() {
+    verify_swift_magic_numbers_declines(&ShippedUnreadableFile::Forbidden(
+        SWIFT_MAGIC_NUMBERS_FORBIDDEN_SOURCE,
+    ));
 }
 
 /// The `magic-numbers-swift` probe over a file whose name holds the words of

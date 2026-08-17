@@ -77,8 +77,24 @@ comments:
     - All 4 findings are checked.
     - next: `/review`
   timestamp: 2026-08-17T05:54:38.342382+00:00
-position_column: doing
-position_ordinal: '8280'
+- actor: claude-code
+  id: 01m0758rkd7xy0fh63566xj062
+  text: |-
+    ### review — clean
+    - evidence: `review sha HEAD~1..HEAD` (commit 14ffff5bf). 9 rules ran, 0 findings, 0 failed. The 4 findings of round 1 are all checked.
+    - next: The card moves to `done`.
+  timestamp: 2026-08-17T06:06:46.381076+00:00
+- actor: claude-code
+  id: 01m07597t00zj30gh8xbymzp7q
+  text: |
+    ### finish iteration 2 — clean
+    - implement: changed — 1 file (missing_docs.rs). The 3 constants took the `DART_MISSING_DOCS_` prefix. One new test holds the rule to break with its named line when `dart --version` names no version.
+    - test: green — cargo nextest run --workspace, 14141 passed, 0 failed. fmt and clippy clean. The perturbation proof shows the assertion needs the NAMED line, and refuses a different failure.
+    - commit: 14ffff5bf
+    - review: clean — 9 rules, 0 findings. All 4 prior findings checked.
+  timestamp: 2026-08-17T06:07:01.952750+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffa280
 title: dart probe packages pin the language version to a stale floor
 ---
 `missing-docs-dart` and `magic-numbers-dart` each build a probe package and write a fixed `environment: sdk:` constraint into its `pubspec.yaml`:

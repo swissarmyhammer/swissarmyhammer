@@ -644,41 +644,96 @@ fn the_shipped_dart_missing_docs_tool_rule_reports_both_members_when_dart_runs()
     verify_shipped_tree_reports(&DART_WHOLE_RUN_PROBE);
 }
 
-/// Where the Dart file that is never written stands inside the probe
-/// repository.
-const DART_ABSENT_PATH: &str = "lib/absent.dart";
-
-/// What the script writes for a file it cannot read.
-const DART_CANNOT_READ_MESSAGE: &str = concat!(missing_docs_rule!(dart), " cannot read");
-
-/// What the one error of an absent file must name.
-const DART_ABSENT_ERROR: &[&str] = &[DART_CANNOT_READ_MESSAGE, DART_ABSENT_PATH];
-
-/// The `missing-docs-dart` probe over a path that holds no file.
-const DART_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: FLUTTER_PROJECT_TYPES,
-        rule: DART_MISSING_DOCS_RULE,
-        expected: DART_ABSENT_ERROR,
-    },
-    prompt_rule: MISSING_DOCS_PROMPT_RULE,
-    change_purpose: "a Dart file that is not there",
-    path: DART_ABSENT_PATH,
-    source: None,
-    support: NO_SUPPORT_FILES,
-};
-
-/// Acceptance: the shipped Dart missing-docs tool rule BREAKS on a file it
-/// cannot read, through the real `dart analyze` pipeline.
+/// Where the path the Dart missing-docs run cannot judge stands inside the
+/// probe repository.
 ///
-/// The script copies each file it is given into the probe package, so a file
-/// that is not there is a file the analyzer never sees, and the run would
-/// report no member of it while reporting for every other file of the group.
-/// The script therefore tests each file it is given before it builds anything,
-/// and exits nonzero with the name of the file it cannot read.
+/// One name serves all three shapes: the same path holds no file, holds bytes
+/// that are not UTF-8, or holds source nobody may read, so the way it refuses
+/// is the one difference between the three probes.
+const DART_MISSING_DOCS_UNREADABLE_PATH: &str = "lib/unreadable.dart";
+
+/// A Dart library written in Latin-1 rather than in UTF-8.
+///
+/// The byte `0xE9` is `é` in Latin-1, and it is not a UTF-8 sequence. The
+/// members stand under the string, so a run that DID read the file reports
+/// them.
+const DART_MISSING_DOCS_UNDECODABLE_SOURCE: &[u8] = b"final name = 'caf\xe9';\n\
+class Undecodable {\n\
+  void member() {}\n\
+}\n";
+
+/// A Dart library the analyzer could read if the mode let it.
+///
+/// Dart states privacy with the `_` prefix, so a run that DID read this file
+/// would report no member — which is the clean answer this rule must not give
+/// for a file it never read.
+const DART_MISSING_DOCS_FORBIDDEN_SOURCE: &str =
+    concat!("class _Forbidden {\n", "  void _member() {}\n", "}\n");
+
+/// Holds the shipped Dart missing-docs run to judging the staged library and to
+/// stating the one path it could not judge, through the real `dart analyze`
+/// pipeline.
+///
+/// The staged library is the one [`DART_BROKEN_RUN_STAGED`] holds: one
+/// undocumented public class and one undocumented method, so the run has two
+/// rows to lose. Losing them is what a nonzero exit over a declined item costs,
+/// and staying silent about the path is what reads that path as a clean file.
+fn verify_dart_missing_docs_declines(unreadable: &ShippedUnreadableFile) {
+    verify_unreadable_file_is_declined(
+        FLUTTER_PROJECT_TYPES,
+        DART_MISSING_DOCS_RULE,
+        DART_BROKEN_RUN_STAGED,
+        DART_MISSING_DOCS_UNREADABLE_PATH,
+        unreadable,
+        DART_BROKEN_RUN_ROWS,
+    );
+}
+
+/// Acceptance: the shipped Dart missing-docs tool rule DECLINES a path that
+/// holds no file, through the real `dart analyze` pipeline.
+///
+/// The script copies each file it is given into the probe package, and `cp`
+/// answers a path that holds no file with a nonzero status. `set -e` then took
+/// the whole run down, and the two rows of the library the run DID judge went
+/// away with it. Measured with the two tests taken out: `cp: lib/absent.dart:
+/// No such file or directory` and exit 1.
 #[test]
-fn the_shipped_dart_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
-    verify_shipped_run_breaks(&DART_ABSENT_PROBE);
+fn the_shipped_dart_missing_docs_tool_rule_declines_a_path_that_holds_no_file() {
+    verify_dart_missing_docs_declines(&ShippedUnreadableFile::Absent);
+}
+
+/// Acceptance: the shipped Dart missing-docs tool rule DECLINES a Dart file it
+/// cannot decode, through the real `dart analyze` pipeline.
+///
+/// `[ ! -r "$file" ]` admits this file — the mode lets a reader open it — so
+/// `cp` copies it into the probe package and `dart analyze` reads it. Measured
+/// on Dart SDK 3.11.0 over a probe package that holds this file beside the
+/// judged library: the analyzer reports the two rows of the judged library, 0
+/// bytes on stderr, and exit 0, and it says NOTHING about the file it could not
+/// decode. So the engine read a file the analyzer never read as a clean file,
+/// and the `iconv` test is what answers it.
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_declines_a_file_it_cannot_decode() {
+    verify_dart_missing_docs_declines(&ShippedUnreadableFile::Undecodable(
+        DART_MISSING_DOCS_UNDECODABLE_SOURCE,
+    ));
+}
+
+/// Acceptance: the shipped Dart missing-docs tool rule DECLINES a Dart file it
+/// may not read, through the real `dart analyze` pipeline.
+///
+/// `cp` answers a file whose mode refuses a read with a nonzero status, and
+/// `set -e` then took the whole run down. Measured with the two tests taken
+/// out: `cp: lib/forbidden.dart: Permission denied` and exit 1.
+///
+/// The probe takes every permission off the file, which is a mode, so it runs
+/// on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_dart_missing_docs_tool_rule_declines_a_file_it_may_not_read() {
+    verify_dart_missing_docs_declines(&ShippedUnreadableFile::Forbidden(
+        DART_MISSING_DOCS_FORBIDDEN_SOURCE,
+    ));
 }
 
 /// Where the Dart library that uses a declaration newer than the earlier probe
@@ -2284,47 +2339,25 @@ fn the_shipped_swift_missing_docs_tool_rule_keeps_its_own_rule_options() {
     verify_shipped_staged_positions_report(&SWIFT_RULE_OPTIONS_PROBE);
 }
 
-/// Where the Swift file that is never written stands inside the probe
+/// Where the Swift file the missing-docs run CAN judge stands, beside each
+/// refusing path.
+const SWIFT_MISSING_DOCS_JUDGED_PATH: &str = "Sources/Judged.swift";
+
+/// Where the path the missing-docs run cannot judge stands inside the probe
 /// repository.
-const SWIFT_ABSENT_PATH: &str = "Sources/Absent.swift";
-
-/// What the script writes for a file it cannot read.
-const SWIFT_CANNOT_READ_MESSAGE: &str = concat!(missing_docs_rule!(swift), " cannot read");
-
-/// What the one error of an absent file must name.
-const SWIFT_ABSENT_ERROR: &[&str] = &[SWIFT_CANNOT_READ_MESSAGE, SWIFT_ABSENT_PATH];
-
-/// The `missing-docs-swift` probe over a path that holds no file.
-const SWIFT_ABSENT_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: SWIFT_PROJECT_TYPES,
-        rule: SWIFT_MISSING_DOCS_RULE,
-        expected: SWIFT_ABSENT_ERROR,
-    },
-    prompt_rule: MISSING_DOCS_PROMPT_RULE,
-    change_purpose: "a Swift file that is not there",
-    path: SWIFT_ABSENT_PATH,
-    source: None,
-    support: NO_SUPPORT_FILES,
-};
-
-/// Acceptance: the shipped Swift missing-docs tool rule BREAKS on a file it
-/// cannot read, through the real swiftlint pipeline.
 ///
-/// swiftlint exits 1 for a path that is not there and writes nothing to
-/// stdout. A pipeline takes the exit status of its LAST command, and that
-/// command was `jq`, so the earlier pipe exited 0 and reported nothing — a run
-/// answering zero for a reason other than a clean file. The script tests each
-/// file it is given before it starts, and exits 1 with the name of the file it
-/// cannot read.
-#[test]
-fn the_shipped_swift_missing_docs_tool_rule_breaks_on_a_file_it_cannot_read() {
-    verify_shipped_run_breaks(&SWIFT_ABSENT_PROBE);
-}
+/// One name serves all three shapes: the same path holds no file, holds bytes
+/// that are not UTF-8, or holds source nobody may read, so the way it refuses
+/// is the one difference between the three probes.
+const SWIFT_MISSING_DOCS_UNREADABLE_PATH: &str = "Sources/Unreadable.swift";
 
-/// Where the Swift file swiftlint cannot decode stands inside the probe
-/// repository.
-const SWIFT_UNDECODABLE_PATH: &str = "Sources/Latin1.swift";
+/// The head of the undocumented public structure
+/// [`SWIFT_STAGED_DECLARATIONS`] declares.
+const SWIFT_STAGED_STRUCTURE_HEAD: &str = "public struct StagedThing";
+
+/// The head of the undocumented stored property
+/// [`SWIFT_STAGED_DECLARATIONS`] declares.
+const SWIFT_STAGED_PROPERTY_HEAD: &str = "public var value";
 
 /// A Swift file written in Latin-1 rather than in UTF-8.
 ///
@@ -2332,55 +2365,100 @@ const SWIFT_UNDECODABLE_PATH: &str = "Sources/Latin1.swift";
 /// swiftlint reads a file as UTF-8 and nothing else, so it cannot decode this
 /// one. The staged declarations stand under the string, so a run that DID read
 /// the file reports them.
-const SWIFT_UNDECODABLE_SOURCE: &[u8] = b"let name = \"caf\xe9\"\n\
+const SWIFT_MISSING_DOCS_UNDECODABLE_SOURCE: &[u8] = b"let name = \"caf\xe9\"\n\
 public struct StagedThing {\n\
 public var value: Int = 0\n\
 }\n";
 
-/// What the one error of a file swiftlint cannot decode must name: the rule's
-/// own line, and swiftlint's own message, which carries the path.
-const SWIFT_UNDECODABLE_ERROR: &[&str] = &[
-    concat!(
-        missing_docs_rule!(swift),
-        ": swiftlint could not read the contents of a file this run names"
-    ),
-    "Could not read contents of",
-    "Latin1.swift",
-];
+/// A Swift file swiftlint could read if the mode let it.
+///
+/// Every declaration is internal, and the rule's own configuration states
+/// `warning: [open, public]`, so a run that DID read this file would report no
+/// finding — which is the clean answer this rule must not give for a file it
+/// never read.
+const SWIFT_MISSING_DOCS_FORBIDDEN_SOURCE: &str = concat!(
+    "struct InternalThing {\n",
+    "    var value: Int = 0\n",
+    "}\n"
+);
 
-/// The `missing-docs-swift` probe over a Swift file swiftlint cannot decode.
-const SWIFT_UNDECODABLE_PROBE: ShippedNamedPath = ShippedNamedPath {
-    run: ShippedRun {
-        project_types: SWIFT_PROJECT_TYPES,
-        rule: SWIFT_MISSING_DOCS_RULE,
-        expected: SWIFT_UNDECODABLE_ERROR,
-    },
-    prompt_rule: MISSING_DOCS_PROMPT_RULE,
-    change_purpose: "a Swift file that is not UTF-8",
-    path: SWIFT_UNDECODABLE_PATH,
-    source: Some(SWIFT_UNDECODABLE_SOURCE),
-    support: NO_SUPPORT_FILES,
-};
+/// Holds the shipped Swift missing-docs run to judging `Sources/Judged.swift`
+/// and to stating the one path it could not judge, through the real swiftlint
+/// pipeline.
+///
+/// The judged file carries one undocumented public structure and one
+/// undocumented stored property, so the run has two findings to lose. Losing
+/// them is what a nonzero exit over a declined item costs, and staying silent
+/// about the path is what reads that path as a clean file.
+fn verify_swift_missing_docs_declines(unreadable: &ShippedUnreadableFile) {
+    let structure = expected_row(
+        SWIFT_MISSING_DOCS_JUDGED_PATH,
+        SWIFT_STAGED_DECLARATIONS,
+        SWIFT_STAGED_STRUCTURE_HEAD,
+    );
+    let property = expected_row(
+        SWIFT_MISSING_DOCS_JUDGED_PATH,
+        SWIFT_STAGED_DECLARATIONS,
+        SWIFT_STAGED_PROPERTY_HEAD,
+    );
 
-/// Acceptance: the shipped Swift missing-docs tool rule BREAKS on a Swift file
+    verify_unreadable_file_is_declined(
+        SWIFT_PROJECT_TYPES,
+        SWIFT_MISSING_DOCS_RULE,
+        &[(SWIFT_MISSING_DOCS_JUDGED_PATH, SWIFT_STAGED_DECLARATIONS)],
+        SWIFT_MISSING_DOCS_UNREADABLE_PATH,
+        unreadable,
+        &[&structure, &property],
+    );
+}
+
+/// Acceptance: the shipped Swift missing-docs tool rule DECLINES a path that
+/// holds no file, through the real swiftlint pipeline.
+///
+/// Measured with swiftlint 0.65.0 over such a path beside one file that holds
+/// two findings: 2 entries on stdout, 0 bytes on stderr, and exit 0. swiftlint
+/// says NOTHING about the path it dropped — measured again with `--quiet` taken
+/// off, it writes `Linting 'Judged.swift' (1/1)` and no word of the other path.
+/// So the script tests the path itself, and states it under the marker.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_declines_a_path_that_holds_no_file() {
+    verify_swift_missing_docs_declines(&ShippedUnreadableFile::Absent);
+}
+
+/// Acceptance: the shipped Swift missing-docs tool rule DECLINES a Swift file
 /// swiftlint cannot decode, through the real swiftlint pipeline.
 ///
-/// The file is readable, so the `[ ! -r "$file" ]` guard admits it and
-/// swiftlint reads it. Measured with swiftlint 0.65.0 over this file:
-/// swiftlint writes ``Could not read contents of `<path>` `` to stderr, writes
-/// an empty JSON array to stdout, and exits 0 — the status and the report of a
-/// clean file. So the script read a file swiftlint never read as a clean file,
-/// and the undocumented public declarations reached the engine as a clean tree.
+/// Measured with swiftlint 0.65.0 over this file beside one file that holds two
+/// findings: swiftlint writes ``Could not read contents of `<path>` `` to
+/// stderr, writes 2 entries to stdout, and exits 0 — the status and the report
+/// of a healthy run. So neither the status nor the report tells this file from
+/// a clean one, and the script reads swiftlint's own message instead.
 ///
-/// Measured over the same file beside one file that holds a finding: swiftlint
-/// writes the same stderr line, writes 2 entries, and exits 0 as
-/// well. The child states `warning: [open, public]` and no `error:` list, so no
-/// finding of this rule reaches error severity and swiftlint never exits 2.
-/// Every row of the measurement is therefore the status and the report of a
-/// healthy run, and only stderr tells the two apart.
+/// A readability test on the path admits this file — the mode lets swiftlint
+/// open it — so the answer has to come from what swiftlint itself said.
 #[test]
-fn the_shipped_swift_missing_docs_tool_rule_breaks_on_a_file_it_cannot_decode() {
-    verify_shipped_run_breaks(&SWIFT_UNDECODABLE_PROBE);
+fn the_shipped_swift_missing_docs_tool_rule_declines_a_file_it_cannot_decode() {
+    verify_swift_missing_docs_declines(&ShippedUnreadableFile::Undecodable(
+        SWIFT_MISSING_DOCS_UNDECODABLE_SOURCE,
+    ));
+}
+
+/// Acceptance: the shipped Swift missing-docs tool rule DECLINES a Swift file
+/// it may not read, through the real swiftlint pipeline.
+///
+/// Measured with swiftlint 0.65.0 over this file beside one file that holds two
+/// findings: swiftlint writes the same ``Could not read contents of `<path>` ``
+/// line, writes 2 entries, and exits 0. The mode and the decode reach swiftlint
+/// as one message, so one reading of stderr answers both.
+///
+/// The probe takes every permission off the file, which is a mode, so it runs
+/// on unix alone.
+#[cfg(unix)]
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_declines_a_file_it_may_not_read() {
+    verify_swift_missing_docs_declines(&ShippedUnreadableFile::Forbidden(
+        SWIFT_MISSING_DOCS_FORBIDDEN_SOURCE,
+    ));
 }
 
 /// The `missing-docs-swift` probe over a file whose name holds the words of
