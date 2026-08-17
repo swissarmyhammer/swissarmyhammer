@@ -12,9 +12,13 @@
 //! LSP-server-gated integration tests.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use swissarmyhammer_diagnostics::{refresh_file, start_diagnostics_watcher, SessionRoute};
+use swissarmyhammer_diagnostics::{
+    refresh_file, start_diagnostics_watcher_with_notifier, SessionRoute, WatcherNotifier,
+};
 use swissarmyhammer_lsp::{file_uri_from_path, LspDaemon, OwnedLspServerSpec};
 use tokio::sync::Mutex;
 
@@ -22,6 +26,54 @@ use tokio::sync::Mutex;
 /// re-report after a disk write. Deliberately generous so the test stays robust
 /// on a cold, slow CI machine; a warm local run resolves in a few seconds.
 const CI_DIAGNOSTIC_WAIT_DEADLINE_SECS: u64 = 45;
+
+/// The wall clock nextest gives one test in this binary before it kills the
+/// process: the `lsp-ipc-serial` override in `.config/nextest.toml` sets
+/// `slow-timeout = { period = "60s", terminate-after = 5 }`, which is 5 periods
+/// of 60 seconds. A wait that crosses this budget is reported as a kill instead
+/// of a failed assertion, so every wait must end inside it.
+const NEXTEST_HARD_KILL_SECS: u64 = 300;
+
+/// Wall clock held back from [`NEXTEST_HARD_KILL_SECS`] for the work that
+/// follows the wait: the assertions, the watcher abort, and the analyzer
+/// shutdown handshake. That tail measured under a second on a loaded machine,
+/// so a minute of reserve keeps a wide margin.
+const POST_WAIT_RESERVE_SECS: u64 = 60;
+
+/// Cadence of the watcher wait loop: how long each on-disk write is left to
+/// settle before the next look at the session cache. Longer than the watcher's
+/// `DIAGNOSTICS_WATCH_DEBOUNCE` of one second, so a write debounces into a
+/// refresh and a pull instead of resetting the debounce timer.
+const WATCH_SETTLE_POLL_SECS: u64 = 3;
+
+/// Pause after the fixture file is opened, so rust-analyzer can start to load
+/// the fresh crate before the test breaks the file.
+const WORKSPACE_LOAD_DELAY_SECS: u64 = 3;
+
+/// Pause after the watcher starts, so the async debouncer is watching before
+/// the test writes. Without it the write can land in the startup window and no
+/// event is ever raised for it.
+const WATCHER_STARTUP_DELAY_SECS: u64 = 1;
+
+/// Cadence of the watcher-free refresh loop. Each turn drives one
+/// `refresh_file`, so the interval only paces the pulls against a server that
+/// is still indexing.
+const REFRESH_POLL_INTERVAL_MS: u64 = 500;
+
+/// How much wall clock the diagnostic wait may still use, given the `spent`
+/// wall clock of the test so far.
+///
+/// The wait is adaptive on purpose. How long rust-analyzer needs to index the
+/// fresh fixture crate and answer a pull is a function of the load on the
+/// machine, not a property of the test: a warm run answers in a few seconds,
+/// while a run with 64 test threads on 18 cores measured 126 seconds. A fixed
+/// deadline that fits one machine is a failure on the next one, so the wait
+/// polls until the re-report lands and only stops at the ceiling the harness
+/// itself sets — the hard kill, less the reserve for the shutdown that follows.
+fn remaining_wait_budget(spent: Duration) -> Duration {
+    Duration::from_secs(NEXTEST_HARD_KILL_SECS.saturating_sub(POST_WAIT_RESERVE_SECS))
+        .saturating_sub(spent)
+}
 
 /// Serialize the rust-analyzer-backed tests in this binary. Two real
 /// rust-analyzer daemons indexing fresh crates concurrently contend on the
@@ -69,7 +121,12 @@ fn seed_rust_project(root: &Path) -> std::path::PathBuf {
 }
 
 /// Wait for the watcher to drive a non-empty re-report, nudging it with fresh
-/// disk writes on a cadence until one lands (or the deadline passes).
+/// disk writes on a cadence until one lands or the `deadline` passes.
+///
+/// The wait returns as soon as the re-report lands, so the `deadline` is only a
+/// ceiling — see [`remaining_wait_budget`]. The returned [`WatcherRereport`]
+/// carries what the wait observed, which is what a failure message needs to
+/// tell a late re-report from a missing one.
 ///
 /// The watcher re-diagnoses only on the filesystem changes it observes, and a
 /// single write right after a cold start can land its one debounced pull before
@@ -86,26 +143,62 @@ async fn wait_for_watcher_rereport<C: swissarmyhammer_lsp::client::LspTransport>
     main_rs: &Path,
     uri: &str,
     deadline: Duration,
-) -> Vec<lsp_types::Diagnostic> {
+) -> WatcherRereport {
     let start = std::time::Instant::now();
-    let mut nudge = 0u32;
+    let mut nudges = 0u32;
+    let mut write_errors = 0u32;
     loop {
-        // Settle window: longer than DIAGNOSTICS_WATCH_DEBOUNCE (~1s) so the
-        // prior write debounces into a refresh + pull before we re-check.
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        let diags = session.diagnostics_for(uri);
-        if !diags.is_empty() || start.elapsed() >= deadline {
-            return diags;
+        tokio::time::sleep(Duration::from_secs(WATCH_SETTLE_POLL_SECS)).await;
+        let diagnostics = session.diagnostics_for(uri);
+        if !diagnostics.is_empty() || start.elapsed() >= deadline {
+            return WatcherRereport {
+                diagnostics,
+                waited: start.elapsed(),
+                nudges,
+                write_errors,
+            };
         }
         // Still nothing — nudge the watcher with another on-disk edit that
         // keeps the type error in place.
-        nudge += 1;
-        std::fs::write(
+        nudges += 1;
+        if std::fs::write(
             main_rs,
-            format!("fn main() {{\n    let _x: u32 = \"not a number\";\n}}\n// nudge {nudge}\n"),
+            format!("fn main() {{\n    let _x: u32 = \"not a number\";\n}}\n// nudge {nudges}\n"),
         )
-        .unwrap();
+        .is_err()
+        {
+            write_errors += 1;
+        }
     }
+}
+
+/// What one [`wait_for_watcher_rereport`] wait observed.
+struct WatcherRereport {
+    /// The diagnostics the session held at the end of the wait. Empty when the
+    /// deadline passed with no re-report.
+    diagnostics: Vec<lsp_types::Diagnostic>,
+    /// How long the wait ran before it returned.
+    waited: Duration,
+    /// How many extra on-disk writes the wait made to keep the watcher firing.
+    nudges: u32,
+    /// How many of those writes failed. A non-zero count means the wait stopped
+    /// driving the watcher, so an empty result says nothing about the watcher.
+    write_errors: u32,
+}
+
+/// A watcher notifier that only counts the files the watcher refreshed.
+///
+/// The count separates two failure causes that look identical from the
+/// diagnostics cache alone: a watcher that never saw the disk write (count of
+/// zero) and a watcher that saw it while the server had not answered yet (count
+/// above zero, no diagnostics).
+fn counting_notifier() -> (WatcherNotifier, Arc<AtomicUsize>) {
+    let refreshed = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&refreshed);
+    let notifier: WatcherNotifier = Arc::new(move |_path: &Path| {
+        counter.fetch_add(1, Ordering::Relaxed);
+    });
+    (notifier, refreshed)
 }
 
 /// Drive [`refresh_file`] repeatedly until it populates diagnostics or the
@@ -131,7 +224,7 @@ async fn refresh_until_diagnostics<C: swissarmyhammer_lsp::client::LspTransport>
         if !diags.is_empty() || start.elapsed() >= deadline {
             return diags;
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(REFRESH_POLL_INTERVAL_MS)).await;
     }
 }
 
@@ -152,6 +245,7 @@ async fn watcher_redreport_on_direct_disk_write() {
     let workspace_root = std::fs::canonicalize(workspace.path()).expect("canonicalize");
     let main_rs = seed_rust_project(&workspace_root);
 
+    let test_start = std::time::Instant::now();
     let mut daemon = LspDaemon::new(rust_analyzer_spec(), workspace_root.clone());
     daemon
         .start()
@@ -162,16 +256,16 @@ async fn watcher_redreport_on_direct_disk_write() {
     // Open the clean file and let rust-analyzer load the workspace.
     let text = std::fs::read_to_string(&main_rs).unwrap();
     session.open(&main_rs, &text).expect("open main.rs");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    tokio::time::sleep(Duration::from_secs(WORKSPACE_LOAD_DELAY_SECS)).await;
 
-    // Start the one leader-owned watcher over the workspace. Give the async
-    // debouncer a moment to actually begin watching before we write, so the
-    // write is not missed in the watcher's startup window.
-    let watcher = start_diagnostics_watcher(
+    // Start the one leader-owned watcher over the workspace.
+    let (notifier, watcher_refreshes) = counting_notifier();
+    let watcher = start_diagnostics_watcher_with_notifier(
         workspace_root.clone(),
         vec![SessionRoute::new(vec!["rs".to_string()], session.clone())],
+        Some(notifier),
     );
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::sleep(Duration::from_secs(WATCHER_STARTUP_DELAY_SECS)).await;
 
     // Write a type error DIRECTLY to disk — the path the closed edit surface
     // can't see (a follower's direct write / a formatter / git checkout).
@@ -185,18 +279,24 @@ async fn watcher_redreport_on_direct_disk_write() {
 
     // The watcher debounces (~1s) then re-diagnoses. Keep nudging it with fresh
     // disk writes on a cadence so a cold rust-analyzer that misses the first
-    // pull still gets re-driven before the generous deadline.
-    let diags = wait_for_watcher_rereport(
+    // pull still gets re-driven, and keep polling until the re-report lands.
+    let report = wait_for_watcher_rereport(
         &session,
         &main_rs,
         &uri,
-        Duration::from_secs(CI_DIAGNOSTIC_WAIT_DEADLINE_SECS),
+        remaining_wait_budget(test_start.elapsed()),
     )
     .await;
+    let diags = report.diagnostics;
 
     assert!(
         !diags.is_empty(),
-        "watcher should have driven a re-report with the type error; got none"
+        "watcher should have driven a re-report with the type error; got none \
+         after {:?}, {} nudge write(s) ({} failed) and {} watcher refresh(es)",
+        report.waited,
+        report.nudges,
+        report.write_errors,
+        watcher_refreshes.load(Ordering::Relaxed),
     );
     assert!(
         diags
@@ -229,7 +329,7 @@ async fn refresh_file_direct_reports_error_against_real_server() {
 
     let text = std::fs::read_to_string(&main_rs).unwrap();
     session.open(&main_rs, &text).expect("open");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    tokio::time::sleep(Duration::from_secs(WORKSPACE_LOAD_DELAY_SECS)).await;
 
     // Direct disk write with an error, then drive the per-file refresh.
     std::fs::write(&main_rs, "fn main() {\n    let _x: u32 = \"nope\";\n}\n").unwrap();

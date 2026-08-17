@@ -1,0 +1,63 @@
+---
+assignees:
+- claude-code
+comments:
+- actor: claude-code
+  id: 01m06k9we2jj1k9j3510910y73
+  text: 'Measured again on 2026-08-16, while iteration 2 of ^73pjv4j held the whole workspace to `--test-threads=64` for six rounds: this test failed in 6 of the 6 rounds, at 132 s to 169 s of wall clock each time, and it was the ONLY failure of every round (14131 of 14132 passed). The same suite at the default concurrency passed 14132 of 14132. So the failure follows the thread count and nothing else, and no change of ^73pjv4j touches this test.'
+  timestamp: 2026-08-17T00:52:48.706243+00:00
+- actor: claude-code
+  id: 01m06tkhdr39kvhxzebv6m3mch
+  text: |-
+    Measurement first, as the card asks. I put a temporary scaffold in the test: a wait ceiling of 230 s, a counter of the watcher refreshes (through `start_diagnostics_watcher_with_notifier`), and a deliberate failure that prints what the wait saw. One full round of `cargo nextest run --workspace --test-threads=64` gave:
+
+    `MEASURE handshake=18.97ms ceiling=225.97s waited=126.13s nudges=41 write_errors=0 watcher_refreshes=2 diags=1`
+
+    Reading:
+    - The re-report ARRIVES. It is LATE, not missing: 126 s against the 45 s deadline. So this is a test defect, not a watcher defect.
+    - The daemon handshake is 19 ms, so the cost is not the start. It is rust-analyzer indexing the fresh fixture crate while 64 test threads share 18 cores.
+    - The watcher saw the writes (2 refreshes). The low count is the design: the debouncer collects a burst and `changed_paths` dedupes it to one path for each batch, and a starved task runs few batches. Each batch that ran did drive a refresh and a pull.
+
+    Fix: the wait now polls until the re-report lands and stops only at the ceiling the harness itself sets — `NEXTEST_HARD_KILL_SECS` (300 s, from the `lsp-ipc-serial` override in .config/nextest.toml) less `POST_WAIT_RESERVE_SECS` (60 s), less the wall clock the test already spent. That is 240 s of wait against a measured need of 126 s. No fixed second count picked from this machine.
+
+    The assertions are unchanged: the wait must still produce a non-empty report with an ERROR diagnostic. The failure message now carries the wait time, the nudge count and the watcher refresh count, so the next person can tell a late re-report from a missing one with no new instrumentation.
+  timestamp: 2026-08-17T03:00:25.144065+00:00
+- actor: claude-code
+  id: 01m06vqb0fq0ebbvdhkmykh1ys
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-diagnostics/tests/leader_watcher.rs. Cause measured as LATE, not missing: the re-report landed at 126.13 s against a 45 s deadline, with 2 watcher refreshes and 1 diagnostic, so the watcher worked and the wait was too short. Proof after the change: 3 rounds of `cargo nextest run --workspace --test-threads=64`, 0 of 3 failed (14136 of 14136 passed each round); the test took 98.0 s, 130.5 s and 120.7 s. One round at the default thread count also passed 14136 of 14136, with the test at 10.1 s, so the warm path is unchanged.
+    - next: ready for /review
+  timestamp: 2026-08-17T03:19:58.223328+00:00
+- actor: claude-code
+  id: 01m06w5848sjjg80dtgmpc2mg8
+  text: |-
+    ### test — green
+
+    - Broken-watcher probe: changed the watched extension from `"rs"` to `"zzz"` in `SessionRoute::new` so the watcher can never match the file. Ran `cargo nextest run -p swissarmyhammer-diagnostics --test leader_watcher watcher_redreport_on_direct_disk_write`. Result: FAILED at 241.28s (inside the 300s hard-kill), with message: "watcher should have driven a re-report with the type error; got none after 237.24s, 78 nudge write(s) (0 failed) and 0 watcher refresh(es)". The test fails cleanly on a real assertion, not a harness kill. File restored to the exact original bytes; sha256 confirmed unchanged (ed7f56938e3753a326df4ab8f7c4f4bac723bcc7e430e6435c0e9a78ca5a3e22) before and after the probe.
+    - Both assertions stand in the code: non-empty `diags` and an ERROR-severity diagnostic present.
+    - Ceiling is derived, not picked: `NEXTEST_HARD_KILL_SECS = 300` matches the `lsp-ipc-serial` override in `.config/nextest.toml` (`slow-timeout = { period = "60s", terminate-after = 5 }` = 300s), and this test's binary (`leader_watcher`) is covered by that override's filter.
+    - No bare behavior-configuring literals remain. Every new constant (`NEXTEST_HARD_KILL_SECS`, `POST_WAIT_RESERVE_SECS`, `WATCH_SETTLE_POLL_SECS`, `WORKSPACE_LOAD_DELAY_SECS`, `WATCHER_STARTUP_DELAY_SECS`, `REFRESH_POLL_INTERVAL_MS`) has a doc comment saying what it measures.
+    - Checked `.unwrap()`/`.expect(`/`panic!(` in the file: the diff shows one was REMOVED (a bare `std::fs::write(...).unwrap()` became an `.is_err()` check that increments `write_errors`), and no new one was added. All remaining occurrences are pre-existing lines unchanged by this card.
+    - `cargo fmt --check`: clean.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: clean, 0 warnings.
+    - Did not repeat the full-workspace nextest matrix per the run's explicit instruction (implement already ran 3 rounds at `--test-threads=64` plus a default-thread round, all green).
+
+    evidence:
+    - `cargo nextest run -p swissarmyhammer-diagnostics --test leader_watcher watcher_redreport_on_direct_disk_write` (broken probe) — 0 passed, 1 failed, 1 skipped, 241.28s, clean FAILED (not a harness kill)
+    - `shasum -a 256 crates/swissarmyhammer-diagnostics/tests/leader_watcher.rs` — ed7f56938e3753a326df4ab8f7c4f4bac723bcc7e430e6435c0e9a78ca5a3e22 (matches before/after)
+    - `cargo fmt --check` — 0 output, clean
+    - `cargo clippy --workspace --all-targets -- -D warnings` — 0 warnings
+    - next: ready for review
+  timestamp: 2026-08-17T03:27:34.024069+00:00
+position_column: doing
+position_ordinal: '8280'
+title: watcher_redreport_on_direct_disk_write fails under high nextest thread counts
+---
+`crates/swissarmyhammer-diagnostics/tests/leader_watcher.rs::watcher_redreport_on_direct_disk_write` fails reliably (3 of 3 rounds) when the full workspace suite runs at `cargo nextest run --workspace --test-threads=64` on an 18-core machine. It never fails at the default nextest thread count — two full clean runs of `cargo nextest run --workspace` (14127 passed, 0 failed) surfaced nothing.
+
+The test starts a real `rust-analyzer` subprocess, writes a type error directly to disk, and waits up to `CI_DIAGNOSTIC_WAIT_DEADLINE_SECS` for the file watcher to debounce and re-diagnose. Under 64-way oversubscription (many concurrent rust-analyzer processes competing for 18 cores), the wait exceeds the deadline and the test fails with no diagnostics.
+
+Found while probing an unrelated Go flake for #tool-validators card ^r73ddrr. Not caused by and not touched by that change.
+
+Work: either raise `CI_DIAGNOSTIC_WAIT_DEADLINE_SECS` to tolerate real scheduling pressure, or make the wait adaptive (poll with backoff instead of a fixed deadline) so the test does not depend on how many other LSP-driving tests are running beside it. #test-failure
