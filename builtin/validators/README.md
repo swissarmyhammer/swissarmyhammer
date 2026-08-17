@@ -315,6 +315,13 @@ three dirty fixtures beside that project file: each of the three reported 0
 findings at exit 0. A script without the stderr test answers a tool error for
 each project `excluded:` list.
 
+That answer judged NO file, so each of the three states every path of the run
+under the marker before it exits. A sound run writes 0 bytes to stderr —
+measured with swiftlint 0.65.0 over one dirty file with no project
+configuration — so the whole channel is free to carry the statement. Measured
+over one dirty file beside `excluded: [Generated]`: 0 findings, exit 0, and one
+marked line that names the path.
+
 Selection in the pipe is attribution, not exemption. Some tools cannot run
 one check alone — `cargo clippy -- -W missing_docs` emits its whole lint set.
 The `jq 'select(...)'` or `grep` in your pipe says which findings this rule

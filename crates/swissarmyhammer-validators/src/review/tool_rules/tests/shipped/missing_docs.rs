@@ -2479,6 +2479,85 @@ fn the_shipped_swift_missing_docs_tool_rule_declines_a_file_it_may_not_read() {
     );
 }
 
+/// Where the Swift file the project's `excluded:` list covers stands inside
+/// the probe repository.
+///
+/// The staged-position probes name the same directory, so one exclude list
+/// serves the whole Swift family of this module.
+const SWIFT_MISSING_DOCS_EXCLUDED_PATH: &str = SWIFT_GENERATED_POSITION.path;
+
+/// Each file a whole-run decline stages: the undocumented declarations under
+/// the project's excluded directory, beside the project configuration that
+/// excludes it.
+fn swift_missing_docs_excluded_staging() -> Vec<(&'static str, &'static str)> {
+    let mut staged = vec![(SWIFT_MISSING_DOCS_EXCLUDED_PATH, SWIFT_STAGED_DECLARATIONS)];
+    staged.extend_from_slice(SWIFT_EXCLUDING_SUPPORT_FILES);
+    staged
+}
+
+/// Acceptance: the shipped Swift missing-docs tool rule DECLINES a run whose
+/// every file the project's `excluded:` list covers, through the real
+/// swiftlint pipeline.
+///
+/// Measured with swiftlint 0.65.0 over one file under `Generated/` beside
+/// `excluded: [Generated]`: swiftlint writes 0 bytes to stdout, writes
+/// `Error: No lintable files found at paths: 'Generated/Staged.swift'` to
+/// stderr, and exits 1. The script exits 0 for that message, so a run that
+/// read NO file answered the clean answer of a run that read every file.
+///
+/// A sound run says nothing on stderr — measured over the same file with no
+/// project configuration: 2 entries on stdout and 0 bytes on stderr — so the
+/// script states each path it still holds under the marker.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_declines_a_run_the_project_excludes_whole() {
+    let staged = swift_missing_docs_excluded_staging();
+
+    verify_declined_item_is_stated(
+        SWIFT_PROJECT_TYPES,
+        SWIFT_MISSING_DOCS_RULE,
+        &ShippedStaging::of(&staged),
+        &[SWIFT_MISSING_DOCS_EXCLUDED_PATH],
+        SWIFT_MISSING_DOCS_EXCLUDED_PATH,
+        NO_STAGED_REPORTS,
+    );
+}
+
+/// Acceptance: the shipped Swift missing-docs tool rule DECLINES a project
+/// configuration swiftlint cannot read, through the real swiftlint pipeline.
+///
+/// A project `.swiftlint.yml` that names a child configuration of its own
+/// aborts swiftlint. The script then runs a second time with its own
+/// configuration alone, and that second run drops the project's `excluded:`
+/// list, so the file under the excluded directory reports.
+///
+/// The run measured the code with settings the project did not ask for, which
+/// is one item it could not judge as asked. The script wrote that on stderr
+/// with no marker, so the report dropped it.
+#[test]
+fn the_shipped_swift_missing_docs_tool_rule_declines_a_project_configuration_it_cannot_read() {
+    let mut staged = vec![(SWIFT_MISSING_DOCS_EXCLUDED_PATH, SWIFT_STAGED_DECLARATIONS)];
+    staged.extend_from_slice(SWIFT_CHILD_CONFIG_SUPPORT_FILES);
+    let structure = expected_row(
+        SWIFT_MISSING_DOCS_EXCLUDED_PATH,
+        SWIFT_STAGED_DECLARATIONS,
+        SWIFT_STAGED_STRUCTURE_HEAD,
+    );
+    let property = expected_row(
+        SWIFT_MISSING_DOCS_EXCLUDED_PATH,
+        SWIFT_STAGED_DECLARATIONS,
+        SWIFT_STAGED_PROPERTY_HEAD,
+    );
+
+    verify_declined_item_is_stated(
+        SWIFT_PROJECT_TYPES,
+        SWIFT_MISSING_DOCS_RULE,
+        &ShippedStaging::of(&staged),
+        &[SWIFT_MISSING_DOCS_EXCLUDED_PATH],
+        SWIFT_PROJECT_CONFIG_PATH,
+        &[&structure, &property],
+    );
+}
+
 /// The `missing-docs-swift` probe over a file whose name holds the words of
 /// swiftlint's decode message.
 const SWIFT_DECODE_NAME_PROBE: ShippedStagedPositions = ShippedStagedPositions {

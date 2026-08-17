@@ -46,7 +46,7 @@ tool:
     fi
     lint "$project" "$@"
     if [ -n "$project" ] && grep -qE '^Could not read configuration:' "$work/lint.err"; then
-      printf '%s\n' 'function-length-swift: swiftlint cannot read .swiftlint.yml beside this rule. The run drops the project exclude list.' >&2
+      printf '%s\n' 'sah-diagnostic: function-length-swift: swiftlint cannot read .swiftlint.yml beside this rule. The run drops the project exclude list.' >&2
       lint "" "$@"
     fi
     cat "$work/lint.err" >&2
@@ -61,6 +61,11 @@ tool:
     fi
     if [ "$measured" -eq 0 ]; then
       if grep -qE '^Error: No lintable files found at paths:' "$work/lint.err"; then
+        for file in "$@"; do
+          if [ -e "$file" ]; then
+            printf 'sah-diagnostic: function-length-swift judged no file at %s, so its bodies are unread\n' "$file" >&2
+          fi
+        done
         exit 0
       fi
       exit 1
@@ -342,6 +347,26 @@ The script reports nothing and exits 0 for that message. Measured over one file
 under `Generated/` beside `excluded: [Generated]`: the run reports no finding,
 exits 0, and writes swiftlint's own message to stderr.
 
+A run that reports nothing and exits 0 over a file swiftlint never read is the
+clean answer of a run that read every file. So the script states each path of
+the run under the `sah-diagnostic:` marker before it exits, and the marked
+line reads `function-length-swift judged no file at <path>, so its
+bodies are unread`. Measured over the same file: no finding, ONE marked
+line that names the path, exit 0.
+
+A sound run says nothing on stderr, which is what lets the whole channel carry
+the statement. Measured over the same file with no project configuration:
+1 entry on stdout and 0 bytes on stderr.
+
+The loop states a path that IS there, because the `[ ! -e "$file" ]` test above
+already states a path that holds no file. Measured over `Sources/Absent.swift`
+beside the excluded file: 2 marked lines, one for each path, and neither path
+stated twice.
+
+The acceptance test
+`the_shipped_swift_function_length_tool_rule_declines_a_run_the_project_excludes_whole`
+holds the marked line.
+
 The message names the path and it does not name the cause, so more than one
 shape reaches it. The section "A path the run cannot judge" below states each
 shape, and states what the script says for a path that holds no file.
@@ -373,10 +398,10 @@ written as a plain `grep -qF` that carries no anchor and no closing punctuation:
 
 | the file name | the loose script | the shipped script |
 |---|---|---|
-| `Staged.swift` | 0 findings, exit 0 | 0 findings, exit 0, no diagnostic |
-| `Could not read contents of.swift` | 0 findings, exit 1, the rule's tool-error line | 0 findings, exit 0, no diagnostic |
-| `Could not read configuration.swift` | 1 finding on a file the project excludes | 0 findings, exit 0, no diagnostic |
-| `No lintable files found.swift` | 0 findings, exit 0 | 0 findings, exit 0, no diagnostic |
+| `Staged.swift` | 0 findings, exit 0 | 0 findings, exit 0, 1 diagnostic |
+| `Could not read contents of.swift` | 0 findings, exit 1, the rule's tool-error line | 0 findings, exit 0, 1 diagnostic |
+| `Could not read configuration.swift` | 1 finding on a file the project excludes | 0 findings, exit 0, 1 diagnostic |
+| `No lintable files found.swift` | 0 findings, exit 0 | 0 findings, exit 0, 1 diagnostic |
 
 Row 2 broke a run that measured correctly. Row 3 made a WRONG FINDING: the
 script dropped the project configuration, ran swiftlint a second time without
@@ -403,7 +428,10 @@ project switched the gate off without meaning to.
 
 The script tests stderr for `Could not read configuration:` at the start of a
 line, and it then runs a second time with its own configuration alone. The
-script writes one line to stderr that names what it dropped. The project's
+script writes one line to stderr that names what it dropped, under the
+`sah-diagnostic:` marker. The run then measured with settings the project did
+not ask for, which is one item it could not judge as the project asked, and
+`builtin/validators/README.md` states that channel. The project's
 `excluded:` list is not read for that second run. Measured over one file under
 `Generated/` that holds the same function, beside a project file that states
 `child_config: other.yml` and `excluded: [Generated]`: the run reports 1
@@ -412,6 +440,10 @@ finding, and swiftlint exits 2.
 `parent_config:` in the project file is not one of the two shapes. Measured with
 `parent_config: other.yml` beside the same file: swiftlint reads both
 configurations and reports 1 finding.
+
+The acceptance test
+`the_shipped_swift_function_length_tool_rule_declines_a_project_configuration_it_cannot_read`
+holds the marked line.
 
 ## A run cannot answer zero for a broken tool
 
