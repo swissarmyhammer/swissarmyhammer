@@ -1,0 +1,99 @@
+---
+assignees:
+- claude-code
+comments:
+- actor: claude-code
+  id: 01m06qqtmgj1hw7rh0dmydv1jm
+  text: |-
+    Measured each of the four shapes against real `dart_code_linter` 4.2.0 and `dart analyze` on Dart SDK 3.11.0, before any edit. The deciding measurement is what the tool reported for the OTHER files of the same run.
+
+    - a file that does not parse — beside one file of 302 code lines: two records (0 functions for the broken file, 1 function for the other), exit 0, 0 bytes of stderr. The other file keeps its finding. DECLINED.
+    - a file that is not UTF-8 — one record, 0 functions, and the other file keeps its finding. The script tests before the copy, because 0 functions is also what an empty Dart file answers. DECLINED.
+    - an unreadable path (absent, or mode 000) — the script tests before the copy, so the tool never gets it and measures every copied file. Also measured: a copy the analyzer cannot read gets one record with 0 functions, so the report cannot separate it from an empty file. DECLINED.
+    - a file the linter wrote no record for — measured with the copy target of one of two long files moved under `lib/.hidden/`: the other file kept its finding at exit 0. DECLINED.
+
+    The fifth shape of that table, a report of 0 bytes, stays a BROKEN run: it holds a record of no file at all, so there is no finding to keep.
+
+    RED before the change: the shipped script over `lib/judged.dart` (one function of 302 code lines) beside each shape exited 1 with an empty stdout, four times over. GREEN after: one finding on stdout, one line opening `sah-diagnostic:` on stderr, exit 0, four times over.
+
+    Discovery: the "no record" branch is unreachable through the shipped script since the flat probe name landed. The copy target is always `lib/probe_N.dart`, which stands under no dot directory and carries no generator suffix. Probes that each got a record: a `part of` file, an empty file, a file with a BOM, a file holding a null byte, a Latin-1 file, and a file with mode 000. The branch therefore takes no acceptance test, and the rule body states that and states the measurement that settled it.
+  timestamp: 2026-08-17T02:10:19.920899+00:00
+- actor: claude-code
+  id: 01m06qr1zzqwz9xjarksgv57bq
+  text: |-
+    ### implement — changed
+    - evidence: 2 files — `builtin/validators/code-hygiene/rules/function-length-dart.md`, `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_dart.rs`. All four per-file declines now write one line opening `sah-diagnostic:` and continue at exit 0; the two read tests `continue` instead of exiting, and the two report tests drop their `exit 1`. Four new acceptance tests each stage a file over the gate beside the declined item. `cargo nextest run -p swissarmyhammer-validators` 794 passed 0 failed; `cargo fmt --check` clean; `cargo clippy -p swissarmyhammer-validators --all-targets -- -D warnings` clean; `cargo nextest run -p mirdan -E 'test(validator)'` 36 passed.
+    - next: /review
+  timestamp: 2026-08-17T02:10:27.455079+00:00
+- actor: claude-code
+  id: 01m06rdj5e1cpt4zr9mvsyz0v5
+  text: |
+    ### test — green
+
+    Evidence, checked against the real `dart_code_linter` 4.2.0 pipeline (Dart SDK 3.11.0), not by reading the script:
+
+    **The four declined shapes.** I extracted the shipped `run:` script and drove it directly, each time beside one file over the length gate:
+    - absent path: finding of the good file on stdout, `sah-diagnostic: function-length-dart cannot read absent.dart, so its length is unread` at column 0 on stderr, exit 0.
+    - unreadable file (mode 000): finding survives, `sah-diagnostic: function-length-dart cannot read forbidden.dart, so its length is unread`, exit 0.
+    - non-UTF-8 bytes: finding survives, `sah-diagnostic: function-length-dart cannot decode undecodable.dart as UTF-8, so its length is unread`, exit 0.
+    - unparsable Dart: finding survives, `sah-diagnostic: unparsable.dart does not parse and dart_code_linter measured no function of it, so its length is unread`, exit 0.
+
+    Each stderr held exactly one line and `od -c` confirmed `sah-diagnostic:` starts at byte 0 with nothing before it, so `strip_prefix` in `marked_diagnostics` matches.
+
+    **The fifth shape (report of 0 bytes) stays broken.** Patched a probe copy of the script to force `analyzer: exclude: ["lib/**"]` into the package's own `analysis_options.yaml`, reproducing a 0-byte `metrics.json`: run exited 1 with the unprefixed `function-length-dart: dart_code_linter wrote no report, so it read no Dart file this run names` — no `sah-diagnostic:` marker, matching the rule's claim this row is a broken run, not a decline.
+
+    **Sound runs write 0 bytes to stderr.** Verified over four sound shapes (two good files together, one under-gate clean file, zero arguments, one test-carve-out file alone): every one exited 0 with 0 bytes on stderr.
+
+    **The "no record" branch is genuinely unreachable through the shipped script.** Built a probe package by hand with a file under `lib/.hidden/`: `dart_code_linter` wrote a record for the flat file only, none for the dot-directory one, confirming the tool's own dot-directory skip. The shipped script's copy target is hardcoded `lib/probe_$index.dart` (flat, no dot directory, no generator suffix), so no argument list can route a file into that skip. The rule body's claim is honest, not overclaimed.
+
+    **Tests actually assert survival**, not just exit 0: `verify_declined_item_is_stated` in `shipped.rs` asserts `sorted_names(&reported) == sorted_names(&expected_script_findings(expected))` (the good file's row must be there) AND that exactly one diagnostic line names the declined item. `verify_unjudged_file_is_declined` and `verify_unreadable_file_is_declined` both route through it; ran all six Dart tests standalone and each passed (4 new decline tests + the 2 existing fixture tests).
+
+    **Mirdan embed is byte-identical.** Built `mirdan` and diffed the generated `builtin_validators.rs` entry for `code-hygiene/rules/function-length-dart.md` against the source file: 30286 bytes both sides, identical — confirmed by direct comparison, not by reading `build.rs` alone (which does use plain `fs::read_to_string` with `rerun-if-changed`).
+
+    **New Rust file** (`crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/function_length_dart.rs`): no `.unwrap()`, `.expect(`, or `panic!(`.
+
+    **Full suite:**
+    - `cargo fmt --check` — clean.
+    - `cargo clippy --workspace --all-targets -- -D warnings` — clean.
+    - `cargo nextest run --workspace` — 14136 tests run, 14136 passed, 0 failed, 0 skipped (39 slow, includes the 6 Dart function-length tests).
+
+    No findings. No blockers.
+  timestamp: 2026-08-17T02:22:12.142229+00:00
+position_column: doing
+position_ordinal: '8280'
+title: function-length-dart fails the whole run for four per-file declines
+---
+`builtin/validators/code-hygiene/rules/function-length-dart.md` exits 1 for four
+separate per-file declines, and each one throws away every finding the run did
+make over the other files.
+
+`builtin/validators/README.md`: "Do not exit nonzero for a declined item. A
+nonzero exit fails the WHOLE run, so one unjudged path throws away every finding
+the run did make."
+
+The four:
+
+1. A file that does not parse. The script cross-checks the files the linter
+   measured no function for against the `SYNTACTIC_ERROR` records of
+   `dart analyze`, and `if [ -s "$work/broken" ]; then ...; exit 1; fi`.
+2. An unreadable path.
+3. A file whose bytes are not UTF-8.
+4. A file the linter wrote no record for.
+
+The work:
+
+- Measure, for each of the four, what dart_code_linter reported for the OTHER
+  files of the same run. The answer decides the shape: a run that measured the
+  other files is a DECLINED ITEM, and the answer is `sah-diagnostic:` at exit 0.
+  A run where the linter measured nothing is a BROKEN run, and `exit 1` stays.
+- Replace each declined-item exit with a marked line at exit 0. The marker must
+  OPEN the line.
+- Rewrite the acceptance tests that lock the current break. Each must stage a
+  file over the length gate beside the declined item, so the test proves the
+  findings survive — `verify_unjudged_file_is_declined` and
+  `verify_unreadable_file_is_declined` in
+  `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped.rs`
+  hold the shape.
+- State each measurement in the rule body.
+
+Found while implementing `^s8d7fva`. #tool-validators #objectivity
