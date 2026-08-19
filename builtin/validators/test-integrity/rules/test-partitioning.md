@@ -41,7 +41,9 @@ tests into unit and integration groups, and how each group runs.
     `IntegrationTests/`). The root `swift test` runs unit tests only — not by
     convention, but because the root manifest declares no integration target.
     The tool selects the integration suite with
-    `swift test --package-path IntegrationTests`.
+    `swift test --package-path IntegrationTests`. Swift Testing tags organize
+    scenarios, they do not select: the `swift test` CLI filters by test name
+    only (`--filter`/`--skip`), so the package boundary carries the split.
   - Dart/Flutter: an integration test lives in `integration_test/`.
 - The separation is structural. The default test command cannot see the
   integration target, so the code needs no guard, no skip, and no switch.
