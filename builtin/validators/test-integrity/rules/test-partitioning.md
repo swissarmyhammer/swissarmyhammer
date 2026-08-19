@@ -89,6 +89,9 @@ tests into unit and integration groups, and how each group runs.
   not an environment switch.
 - A standard runner variable that CI sets for the whole run
   (`RUST_BACKTRACE`, a locale). It selects no test.
+- A snapshot-blessing variable a snapshot tool owns (`INSTA_UPDATE`,
+  `UPDATE_EXPECT`, `BLESS`). The test always runs; the variable only switches
+  it into rewrite mode, and CI never sets it.
 - Compile-time test configuration (`#[cfg(test)]`, build tags the test tool
   itself sets). Compile-time selection is a platform mechanism, not an
   environment switch.

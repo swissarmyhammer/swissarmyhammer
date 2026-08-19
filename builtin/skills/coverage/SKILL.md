@@ -60,6 +60,7 @@ Poor coverage means inherited code lacks proper TDD. Goal: backfill the tests th
 ## Guidelines
 
 - Measure with real coverage instrumentation; no structural deduction.
+- Coverage comes from the unit targets. Unit tests are fast and give coverage; do not run integration targets (real models, real services) to move a coverage number.
 - Don't fix failing tests — note them.
 - Kanban is the single source of truth — no TodoWrite/TaskCreate.
 - Report only actionable gaps. Ignore trivial getters/setters, trait-impl boilerplate, generated code.
