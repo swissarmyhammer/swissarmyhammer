@@ -1152,6 +1152,7 @@ const SHIPPED_RULES_THAT_READ_A_GO_FILE: &[&str] = &[
     "reuse/reuse",
     "test-integrity/no-hard-code",
     "test-integrity/no-test-cheating",
+    "test-integrity/test-partitioning",
 ];
 
 /// Acceptance: the shipped rules that read a `.go` file are exactly the ones

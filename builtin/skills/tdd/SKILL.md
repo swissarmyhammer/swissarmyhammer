@@ -201,6 +201,26 @@ Keep tests green. Don't add behavior.
 
 Next failing test for next feature.
 
+## Where the Test Lives
+
+- **The TDD cycle runs unit tests, never integration tests.** RED and GREEN
+  verify against the unit target. Unit tests are fast and they give coverage:
+  each one must complete in under 10 seconds and must not need an external
+  system. Logic that needs a slow dependency gets a fake at a trait/interface
+  seam, so the unit test stays fast.
+- **A test that needs a real external system** (network, database, spawned
+  server, real model) is an integration test: possibly slower, and
+  scenario-level. It goes in the integration target or package for that
+  system. Run that target directly when your work targets that integration;
+  CI runs it always. It stays out of the red-green loop.
+- **Select tests only with the platform's native methods** — targets,
+  packages, paths, registered markers. Never gate a test with an environment
+  variable. The separation is structural: the integration test lives in a
+  target the default test command does not see — a nested
+  `IntegrationTests/` Swift package run with
+  `swift test --package-path IntegrationTests`, or a Rust crate the workspace
+  `default-members` list excludes, run with `cargo test -p <crate>`.
+
 ## Good Tests
 
 | Quality | Good | Bad |

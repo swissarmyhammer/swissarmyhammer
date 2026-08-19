@@ -12,6 +12,25 @@ metadata:
 
 **Zero failures. Zero warnings. Zero skipped. The build is clean or it's broken.**
 
+## Unit and integration targets
+
+- **Unit tests are fast, and they give coverage.** A unit test examines the
+  code's logic and needs no external system. Unit tests run all the time:
+  every test run includes every unit target.
+- **Integration tests can be slower.** They exercise real scenarios — a real
+  model, a real database, a real server. They run in CI, and when you judge a
+  run is appropriate — above all when your change targets that integration.
+  Then select that integration target directly with the platform test tool —
+  for example `cargo test --test <name>` or `cargo test -p <crate>` (Rust),
+  `swift test --package-path IntegrationTests` (Swift),
+  `pytest tests/integration/`, or `go test ./integration/...`. Otherwise
+  leave them to CI.
+- **Selection is platform-native and structural, never an environment
+  variable.** An integration test lives in its own target or package that the
+  default test command does not see. Select tests only with the platform's
+  own filtering and selection methods — targets, packages, paths, registered
+  markers. Never set or read an environment variable to select, skip, or
+  switch tests.
 
 ## Guidelines
 
@@ -26,7 +45,7 @@ metadata:
 
 ## Process
 
-1. **Run the full test suite** using project detection to pick the right command.
+1. **Run the full test suite** using project detection to pick the right command. The full suite is every unit target. Add the integration targets your change touches; CI runs all of them.
 2. **Type-check + lint** treating warnings as errors.
 3. **Check for skipped/ignored tests** — fix or delete each. Skips are not acceptable.
 4. **Fix every failure and warning**, re-running after each fix. Trace before editing: `get symbol` on the failing function, `get callgraph` (inbound) to see callers, and — if you're changing a shared symbol — `get blastradius` on the file to spot passing tests elsewhere that the change could break.

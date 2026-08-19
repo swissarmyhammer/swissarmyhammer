@@ -570,8 +570,8 @@ mod tests {
             .expect("test-integrity should still load unchanged");
         assert_eq!(
             test_integrity.rules.len(),
-            2,
-            "test-integrity should still carry its no-hard-code + no-test-cheating rules"
+            3,
+            "test-integrity should still carry its no-hard-code + no-test-cheating + test-partitioning rules"
         );
 
         let reuse = loader
