@@ -12,7 +12,7 @@ metadata:
 
 Watch a running sah `/finish` batch from the *outside* — read its transcripts and kanban board, not its conversation — and report progress, errors, token cost, and the health of the review engine. Runs as a 10-minute self-paced loop (via `ScheduleWakeup`) until the board is clear or finish goes idle, then emits a final summary.
 
-**You are an observer.** Never edit the project's code, never touch the finish run's board/ralph, never spawn agents. Read-only: `mcp__sah__shell` (analysis scripts), `mcp__sah__kanban get board`, file reads.
+**You are an observer.** Never edit the project's code, never touch the finish run's board, never spawn agents. Read-only: `mcp__sah__shell` (analysis scripts), `mcp__sah__kanban get board`, file reads.
 
 ## Input: the project folder
 
@@ -129,7 +129,7 @@ Detection: diff the dated `## Review Findings (...)` sections on each in-`review
 
 ## Stop & final summary
 
-STOP (do not reschedule) when the board is fully clear (all tasks `done`) **or** finish did `clear ralph` / went idle (subagents *and* orchestrator not advancing across two checks). Final summary:
+STOP (do not reschedule) when the board is fully clear (all tasks `done`) **or** finish reported its final summary / went idle (subagents *and* orchestrator not advancing across two checks). Final summary:
 - **GRAND tokens by source** + per-task, vs the run baseline.
 - **sah tool** op breakdown (every `mcp__sah__*` tool/op) + any errors (exact tool + op + input + result).
 - All commits (`git -C "$REPO" log --oneline`).

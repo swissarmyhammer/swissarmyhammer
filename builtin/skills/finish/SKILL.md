@@ -2,63 +2,47 @@
 name: finish
 description: Drive kanban tasks from ready to done by looping implement → test → commit → review until each task is clean. Use when the user says "/finish", "drive tasks to done", "work the board", "finish the tasks", "finish the batch", or otherwise wants to orchestrate tasks through the full pipeline to done. Supports single-task mode (one task id) and scoped-batch mode (all ready tasks in a tag, project, or filter).
 license: MIT OR Apache-2.0
-compatibility: Requires the `kanban` and `ralph` MCP tools plus a Stop-hook-capable harness.
+compatibility: Requires the `kanban` MCP tool plus a harness that runs background sub agents and sends a notification when each one finishes.
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: "sah tool ralph ralph check --"
 ---
 
 # Finish
 
 Drive kanban tasks all the way to `done` — orchestrating `/implement`, `/test`, `/commit`, and `/review` in a loop until each task lands in `done` or is reported stuck.
 
-**Orchestrator only** — does not write code, run tests, or commit. Delegates to `/implement`, `/review`, `/test`, `/commit`; uses `ralph` to stay alive between iterations.
+**Orchestrator only** — does not write code, run tests, or commit. Delegates each step (`/implement`, `/test`, `/commit`, `/review`) to its own sub agent.
 
-**IMPORTANT** each of the skill driven steps should be run in an appropriate sub agent to minimize context bloat in this session.
+## The drive loop
 
-**IMPORTANT — block on every sub agent.** `Agent` starts the sub agent and returns
-at once. It does not wait. If you end your turn here, the `ralph` Stop hook starts
-you again, the step is still running, and you have nothing to report. That repeats
-for as long as the step runs.
+The sub agents drive the loop. Each finished sub agent sends a task notification,
+and that notification starts your next turn. There is no Stop hook and no `ralph`.
 
-So every `Agent` call is followed at once by a blocking read of its result:
+Every step has this shape:
 
-```json
-{"tool": "TaskOutput", "task_id": "<the agentId Agent returned>", "block": true, "timeout": 600000}
-```
-
-`TaskOutput` holds inside the turn until the sub agent finishes, then gives you the
-step record block. The turn never ends while a step runs, so the Stop hook never
-fires.
+1. `Agent` — start the step in a sub agent. Tell it to run the skill and to return
+   the step record block.
+2. End the turn. Write one short line, for example "Implement running for ^abc1234."
+3. The task notification wakes you with the step record block.
+4. Decide the next step from the step record and the ledger, then go to 1.
 
 Rules:
 
-- One `Agent` call, then `TaskOutput` on that id. Never two `Agent` calls in a row.
-- Use the largest timeout the tool accepts. `600000` is the ceiling.
-- **`status: running` means call `TaskOutput` again, with the same id.** Keep
-  calling until it returns `status: completed`. A step that runs 25 minutes takes
-  three calls. Never end the turn between them.
-- Never end the turn while a step runs. Ending the turn is what fires the `ralph`
-  Stop hook, and the hook starts you again with the step still running and nothing
-  to report. Do that and you emit "waiting" forever. The two wake mechanisms fight:
-  `ralph` blocks stopping, and the task notification only arrives after you stop.
-  Staying inside `TaskOutput` is what keeps them apart.
-- A `TaskOutput` that times out returns the sub agent's raw transcript, not the
-  step record. That is a real cost, roughly ten thousand tokens per timeout, and
-  it is the price of a quiet loop. Pay it. Read nothing in the dump — the only
-  line that matters is `status`, and the step record arrives on the call that
-  returns `completed`.
-- Never `sleep` in a shell, and never poll `ListAgents` in a loop. Neither one
-  tells you anything.
+- **Never end a turn with no sub agent running, unless the loop is done.** A turn
+  that ends with no sub agent running is the end of the session. Nothing wakes you
+  again. Before you end a turn, make sure that you started the next step.
+- Do the orchestrator work (read the card, write the ledger, pick the next task)
+  in the same turn as the next `Agent` call. Never end a turn after only
+  orchestrator work.
+- One `Agent` call per turn. Never two sub agents at the same time.
+- There is no blocking read tool. Do not look for `TaskOutput`. Never `sleep` in a
+  shell, and never poll `ListAgents`.
+- The loop is done only when the stop condition of the mode is true. Then report
+  and end the turn.
 
-If a `TaskOutput` returns an error rather than `running` or `completed`, the sub
-agent is gone. Treat the step as `stuck`, write the ledger entry, and report it.
-Do not silently start the step over.
+If the notification reports that the sub agent failed, treat the step as `stuck`,
+write the ledger entry, and report it. Do not silently start the step over.
 
 
 ## Invocation
@@ -87,19 +71,6 @@ The `^<task-id>` atom and every id argument accept a full ULID, a 7-char short i
 
 ## Process
 
-### Set ralph (both modes)
-
-**First action**:
-
-```json
-{"op": "set ralph", "instruction": "<mode-specific goal>"}
-```
-
-- single-task: `"Finish task <TASK_ID> — loop until it lands in done"`
-- scoped-batch: `"Finish all ready kanban tasks in <SCOPE> until the scope is clear"`
-
-The Stop hook blocks stopping while ralph is active. Only `clear ralph` when the stop condition is met.
-
 ### Detect Projects
 
 `/detected-projects` so we know what we are working with up front.
@@ -108,7 +79,7 @@ The Stop hook blocks stopping while ralph is active. Only `clear ralph` when the
 
 Pin `<TASK_ID>` for the entire loop — never `next task`, never switch tasks.
 
-1. **Verify exists**: `op: "get task", id: "<TASK_ID>"`. Missing → clear ralph and report.
+1. **Verify exists**: `op: "get task", id: "<TASK_ID>"`. Missing → report and stop.
 2. **Implement**: `/implement <TASK_ID>`. Implement moves the task into `doing` (pulling it back from `review` if it's returning with findings), does the work, and **leaves it in `doing`**. 
 3. **Test**: `/test`. Failures → step 2.
 4. **Checkpoint the green state**: invoke `/commit` to create a **local** commit of the green, tested working tree. This is the per-iteration rollback point and — critically — it is what makes the next review tight: with the work committed, the review scopes to *this iteration's commit*, not the whole accumulated uncommitted diff. **Commit only, NEVER push** (pushing is the user's separate step; per-task pushes would spam CI in batch mode). `/commit` stages all changes; "nothing to commit" is a no-op, not an error — but it means implement produced **no change this iteration** (no progress): record it and treat it under the step 7 guardrail rather than re-reviewing a stale diff.
@@ -116,8 +87,8 @@ Pin `<TASK_ID>` for the entire loop — never `next task`, never switch tasks.
    - **clean** → task moves to `done`. Step 6.
    - **findings** → fresh dated `## Review Findings` checklist appended to the task, task stays in `review`. Step 2 — `/implement <TASK_ID>` pulls it back to `doing`, works the unchecked items, and flips them to `- [x]`.
 6. **Verify done**: `op: "get task"`. Not in `done` → step 2. In `done` → the last checkpoint (step 4) already **is** the verified-good commit (green + clean review); no separate post-done commit is needed.
-7. **Write the ledger entry, then check the guardrail.** Record this iteration on the task (see **The iteration ledger** below), then decide from the ledger — never from your memory of it: the same finding (file:line + message) in 3 ledger entries — or 3 consecutive `no-change` entries (step 4 "nothing to commit") — → stop, clear ralph, report what persists. Hitting the guardrail means the task is **stuck**: leave it in `review` and report it — **never force it to `done`**. A finding that survives 3 rounds is either a fix you haven't cracked yet or a contradictory/faulty rule; if it's the latter (per Scope), report it on the task and leave it **stuck** for a human to resolve — do not edit validators yourself and do not re-close. Closing a task with open findings is out of bounds.
-8. **Clear ralph** and report with the card block (see **Report the card**).
+7. **Write the ledger entry, then check the guardrail.** Record this iteration on the task (see **The iteration ledger** below), then decide from the ledger — never from your memory of it: the same finding (file:line + message) in 3 ledger entries — or 3 consecutive `no-change` entries (step 4 "nothing to commit") — → stop and report what persists. Hitting the guardrail means the task is **stuck**: leave it in `review` and report it — **never force it to `done`**. A finding that survives 3 rounds is either a fix you haven't cracked yet or a contradictory/faulty rule; if it's the latter (per Scope), report it on the task and leave it **stuck** for a human to resolve — do not edit validators yourself and do not re-close. Closing a task with open findings is out of bounds.
+8. **Report** with the card block (see **Report the card**).
 
 ### The iteration ledger (both modes)
 
@@ -167,11 +138,11 @@ In scoped-batch mode, show one block for each task as it leaves the loop. When t
 
    Tasks in `doing` are already being worked — leave them. Take the **first** task from `review` if any, otherwise the first ready `todo` task. Pin its id as `<TASK_ID>`.
 
-2. **Drive it to done.** Run the **single-task mode loop** (above) on `<TASK_ID>` in a sub agent. Reusing the loop means each iteration commits a local checkpoint via step 4, so by the time a task reaches `done` its verified-good state is already committed — before the next task is picked. Do not switch tasks mid-loop. A task that hits the guardrail is reported as stuck and skipped.
+2. **Drive it to done.** Run the **single-task mode loop** (above) on `<TASK_ID>` in this session, one sub agent per step. Never put the whole loop in one sub agent. Reusing the loop means each iteration commits a local checkpoint via step 4, so by the time a task reaches `done` its verified-good state is already committed — before the next task is picked. Do not switch tasks mid-loop. A task that hits the guardrail is reported as stuck and skipped.
 
 3. **Pick the next.** Return to step 1.
 
-4. **Stop**: both the scoped `review` query and the scoped ready `todo` query return empty → `clear ralph` and report. **Tasks outside scope are deliberately ignored.**
+4. **Stop**: both the scoped `review` query and the scoped ready `todo` query return empty → report and stop. **Tasks outside scope are deliberately ignored.**
 
 
 ### Sequential safety (both modes)
