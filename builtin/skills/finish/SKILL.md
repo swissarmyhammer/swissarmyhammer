@@ -1,8 +1,8 @@
 ---
 name: finish
-description: Drive kanban tasks from ready to done by looping implement → test → commit → review until each task is clean. Use when the user says "/finish", "drive tasks to done", "work the board", "finish the tasks", "finish the batch", or otherwise wants to orchestrate tasks through the full pipeline to done. Supports single-task mode (one task id) and scoped-batch mode (all ready tasks in a tag, project, or filter).
+description: Drive kanban tasks from ready to done by looping implement → test → commit → review until each task is clean. Use when the user says "/finish", "drive tasks to done", "work the board", "finish the tasks", "finish the batch", or otherwise wants to orchestrate tasks through the full pipeline to done. Supports single-task mode (one task id) and scoped-batch mode (all ready tasks, or all ready tasks in a tag or filter).
 license: MIT OR Apache-2.0
-compatibility: Requires the `kanban` MCP tool plus a harness that runs background sub agents and sends a notification when each one finishes.
+compatibility: Requires the `kanban` MCP tool and a harness that runs sub agents.
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
@@ -14,35 +14,26 @@ Drive kanban tasks all the way to `done` — orchestrating `/implement`, `/test`
 
 **Orchestrator only** — does not write code, run tests, or commit. Delegates each step (`/implement`, `/test`, `/commit`, `/review`) to its own sub agent.
 
-## The drive loop
+## Your job: finish every requested task
 
-The sub agents drive the loop. Each finished sub agent sends a task notification,
-and that notification starts your next turn. There is no Stop hook and no `ralph`.
+The user asked for a set of tasks: one task id, one tag or filter, or all ready
+tasks. Your job is to drive **every** task in that set to `done`, or to `stuck`.
+You are not done until the set is empty. One finished task is not the end of the
+job. A card report is not the end of the job. Keep going.
 
-Every step has this shape:
+The only valid ends of `/finish`:
 
-1. `Agent` — start the step in a sub agent. Tell it to run the skill and to return
-   the step record block.
-2. End the turn. Write one short line, for example "Implement running for ^abc1234."
-3. The task notification wakes you with the step record block.
-4. Decide the next step from the step record and the ledger, then go to 1.
+- **single-task**: the task is `done`, or it is `stuck`.
+- **scoped-batch**: the scoped `review` query and the scoped ready `todo` query
+  both return empty. Every task that you worked is `done` or `stuck`.
 
-Rules:
+Any other stop is a failure. Do not stop to ask the user whether to continue. Do
+not stop to summarize the progress. Do not stop because the batch is long.
 
-- **Never end a turn with no sub agent running, unless the loop is done.** A turn
-  that ends with no sub agent running is the end of the session. Nothing wakes you
-  again. Before you end a turn, make sure that you started the next step.
-- Do the orchestrator work (read the card, write the ledger, pick the next task)
-  in the same turn as the next `Agent` call. Never end a turn after only
-  orchestrator work.
-- One `Agent` call per turn. Never two sub agents at the same time.
-- There is no blocking read tool. Do not look for `TaskOutput`. Never `sleep` in a
-  shell, and never poll `ListAgents`.
-- The loop is done only when the stop condition of the mode is true. Then report
-  and end the turn.
-
-If the notification reports that the sub agent failed, treat the step as `stuck`,
-write the ledger entry, and report it. Do not silently start the step over.
+Run each step (`/implement`, `/test`, `/commit`, `/review`) in its own sub agent,
+one at a time, to keep this session small. Each sub agent returns the step record
+block. When a task is `done` or `stuck`, go directly to the next task in scope. If
+a sub agent fails, the task is `stuck`: record it and go to the next task.
 
 
 ## Invocation
@@ -53,7 +44,6 @@ write the ledger entry, and report it. Do not silently start the step over.
 | `/finish` | **scoped-batch** (no scope) | All ready tasks. |
 | `/finish #<tag>` | **scoped-batch** | Matching tag. |
 | `/finish @<user>` | **scoped-batch** | Assigned to user. |
-| `/finish $<project-slug>` | **scoped-batch** | In project. |
 | `/finish <filter-expr>` | **scoped-batch** | Any filter DSL — applied to every `list tasks`. |
 
 Detection:
@@ -65,7 +55,7 @@ Let `<SCOPE_FILTER>` be the DSL expression (or absent). Combine with `#READY` vi
 
 ### Filter DSL recap
 
-Atoms: `#<tag>`, `@<user>`, `$<project-slug>`, `^<task-id>`. Operators: `&&`, `||`, `!`, `()`. Virtual tags: `#READY`, `#BLOCKED`, `#BLOCKING`. All scoping (incl. project) flows through the filter.
+Atoms: `#<tag>`, `@<user>`, `^<task-id>`. Operators: `&&`, `||`, `!`, `()`. Virtual tags: `#READY`, `#BLOCKED`, `#BLOCKING`. All scoping flows through the filter.
 
 The `^<task-id>` atom and every id argument accept a full ULID, a 7-char short id, `^<short>`, or a unique ULID prefix. When reporting on a task in prose, quote its `short_id` field (`^<short>`) rather than hand-abbreviating the ULID by prefix.
 
@@ -140,7 +130,7 @@ In scoped-batch mode, show one block for each task as it leaves the loop. When t
 
 2. **Drive it to done.** Run the **single-task mode loop** (above) on `<TASK_ID>` in this session, one sub agent per step. Never put the whole loop in one sub agent. Reusing the loop means each iteration commits a local checkpoint via step 4, so by the time a task reaches `done` its verified-good state is already committed — before the next task is picked. Do not switch tasks mid-loop. A task that hits the guardrail is reported as stuck and skipped.
 
-3. **Pick the next.** Return to step 1.
+3. **Pick the next.** Return to step 1. Do not stop between tasks.
 
 4. **Stop**: both the scoped `review` query and the scoped ready `todo` query return empty → report and stop. **Tasks outside scope are deliberately ignored.**
 
