@@ -19,6 +19,8 @@ Write the test first. Watch it fail. Write minimal code to pass.
 
 **Violating the letter of the rules is violating the spirit of the rules.**
 
+**Run each test one time per code change.** RED is one run of the new test. GREEN is one run of the new test. Do not run a test again when the code did not change — the result is the same. Never run tests in a loop. Never run the suite again to "confirm" a result. Read the output you have.
+
 ## When to Use
 
 **Always:**
@@ -118,20 +120,20 @@ Vague name, tests mock not code
 
 ### Verify RED - Watch It Fail
 
-**MANDATORY. Never skip.**
+**MANDATORY. Never skip.** Run only the new test, one time.
 
 ```bash
 npm test path/to/test.test.ts
 ```
 
-Confirm:
+Confirm from that one output:
 - Test fails (not errors)
 - Failure message is expected
 - Fails because feature missing (not typos)
 
 **Test passes?** You're testing existing behavior. Fix test.
 
-**Test errors?** Fix error, re-run until it fails correctly.
+**Test errors?** Fix the error. Then run the test one more time.
 
 ### GREEN - Minimal Code
 
@@ -173,20 +175,19 @@ Don't add features, refactor other code, or "improve" beyond the test.
 
 ### Verify GREEN - Watch It Pass
 
-**MANDATORY.**
+**MANDATORY.** Run only the new test, one time.
 
 ```bash
 npm test path/to/test.test.ts
 ```
 
-Confirm:
+Confirm from that one output:
 - Test passes
-- Other tests still pass
 - Output pristine (no errors, warnings)
 
-**Test fails?** Fix code, not test.
+**Test fails?** Fix code, not test. Then run that test one more time.
 
-**Other tests fail?** Fix now.
+Do not run the full suite after each cycle. Run the full suite one time when the feature is complete (see the Verification Checklist). **Other tests fail?** Fix only those tests. Run only those tests after each fix.
 
 ### REFACTOR - Clean Up
 
@@ -314,7 +315,8 @@ Before marking work complete:
 - [ ] Watched each test fail before implementing
 - [ ] Each test failed for expected reason (feature missing, not typo)
 - [ ] Wrote minimal code to pass each test
-- [ ] All tests pass
+- [ ] All tests pass in one full-suite run
+- [ ] No test was run again without a code change between the runs
 - [ ] Output pristine (no errors, warnings)
 - [ ] Tests use real code (mocks only if unavoidable)
 - [ ] Edge cases and errors covered

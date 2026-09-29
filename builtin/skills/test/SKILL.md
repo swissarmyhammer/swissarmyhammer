@@ -12,6 +12,17 @@ metadata:
 
 **Zero failures. Zero warnings. Zero skipped. The build is clean or it's broken.**
 
+## Run Tests One Time
+
+**A test run is a measurement. Take it one time. Then act on the result.**
+
+- Run the suite one time. Read the output. The output tells you what failed.
+- Do not run the same tests again when the code did not change. The result is the same. It is a waste of time and tokens.
+- Never run tests in a loop. No `for i in {1..N}`, no `--count=N`, no `--repeat`, no "run it 10 more times to be sure".
+- Never run the suite again to "confirm" a pass or a fail. One run is the confirmation.
+- When tests fail, work on the failures only. Run only the failing tests after each fix. Run the full suite one more time at the end.
+- Save the output of the run. Read the saved output (`get lines`, `grep history`). Do not run the tests again to see the output again.
+
 ## Unit and integration targets
 
 - **Unit tests are fast, and they give coverage.** A unit test examines the
@@ -45,11 +56,12 @@ metadata:
 
 ## Process
 
-1. **Run the full test suite** using project detection to pick the right command. The full suite is every unit target. Add the integration targets your change touches; CI runs all of them.
+1. **Run the full test suite one time** using project detection to pick the right command. The full suite is every unit target. Add the integration targets your change touches; CI runs all of them.
 2. **Type-check + lint** treating warnings as errors.
 3. **Check for skipped/ignored tests** — fix or delete each. Skips are not acceptable.
-4. **Fix every failure and warning**, re-running after each fix. Trace before editing: `get symbol` on the failing function, `get callgraph` (inbound) to see callers, and — if you're changing a shared symbol — `get blastradius` on the file to spot passing tests elsewhere that the change could break.
-5. **Repeat** until all tests pass.
+4. **Make a list of the failures and warnings** from the output of step 1. This list is your work. Do not run the suite again to make the list.
+5. **Fix each failure and warning on the list.** Trace before editing: `get symbol` on the failing function, `get callgraph` (inbound) to see callers, and — if you're changing a shared symbol — `get blastradius` on the file to spot passing tests elsewhere that the change could break. After a fix, run only the tests that failed, one time. Do not run the full suite after each fix.
+6. **Run the full suite one final time** when the list is empty. If new failures show, go to step 4 with only those failures.
 
 ## Report
 
@@ -94,14 +106,16 @@ Tests share mutable state — cwd, env var, fixed port, shared temp file. Serial
 
 Never permanently set `--test-threads=1` — it masks the bug.
 
-### Flaky test (passes on retry)
+### Flaky test (fails one time, passes another time)
 
-Non-determinism — timing, unordered iteration, clock, external state. Reproduce deterministically before fixing:
+Non-determinism — timing, unordered iteration, clock, external state. Do not run the test in a loop to find it. Read the test and the code under test. Find the source of the non-determinism in the code:
 
-- Rust: `for i in {1..100}; do cargo test <name> -- --nocapture || break; done`
-- Python: `pytest -x --count=100 <path>::<name>` (needs `pytest-repeat`)
+- Iteration over a `HashMap` / `HashSet` / `dict` / `Set` with no sort
+- `sleep`, a timeout, or a wait on a background task
+- The system clock, a random number generator with no seed
+- A shared port, cwd, env var, or temp file
 
-Remove the source (sort iteration, inject a clock, seed RNGs) — don't add retries.
+Remove the source (sort iteration, inject a clock, seed RNGs, wait on a signal, not a timer) — don't add retries. Then run the test one time.
 
 ### Unrelated Failures
 
