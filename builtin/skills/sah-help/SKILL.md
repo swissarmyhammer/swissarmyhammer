@@ -66,7 +66,7 @@ Then group the other skills from `list skill` by purpose. Use the description ea
 
 - **Understand code**: `/explore`, `/code-context`, `/lsp`, `/map`, `/detected-projects`
 - **Quality**: `/tdd`, `/coverage`, `/deduplicate`, `/double-check`, `/ci`
-- **Track work**: `/task`, `/kanban`, `/issue`
+- **Track work**: `/task`, `/kanban`
 - **Utilities**: `/shell`, `/make-readme`, `/check-sah`
 
 A skill in the list that is not named above goes in the group that fits. Mark a skill from the user or project store as **custom**. Do not omit a skill that the list returns.
