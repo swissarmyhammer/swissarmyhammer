@@ -11,7 +11,8 @@
 # * on success, uploads the artifacts to a GitHub Release
 #
 # Note that the GitHub Release will be created with a generated
-# title/body based on your changelogs.
+# title/body. This project keeps no changelog, so the body holds only
+# the install steps and the artifact list.
 
 name: Release
 permissions:
