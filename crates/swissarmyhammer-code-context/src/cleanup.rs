@@ -4,6 +4,8 @@
 //! filesystem, hashes every non-ignored file, and reconciles the database:
 //!
 //! - Deletes DB entries for files that no longer exist on disk.
+//! - Deletes DB entries for files on disk that the walk skips (for example,
+//!   files that the shared ignore filter covers).
 //! - Marks files dirty whose `content_hash` changed.
 //! - Inserts new files not yet in the DB.
 
@@ -28,6 +30,9 @@ pub struct CleanupStats {
     pub files_added: usize,
     /// Files in the DB that no longer exist on disk and have been deleted.
     pub files_removed: usize,
+    /// Files in the DB that are still on disk, but that the walk skips (for
+    /// example, an ignore rule covers them), and have been deleted.
+    pub files_ignored: usize,
     /// Files whose content hash changed and have been marked dirty.
     pub files_dirty: usize,
     /// Files whose content hash is unchanged.
@@ -50,6 +55,8 @@ struct HashedFile {
 /// 2. Hashes files in parallel with `rayon`.
 /// 3. Compares against the DB:
 ///    - Files in DB but not on disk -> DELETE (CASCADE cleans up).
+///    - Files in DB and on disk, but skipped by the walk (ignored) -> DELETE,
+///      and log the count.
 ///    - Files on disk with a different hash -> UPDATE hash, set dirty.
 ///    - Files on disk not in DB -> INSERT with dirty flags.
 /// 4. Returns [`CleanupStats`] summarising what changed.
@@ -85,7 +92,20 @@ pub fn startup_cleanup(
     let mut stats = CleanupStats::default();
 
     // 3a. Reconcile existing DB entries against files on disk.
-    reconcile_db_entries(conn, &db_entries, &disk_map, now, &mut stats)?;
+    reconcile_db_entries(
+        conn,
+        workspace_root,
+        &db_entries,
+        &disk_map,
+        now,
+        &mut stats,
+    )?;
+    if stats.files_ignored > 0 {
+        tracing::info!(
+            "code-context cleanup: removed {} rows for files that the ignore filter skips",
+            stats.files_ignored
+        );
+    }
 
     // 3b. Insert files found on disk but not yet in the DB.
     let db_paths: std::collections::HashSet<&str> =
@@ -103,13 +123,15 @@ pub fn startup_cleanup(
 /// Reconcile existing DB entries against files currently on disk.
 ///
 /// For each row in `db_entries`:
-/// - If the file is no longer on disk, delete it (CASCADE cleans up chunks/symbols/edges).
+/// - If the walk did not give the file, delete it (CASCADE cleans up chunks/symbols/edges).
+///   See [`delete_unwalked_row`].
 /// - If the hash changed, update `content_hash`, clear both indexed flags, and touch `last_seen_at`.
 /// - Otherwise just touch `last_seen_at`.
 ///
-/// `stats` is updated in place with the counts of removed, dirty, and unchanged files.
+/// `stats` is updated in place with the counts of removed, ignored, dirty, and unchanged files.
 fn reconcile_db_entries(
     conn: &Connection,
+    workspace_root: &Path,
     db_entries: &[(String, Vec<u8>)],
     disk_map: &HashMap<&str, (&[u8], u64)>,
     now: i64,
@@ -117,11 +139,7 @@ fn reconcile_db_entries(
 ) -> Result<(), CodeContextError> {
     for (db_path, db_hash) in db_entries {
         match disk_map.get(db_path.as_str()) {
-            None => {
-                // File no longer on disk -- delete (CASCADE)
-                conn.execute("DELETE FROM indexed_files WHERE file_path = ?1", [db_path])?;
-                stats.files_removed += 1;
-            }
+            None => delete_unwalked_row(conn, workspace_root, db_path, stats)?,
             Some((disk_hash, _size)) => {
                 if *disk_hash != db_hash.as_slice() {
                     // Hash changed -- mark dirty
@@ -142,6 +160,27 @@ fn reconcile_db_entries(
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// Delete one row whose file the walk did not give, and count it.
+///
+/// CASCADE removes the chunks, symbols and edges of the row. When the file is
+/// still on disk, the walk skipped it (for example, an ignore rule covers it),
+/// so the row counts in `stats.files_ignored`. Otherwise the file is gone, and
+/// the row counts in `stats.files_removed`.
+fn delete_unwalked_row(
+    conn: &Connection,
+    workspace_root: &Path,
+    db_path: &str,
+    stats: &mut CleanupStats,
+) -> Result<(), CodeContextError> {
+    conn.execute("DELETE FROM indexed_files WHERE file_path = ?1", [db_path])?;
+    if workspace_root.join(db_path).is_file() {
+        stats.files_ignored += 1;
+    } else {
+        stats.files_removed += 1;
     }
     Ok(())
 }
@@ -501,6 +540,81 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(paths, vec!["src/main.rs".to_string()]);
+    }
+
+    /// Make a file and its parent directories under `root`.
+    fn write_file(root: &Path, rel: &str, contents: &str) {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, contents).unwrap();
+    }
+
+    /// Insert one `indexed_files` row, as an earlier run with a weaker
+    /// filter left it.
+    fn seed_row(conn: &Connection, rel: &str, contents: &str) {
+        conn.execute(
+            "INSERT INTO indexed_files (file_path, content_hash, file_size, last_seen_at, ts_indexed, lsp_indexed)
+             VALUES (?1, ?2, ?3, 0, 1, 0)",
+            rusqlite::params![rel, hash_bytes(contents.as_bytes()), contents.len() as i64],
+        )
+        .unwrap();
+    }
+
+    /// Tell if `indexed_files` has a row for `rel`.
+    fn has_row(conn: &Connection, rel: &str) -> bool {
+        conn.query_row(
+            "SELECT COUNT(*) FROM indexed_files WHERE file_path = ?1",
+            [rel],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+            > 0
+    }
+
+    /// A row for a file on disk that the ignore filter skips is deleted, and
+    /// the count of these rows is in `files_ignored`, not in `files_removed`.
+    #[test]
+    fn test_cleanup_removes_ignored_row_for_file_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let ignored = ".build/checkouts/X/a.swift";
+        let kept = "Sources/b.swift";
+        fs::write(dir.path().join(".gitignore"), ".build/\n").unwrap();
+        write_file(dir.path(), ignored, "let a = 1");
+        write_file(dir.path(), kept, "let b = 2");
+
+        let conn = open_memory_db();
+        seed_row(&conn, ignored, "let a = 1");
+        seed_row(&conn, kept, "let b = 2");
+
+        let stats = startup_cleanup(&conn, dir.path()).unwrap();
+
+        assert!(!has_row(&conn, ignored), "the ignored row must be deleted");
+        assert!(has_row(&conn, kept), "the source row must stay");
+        assert_eq!(stats.files_ignored, 1);
+        assert_eq!(stats.files_removed, 0);
+        assert_eq!(stats.files_unchanged, 1);
+    }
+
+    /// A `.gitignore` directory rule deletes the row of each file under that
+    /// directory, also when the file is on disk.
+    #[test]
+    fn test_cleanup_removes_row_under_gitignored_directory_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let ignored = "gen-out/nested/x.rs";
+        fs::write(dir.path().join(".gitignore"), "gen-out/\n").unwrap();
+        write_file(dir.path(), ignored, "fn x() {}");
+        write_file(dir.path(), "src/lib.rs", "fn lib() {}");
+
+        let conn = open_memory_db();
+        seed_row(&conn, ignored, "fn x() {}");
+
+        let stats = startup_cleanup(&conn, dir.path()).unwrap();
+
+        assert!(!has_row(&conn, ignored), "the ignored row must be deleted");
+        assert!(has_row(&conn, "src/lib.rs"), "the source file is added");
+        assert_eq!(stats.files_ignored, 1);
+        assert_eq!(stats.files_removed, 0);
+        assert_eq!(stats.files_added, 1);
     }
 
     #[test]
