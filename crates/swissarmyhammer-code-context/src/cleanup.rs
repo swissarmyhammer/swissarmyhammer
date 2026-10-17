@@ -12,13 +12,13 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ignore::WalkBuilder;
 use rayon::prelude::*;
 use rusqlite::types::Value;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
 use crate::error::CodeContextError;
+use crate::ignore_filter::workspace_walk_builder;
 use crate::lsp_worker::lsp_capable_extensions;
 
 /// Statistics returned by [`startup_cleanup`].
@@ -254,19 +254,14 @@ fn mark_non_lsp_capable_files(conn: &Connection) -> Result<usize, CodeContextErr
 
 /// Walk non-ignored files and hash them in parallel.
 ///
-/// Uses the `ignore` crate (respects `.gitignore`) and `rayon` for parallel hashing.
+/// Uses [`workspace_walk_builder`], which obeys the same ignore rules as the
+/// file watchers ([`crate::IgnoreFilter`]), and `rayon` for parallel hashing.
 /// Only includes files with extensions that tree-sitter can parse.
 /// Returns a `Vec<HashedFile>` with relative paths and truncated SHA-256 hashes.
 fn walk_and_hash(workspace_root: &Path) -> Result<Vec<HashedFile>, CodeContextError> {
     // Collect file paths first (WalkBuilder is not Send)
     let mut paths = Vec::new();
-    for entry in WalkBuilder::new(workspace_root)
-        .hidden(true)
-        .git_ignore(true)
-        .git_global(false)
-        .git_exclude(true)
-        .build()
-    {
+    for entry in workspace_walk_builder(workspace_root).build() {
         let entry = entry.map_err(std::io::Error::other)?;
         if entry.file_type().is_some_and(|ft| ft.is_file()) && is_parseable(entry.path()) {
             paths.push(entry.into_path());
@@ -478,6 +473,34 @@ mod tests {
 
         let stats = startup_cleanup(&conn, dir.path()).unwrap();
         assert_eq!(stats, CleanupStats::default());
+    }
+
+    /// The walk obeys the shared ignore filter: a hard skip directory and a
+    /// `.gitignore` entry add no row, also in a workspace with no `.git`.
+    #[test]
+    fn test_cleanup_skips_hard_skip_dirs_and_gitignored_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        for rel in ["target/debug/a.rs", "node_modules/pkg/b.js", "gen/c.rs"] {
+            let path = dir.path().join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "fn x() {}").unwrap();
+        }
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/main.rs"), "fn main() {}").unwrap();
+        fs::write(dir.path().join(".gitignore"), "gen/\n").unwrap();
+
+        let conn = open_memory_db();
+        let stats = startup_cleanup(&conn, dir.path()).unwrap();
+
+        assert_eq!(stats.files_added, 1, "only src/main.rs is indexed");
+        let paths: Vec<String> = conn
+            .prepare("SELECT file_path FROM indexed_files")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(paths, vec!["src/main.rs".to_string()]);
     }
 
     #[test]

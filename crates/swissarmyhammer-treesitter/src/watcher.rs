@@ -446,6 +446,14 @@ mod tests {
         assert!(!watcher.is_watching());
     }
 
+    /// Maximum time that a test waits for a file event to reach the callback.
+    ///
+    /// The time includes the debounce and the FSEvents delivery latency. When
+    /// fseventsd is busy, one event can take approximately 9 seconds. `wait_for`
+    /// returns when the condition becomes true, thus a large limit does not
+    /// make a passing test slower.
+    const EVENT_WAIT_TIMEOUT_MS: u64 = 30_000;
+
     /// Wait for a condition to become true, polling every 100ms up to the given timeout.
     ///
     /// Returns true if the condition was met, false if timed out.
@@ -478,7 +486,7 @@ mod tests {
         std::fs::write(dir.path().join("new_file.rs"), "pub fn new() {}").unwrap();
 
         // Wait for the debounce (500ms) plus processing time
-        let fired = wait_for(|| callback.changed_count() > 0, 2000).await;
+        let fired = wait_for(|| callback.changed_count() > 0, EVENT_WAIT_TIMEOUT_MS).await;
         assert!(
             fired,
             "Expected on_files_changed callback to fire after creating a Rust file"
@@ -501,7 +509,7 @@ mod tests {
         .unwrap();
 
         // Wait for the debounce (500ms) plus processing time
-        let fired = wait_for(|| callback.changed_count() > 0, 2000).await;
+        let fired = wait_for(|| callback.changed_count() > 0, EVENT_WAIT_TIMEOUT_MS).await;
         assert!(
             fired,
             "Expected on_files_changed callback to fire after modifying a Rust file"
@@ -527,7 +535,7 @@ mod tests {
 
         let fired = wait_for(
             || callback.removed_count() > 0 || callback.changed_count() > 0,
-            3000,
+            EVENT_WAIT_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -574,7 +582,7 @@ mod tests {
         std::fs::write(dir.path().join("b.rs"), "fn b() {}").unwrap();
 
         // Wait for events to be processed
-        let fired = wait_for(|| callback.changed_count() >= 2, 2000).await;
+        let fired = wait_for(|| callback.changed_count() >= 2, EVENT_WAIT_TIMEOUT_MS).await;
         assert!(
             fired,
             "Expected callbacks for both new Rust files, got changed_count={}",

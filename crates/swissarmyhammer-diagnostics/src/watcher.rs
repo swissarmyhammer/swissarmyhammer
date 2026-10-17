@@ -32,6 +32,7 @@ use std::time::Duration;
 
 use async_watcher::{notify::RecursiveMode, AsyncDebouncer};
 
+use swissarmyhammer_code_context::IgnoreFilter;
 use swissarmyhammer_lsp::client::LspTransport;
 use swissarmyhammer_lsp::LspSession;
 
@@ -240,10 +241,17 @@ async fn run_diagnostics_watcher<C: LspTransport>(
         workspace_root.display()
     );
 
+    // Load the ignore rules one time. The load walks the workspace, so it
+    // runs on the blocking pool.
+    let filter = {
+        let root = workspace_root.to_path_buf();
+        tokio::task::spawn_blocking(move || IgnoreFilter::new(&root)).await?
+    };
+
     while let Some(events_result) = event_rx.recv().await {
         match events_result {
             Ok(debounced_events) => {
-                let paths = changed_paths(&debounced_events);
+                let paths = changed_paths(&debounced_events, &filter);
                 if paths.is_empty() {
                     continue;
                 }
@@ -270,8 +278,16 @@ async fn run_diagnostics_watcher<C: LspTransport>(
 /// `path` (the debouncer collapses per-path); the underlying notify event's
 /// `paths` can be empty for some backends, so the per-event `path` is the
 /// reliable source.
-fn changed_paths(events: &[async_watcher::DebouncedEvent]) -> Vec<PathBuf> {
-    let mut paths: Vec<PathBuf> = events.iter().map(|e| e.path.clone()).collect();
+///
+/// A path that `filter` ignores is dropped. Thus the watcher never sends a
+/// `didOpen` for build output (for example `.build/checkouts/`), and it obeys
+/// the same ignore rules as the code-context index walk.
+fn changed_paths(events: &[async_watcher::DebouncedEvent], filter: &IgnoreFilter) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = events
+        .iter()
+        .filter(|e| !filter.is_ignored(&e.path))
+        .map(|e| e.path.clone())
+        .collect();
     paths.sort();
     paths.dedup();
     paths
@@ -447,6 +463,45 @@ mod tests {
         // never pushed because it was never refreshed.
         let seen = seen.lock().unwrap();
         assert_eq!(seen.as_slice(), &[rs], "push once per refreshed file");
+    }
+
+    /// Make one debounced event for `path`.
+    fn debounced(path: PathBuf) -> async_watcher::DebouncedEvent {
+        use async_watcher::notify::{Event, EventKind};
+
+        async_watcher::DebouncedEvent {
+            path: path.clone(),
+            kind: async_watcher::DebouncedEventKind::Any,
+            event: Event::new(EventKind::Any).add_path(path),
+        }
+    }
+
+    /// The watcher event filter drops ignored paths, so the session gets no
+    /// `didOpen` for a file under `.build/` or under a `.gitignore` directory
+    /// rule. A normal source file still gets its `didOpen`.
+    #[test]
+    fn changed_paths_drops_ignored_paths_so_no_didopen_is_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join(".gitignore"), "build-out/\n").unwrap();
+        let mut batch = Vec::new();
+        for rel in [".build/checkouts/X/a.rs", "build-out/a/b.rs", "src/a.rs"] {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "fn a() {}\n").unwrap();
+            batch.push(debounced(path));
+        }
+        let filter = IgnoreFilter::new(root);
+
+        let paths = changed_paths(&batch, &filter);
+        assert_eq!(paths, vec![root.join("src/a.rs")]);
+
+        let (session, client) = recording_session();
+        let routes = vec![SessionRoute::new(vec!["rs".to_string()], session)];
+        assert_eq!(refresh_changed_files(&routes, &paths), 1);
+        let guard = client.lock().unwrap();
+        let t = guard.as_ref().unwrap();
+        assert_eq!(t.notification_count("textDocument/didOpen"), 1);
     }
 
     #[test]

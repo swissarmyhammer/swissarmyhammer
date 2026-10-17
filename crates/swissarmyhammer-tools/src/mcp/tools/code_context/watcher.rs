@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use async_watcher::{notify::RecursiveMode, AsyncDebouncer};
 use rusqlite::Connection;
-use swissarmyhammer_code_context::{FanoutWatcher, FileEvent, SharedDb};
+use swissarmyhammer_code_context::{FanoutWatcher, FileEvent, IgnoreFilter, SharedDb};
 
 /// Debounce window for coalescing filesystem events before processing a batch.
 ///
@@ -158,6 +158,12 @@ async fn run_watcher(
 
     let fanout = FanoutWatcher::new();
     let ws_root = workspace_root.to_path_buf();
+    // Load the ignore rules one time. The load walks the workspace, so it
+    // runs on the blocking pool.
+    let filter = {
+        let root = ws_root.clone();
+        tokio::task::spawn_blocking(move || IgnoreFilter::new(&root)).await?
+    };
 
     // Wake on the SHUTDOWN_CHECK_INTERVAL_MILLIS tick even with no filesystem
     // events so a step-down (which sets the shutdown flag) is observed promptly
@@ -186,7 +192,8 @@ async fn run_watcher(
 
         match events_result {
             Ok(debounced_events) => {
-                process_ok_events(db, &ws_root, &fanout, &debounced_events, shutdown).await;
+                process_ok_events(db, &ws_root, &fanout, &filter, &debounced_events, shutdown)
+                    .await;
             }
             Err(errors) => {
                 for error in errors {
@@ -200,23 +207,20 @@ async fn run_watcher(
     Ok(())
 }
 
-/// Handle one debounced batch of successful filesystem events.
+/// Convert one debounced batch into the [`FileEvent`]s the index must see.
 ///
-/// Filters the batch to source-file [`FileEvent`]s, marks the affected DB rows
-/// dirty via [`process_file_events`], then drains the dirty set by re-indexing.
-/// A batch with no relevant source-file changes is a no-op.
-async fn process_ok_events(
-    db: &SharedDb,
-    ws_root: &Path,
-    fanout: &FanoutWatcher,
+/// A path is kept only when it is a source file and `filter` does not ignore
+/// it. Thus the watcher obeys the same ignore rules as the startup walk and
+/// the reconcile walk.
+pub(crate) fn collect_file_events(
     debounced_events: &[async_watcher::DebouncedEvent],
-    shutdown: &swissarmyhammer_code_context::ShutdownFlag,
-) {
-    // Collect file events from the batch
+    ws_root: &Path,
+    filter: &IgnoreFilter,
+) -> Vec<FileEvent> {
     let mut file_events = Vec::new();
     for debounced in debounced_events {
         for path in &debounced.event.paths {
-            if !is_source_file(path) {
+            if !is_source_file(path) || filter.is_ignored(path) {
                 continue;
             }
             if let Some(event) = to_file_event(&debounced.event.kind, path.clone(), ws_root) {
@@ -224,7 +228,24 @@ async fn process_ok_events(
             }
         }
     }
+    file_events
+}
 
+/// Handle one debounced batch of successful filesystem events.
+///
+/// Filters the batch to source-file [`FileEvent`]s that `filter` does not
+/// ignore ([`collect_file_events`]), marks the affected DB rows dirty via
+/// [`process_file_events`], then drains the dirty set by re-indexing. A batch
+/// with no relevant source-file changes is a no-op.
+async fn process_ok_events(
+    db: &SharedDb,
+    ws_root: &Path,
+    fanout: &FanoutWatcher,
+    filter: &IgnoreFilter,
+    debounced_events: &[async_watcher::DebouncedEvent],
+    shutdown: &swissarmyhammer_code_context::ShutdownFlag,
+) {
+    let file_events = collect_file_events(debounced_events, ws_root, filter);
     if file_events.is_empty() {
         return;
     }
@@ -546,6 +567,60 @@ mod tests {
             FileEvent::Created(p) => assert_eq!(p, PathBuf::from("src/handlers/auth.rs")),
             _ => panic!("expected Created"),
         }
+    }
+
+    /// Make one debounced create event for `path`.
+    fn debounced_create(path: PathBuf) -> async_watcher::DebouncedEvent {
+        use async_watcher::notify::event::CreateKind;
+        use async_watcher::notify::{Event, EventKind};
+
+        async_watcher::DebouncedEvent {
+            path: path.clone(),
+            kind: async_watcher::DebouncedEventKind::Any,
+            event: Event::new(EventKind::Create(CreateKind::File)).add_path(path),
+        }
+    }
+
+    /// An event under `.build/` (a hard skip directory) adds no row. An
+    /// event for a normal source path still adds a dirty row.
+    #[test]
+    fn collect_file_events_skips_build_dir_and_keeps_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let filter = IgnoreFilter::new(root);
+        let batch = vec![
+            debounced_create(root.join(".build/checkouts/X/Sources/a.swift")),
+            debounced_create(root.join("Sources/a.swift")),
+        ];
+
+        let events = collect_file_events(&batch, root, &filter);
+
+        let conn = test_db();
+        let result = process_file_events(&conn, &FanoutWatcher::new(), &events);
+        assert_eq!(result.dirty_count, 1);
+        assert_eq!(count_rows(&conn, "indexed_files"), 1);
+        assert!(!file_exists(&conn, ".build/checkouts/X/Sources/a.swift"));
+        assert_eq!(get_ts_indexed(&conn, "Sources/a.swift"), Some(0));
+    }
+
+    /// An event for a path that `.gitignore` lists adds no row. A directory
+    /// rule (`build-out/`) also skips the files under that directory.
+    #[test]
+    fn collect_file_events_skips_gitignored_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join(".gitignore"), "build-out/\ngenerated.rs\n").unwrap();
+        let filter = IgnoreFilter::new(root);
+        let batch = vec![
+            debounced_create(root.join("build-out/a/b.swift")),
+            debounced_create(root.join("src/generated.rs")),
+            debounced_create(root.join("src/main.rs")),
+        ];
+
+        let events = collect_file_events(&batch, root, &filter);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].path(), Path::new("src/main.rs"));
     }
 
     // -----------------------------------------------------------------------
