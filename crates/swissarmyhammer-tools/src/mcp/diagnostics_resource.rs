@@ -54,8 +54,9 @@ const DIAGNOSTICS_RESOURCE_NAME: &str = "Workspace Diagnostics";
 /// Process-wide diagnostics resource, installed once and shared by the MCP
 /// server's resource handlers and the in-process diagnostics fan-out.
 ///
-/// Mirrors the process-wide [`LSP_SUPERVISOR`](crate::mcp::tools::code_context)
-/// handle: the diagnostics view and the per-uri fan-out are per-workspace, not
+/// Mirrors the process-wide LSP supervisor slot
+/// ([`supervisor_slot`](crate::mcp::tools::code_context::supervisor_slot)):
+/// the diagnostics view and the per-uri fan-out are per-workspace, not
 /// per-request, so a single shared handle lets both the `ServerHandler` resource
 /// methods and the fan-out tee reach the same view and peer.
 static DIAGNOSTICS_RESOURCES: OnceCell<DiagnosticsResources> = OnceCell::new();

@@ -295,7 +295,9 @@ async fn manage_http_server_lifecycle(
         "🛑 Shutting down server...",
     );
 
-    if let Err(e) = server_handle.shutdown().await {
+    let shutdown_result = server_handle.shutdown().await;
+    stop_lsp_servers().await;
+    if let Err(e) = shutdown_result {
         tracing::error!("Failed to shutdown server gracefully: {}", e);
         display_server_status(
             cli_context,
@@ -464,13 +466,24 @@ async fn wait_for_natural_completion(
 
 /// Finalize server shutdown and return exit code
 async fn finalize_stdio_server_shutdown(mut server_handle: McpServerHandle) -> i32 {
-    if let Err(e) = server_handle.wait_for_completion().await {
+    let completion = server_handle.wait_for_completion().await;
+    stop_lsp_servers().await;
+    if let Err(e) = completion {
         tracing::error!("Error waiting for server task completion: {}", e);
         return EXIT_ERROR;
     }
 
     tracing::info!("MCP stdio server completed successfully");
     EXIT_SUCCESS
+}
+
+/// Stop the LSP servers of this process before `sah serve` exits.
+///
+/// The process statics never drop, so `kill_on_drop` does not stop the LSP
+/// children at exit. This shuts down the supervisor in the process slot, so
+/// no LSP child of this process stays alive.
+async fn stop_lsp_servers() {
+    swissarmyhammer_tools::mcp::shutdown_lsp_supervisor().await;
 }
 
 /// Helper function to display server status based on verbose flag

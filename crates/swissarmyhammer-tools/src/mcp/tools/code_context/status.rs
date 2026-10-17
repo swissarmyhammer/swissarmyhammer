@@ -14,7 +14,8 @@ use swissarmyhammer_code_context::BuildLayer;
 
 use super::doctor;
 use super::indexing::index_discovered_files_async;
-use super::support::{context_err, open_workspace, LSP_SUPERVISOR};
+use super::supervisor_slot::lsp_supervisor;
+use super::support::{context_err, open_workspace};
 
 /// Execute the "get status" operation.
 ///
@@ -41,7 +42,7 @@ pub(super) fn execute_get_status(context: &ToolContext) -> Result<CallToolResult
 
     // Merge LSP daemon status into the response
     let mut result = serde_json::to_value(&status).unwrap_or_default();
-    if let Some(sup) = LSP_SUPERVISOR.get() {
+    if let Some(sup) = lsp_supervisor() {
         if let Ok(guard) = sup.try_lock() {
             let daemon_status = guard.status();
             if let Ok(daemon_json) = serde_json::to_value(&daemon_status) {

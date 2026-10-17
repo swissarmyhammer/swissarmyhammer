@@ -99,6 +99,8 @@ pub use tool_registry::{
 // re-exported here so every `register_*_tools` entry point is reachable from
 // one place.
 pub use tools::agent::register_agent_tools;
+// The host calls this at exit, so no LSP server of the process stays alive.
+pub use tools::code_context::shutdown_lsp_supervisor;
 pub use tools::skill::register_skill_tools;
 pub use types::{GetPromptRequest, ListPromptsRequest};
 pub use unified_server::{

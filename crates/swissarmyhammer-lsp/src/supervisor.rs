@@ -56,6 +56,12 @@ pub struct LspSupervisorManager {
     /// supervisor spawns must not send. Injected by the owner so this crate
     /// carries no dependency on the source of the ignore rules.
     path_filter: Option<PathFilter>,
+    /// Set by [`shutdown`](LspSupervisorManager::shutdown). Shutdown is
+    /// final: after it, [`start`](LspSupervisorManager::start) and
+    /// [`health_check_all`](LspSupervisorManager::health_check_all) start no
+    /// server. Thus a start that runs after a step-down cannot leave a server
+    /// alive.
+    shut_down: bool,
 }
 
 impl std::fmt::Debug for LspSupervisorManager {
@@ -75,6 +81,7 @@ impl LspSupervisorManager {
             daemons: HashMap::new(),
             stderr_filter: None,
             path_filter: None,
+            shut_down: false,
         }
     }
 
@@ -120,7 +127,17 @@ impl LspSupervisorManager {
     /// Uses `swissarmyhammer_project_detection::detect_projects()` to discover
     /// project types, then looks up servers via `servers_for_project()`. Each
     /// unique server command gets one daemon (deduped by command name).
+    ///
+    /// After [`shutdown`](Self::shutdown) this starts nothing and returns no
+    /// result.
     pub async fn start(&mut self) -> Vec<Result<(), LspError>> {
+        if self.shut_down {
+            info!(
+                workspace = %self.workspace_root.display(),
+                "LSP supervisor is shut down; starting no server"
+            );
+            return Vec::new();
+        }
         let projects =
             match swissarmyhammer_project_detection::detect_projects(&self.workspace_root, None) {
                 Ok(p) => p,
@@ -209,7 +226,13 @@ impl LspSupervisorManager {
     }
 
     /// Gracefully shut down all managed daemons.
+    ///
+    /// Shutdown is final. A later [`start`](Self::start) or
+    /// [`health_check_all`](Self::health_check_all) starts no server. A start
+    /// in progress holds `&mut self`, so a caller that shares the supervisor
+    /// behind a mutex waits for that start to end before this runs.
     pub async fn shutdown(&mut self) {
+        self.shut_down = true;
         info!(count = self.daemons.len(), "Shutting down all LSP daemons");
         for (cmd, daemon) in self.daemons.iter_mut() {
             info!(cmd, "Shutting down LSP daemon");
@@ -221,7 +244,11 @@ impl LspSupervisorManager {
     /// died.
     ///
     /// This is intended to be called periodically (e.g. from a tokio task).
+    /// After [`shutdown`](Self::shutdown) it restarts nothing.
     pub async fn health_check_all(&mut self) {
+        if self.shut_down {
+            return;
+        }
         let commands = self.daemon_names();
         for cmd in commands {
             let Some(daemon) = self.daemons.get_mut(&cmd) else {
@@ -247,6 +274,11 @@ impl LspSupervisorManager {
     /// Return the command names of all managed daemons.
     pub fn daemon_names(&self) -> Vec<String> {
         self.daemons.keys().cloned().collect()
+    }
+
+    /// Whether [`shutdown`](Self::shutdown) has run on this supervisor.
+    pub fn is_shut_down(&self) -> bool {
+        self.shut_down
     }
 }
 
@@ -503,6 +535,34 @@ mod tests {
                 status.command
             );
         }
+    }
+
+    /// Shutdown is final: a `start()` that comes after `shutdown()` (for
+    /// example a start task that lost the race to a step-down) spawns no
+    /// server.
+    #[tokio::test]
+    async fn test_start_after_shutdown_spawns_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let mut mgr = LspSupervisorManager::new(tmp.path().to_path_buf());
+
+        mgr.shutdown().await;
+        let results = mgr.start().await;
+
+        assert!(results.is_empty(), "got {} start results", results.len());
+        assert!(mgr.daemon_names().is_empty());
+        assert!(mgr.is_shut_down());
+    }
+
+    /// A new supervisor is not shut down.
+    #[test]
+    fn test_new_supervisor_is_not_shut_down() {
+        let mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"));
+        assert!(!mgr.is_shut_down());
     }
 
     #[tokio::test]

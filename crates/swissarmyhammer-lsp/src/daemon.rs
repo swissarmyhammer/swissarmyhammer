@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
@@ -43,6 +43,13 @@ const BACKOFF_CAP_SECS: u64 = 60;
 
 /// Timeout for the graceful shutdown phase before SIGKILL.
 const SHUTDOWN_GRACE_SECS: u64 = 5;
+
+/// The time a server must stay up after a good start before the daemon
+/// clears its consecutive failure count.
+///
+/// A good `initialize` alone does not prove a recovery: a server that
+/// initializes and then crashes would otherwise restart with no limit.
+const MIN_HEALTHY_UPTIME: Duration = Duration::from_secs(5 * 60);
 
 /// Compute the backoff duration for the given attempt number (0-indexed).
 ///
@@ -79,7 +86,19 @@ pub struct LspDaemon {
     /// documents open across them — no other type spawns a client.
     session: LspSession<LspJsonRpcClient>,
     /// Consecutive failure count for backoff calculation.
+    ///
+    /// A good start does not clear it. Only a server that stays up for
+    /// [`min_healthy_uptime`](Self::min_healthy_uptime) clears it (see
+    /// [`health_check`](Self::health_check)), so a server that crashes after
+    /// each good `initialize` reaches [`MAX_CONSECUTIVE_FAILURES`].
     consecutive_failures: u32,
+    /// The time of the last good start, while the server runs. `None` when
+    /// no server runs.
+    healthy_since: Option<Instant>,
+    /// Whether [`restart_with_backoff`](Self::restart_with_backoff) has logged
+    /// that it stopped at the restart limit. The error is logged one time,
+    /// not at each health interval.
+    restart_limit_reported: bool,
     /// Observable state — subscribers get notified on every transition.
     state_tx: watch::Sender<LspDaemonState>,
     /// Read-side of the state watch (cloneable for external consumers).
@@ -89,6 +108,10 @@ pub struct LspDaemon {
     /// [`set_shutdown_grace`](Self::set_shutdown_grace) so they don't wait out
     /// the full production grace period when probing the timeout path.
     shutdown_grace: Duration,
+    /// The uptime after which a running server clears the failure count.
+    /// Defaults to [`MIN_HEALTHY_UPTIME`]; tests override it via
+    /// [`set_min_healthy_uptime`](Self::set_min_healthy_uptime).
+    min_healthy_uptime: Duration,
     /// Optional predicate suppressing matching LSP-server stderr lines.
     ///
     /// Injected by the owner so this crate doesn't depend on any config source.
@@ -124,9 +147,12 @@ impl LspDaemon {
             client,
             session,
             consecutive_failures: 0,
+            healthy_since: None,
+            restart_limit_reported: false,
             state_tx,
             state_rx,
             shutdown_grace: Duration::from_secs(SHUTDOWN_GRACE_SECS),
+            min_healthy_uptime: MIN_HEALTHY_UPTIME,
             stderr_filter: None,
         }
     }
@@ -160,6 +186,16 @@ impl LspDaemon {
     #[cfg(test)]
     pub(crate) fn set_shutdown_grace(&mut self, grace: Duration) {
         self.shutdown_grace = grace;
+    }
+
+    /// Override the uptime after which a running server clears the failure
+    /// count.
+    ///
+    /// Test-only seam: the production default is [`MIN_HEALTHY_UPTIME`]
+    /// (minutes), so tests set a short period to probe the reset.
+    #[cfg(test)]
+    pub(crate) fn set_min_healthy_uptime(&mut self, uptime: Duration) {
+        self.min_healthy_uptime = uptime;
     }
 
     /// Get a cloneable receiver to observe state changes.
@@ -338,7 +374,9 @@ impl LspDaemon {
                     *guard = client;
                 }
                 self.child = Some(child);
-                self.consecutive_failures = 0;
+                // A good start does not clear the failure count: the server
+                // must first stay up for the minimum healthy uptime.
+                self.healthy_since = Some(Instant::now());
                 self.set_state(LspDaemonState::Running {
                     pid,
                     since_epoch_ms,
@@ -389,7 +427,10 @@ impl LspDaemon {
                 self.record_failure(reason);
                 false
             }
-            Ok(None) => true, // still running
+            Ok(None) => {
+                self.clear_failures_after_healthy_uptime();
+                true
+            }
             Err(e) => {
                 let reason = format!("try_wait error: {e}");
                 warn!(cmd = self.spec.command, %e, "Error checking LSP server health");
@@ -412,12 +453,22 @@ impl LspDaemon {
     /// Returns `Ok(())` if the server was restarted, or `Err` if the backoff
     /// budget is exhausted (>= MAX_CONSECUTIVE_FAILURES) or the restart itself
     /// fails.
+    ///
+    /// At the limit the daemon stops: it starts no server, and it logs the
+    /// error one time. A later call at the limit returns the same error and
+    /// logs nothing, so the health loop does not repeat the log at each
+    /// interval. [`force_restart`](Self::force_restart) starts again.
     pub async fn restart_with_backoff(&mut self) -> Result<(), LspError> {
         if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-            return Err(LspError::HandshakeFailed(format!(
+            let reason = format!(
                 "too many consecutive failures ({}), giving up",
                 self.consecutive_failures
-            )));
+            );
+            if !self.restart_limit_reported {
+                self.restart_limit_reported = true;
+                error!(cmd = self.spec.command, %reason, "LSP server restart limit reached");
+            }
+            return Err(LspError::HandshakeFailed(reason));
         }
 
         let delay = backoff_duration(self.consecutive_failures);
@@ -438,7 +489,7 @@ impl LspDaemon {
     pub async fn force_restart(&mut self) -> Result<(), LspError> {
         info!(cmd = self.spec.command, "Force-restarting LSP server");
         self.shutdown().await;
-        self.consecutive_failures = 0;
+        self.clear_failures();
         self.start().await
     }
 
@@ -456,6 +507,7 @@ impl LspDaemon {
         // The server is going away; forget what it had open so a later restart
         // re-announces documents instead of suppressing them as duplicates.
         self.session.reset_documents();
+        self.healthy_since = None;
 
         let child = match self.child.take() {
             Some(c) => c,
@@ -496,8 +548,31 @@ impl LspDaemon {
         let _ = self.state_tx.send(state);
     }
 
+    /// Clear the failure count and the record of the restart-limit log.
+    fn clear_failures(&mut self) {
+        self.consecutive_failures = 0;
+        self.restart_limit_reported = false;
+    }
+
+    /// Clear the failure count when the server has stayed up for the minimum
+    /// healthy uptime since its last good start.
+    fn clear_failures_after_healthy_uptime(&mut self) {
+        let healthy_long_enough = self
+            .healthy_since
+            .is_some_and(|since| since.elapsed() >= self.min_healthy_uptime);
+        if healthy_long_enough && self.consecutive_failures > 0 {
+            debug!(
+                cmd = self.spec.command,
+                failures = self.consecutive_failures,
+                "LSP server stayed healthy; clearing the failure count"
+            );
+            self.clear_failures();
+        }
+    }
+
     /// Record a failure, incrementing the consecutive counter.
     fn record_failure(&mut self, reason: String) {
+        self.healthy_since = None;
         self.consecutive_failures += 1;
         self.set_state(LspDaemonState::Failed {
             reason,
@@ -2014,6 +2089,131 @@ time.sleep(0.5)
         );
     }
 
+    /// A fake server that answers `initialize`, reads `initialized`, and
+    /// then exits. It is a server that crashes after each good start.
+    const EXIT_AFTER_INITIALIZE_SCRIPT: &str = r#"
+import sys, re, json
+def read_message():
+    headers = ''
+    while True:
+        line = sys.stdin.readline()
+        if line.strip() == '':
+            break
+        headers += line
+    m = re.search(r'Content-Length:\s*(\d+)', headers)
+    if m:
+        sys.stdin.read(int(m.group(1)))
+read_message()
+resp = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"capabilities": {}}})
+sys.stdout.write(f'Content-Length: {len(resp)}\r\n\r\n{resp}')
+sys.stdout.flush()
+read_message()
+"#;
+
+    /// Start `daemon`, wait until its server exits, and run one health check
+    /// that sees the exit.
+    async fn start_and_wait_for_crash(daemon: &mut LspDaemon) {
+        daemon
+            .start()
+            .await
+            .expect("the fake server answers initialize");
+        daemon
+            .child
+            .as_mut()
+            .expect("a started daemon holds its child")
+            .wait()
+            .await
+            .expect("the fake server exits");
+        assert!(!daemon.health_check(), "the health check must see the exit");
+    }
+
+    /// A server that crashes after each good `initialize` must not restart
+    /// with no limit: a good start does not clear the failure count, so the
+    /// count reaches the limit and the restart stops.
+    #[tokio::test]
+    async fn test_crash_after_each_good_initialize_reaches_the_failure_limit() {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(
+            python_mock_spec(EXIT_AFTER_INITIALIZE_SCRIPT),
+            workspace.path().to_path_buf(),
+        );
+
+        for _ in 0..MAX_CONSECUTIVE_FAILURES {
+            start_and_wait_for_crash(&mut daemon).await;
+        }
+
+        assert_eq!(daemon.consecutive_failures, MAX_CONSECUTIVE_FAILURES);
+        let result = daemon.restart_with_backoff().await;
+        assert!(
+            matches!(&result, Err(LspError::HandshakeFailed(msg)) if msg.contains("giving up")),
+            "the restart must stop at the limit, got: {result:?}"
+        );
+        assert!(daemon.child.is_none(), "no server may start at the limit");
+    }
+
+    /// The error at the restart limit is logged one time, not at each call
+    /// of the health loop.
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_restart_at_the_limit_logs_the_error_one_time() {
+        let mut daemon = LspDaemon::new(
+            test_spec("nonexistent-lsp-binary-abc123xyz"),
+            PathBuf::from("/tmp"),
+        );
+        daemon.consecutive_failures = MAX_CONSECUTIVE_FAILURES;
+
+        let _ = daemon.restart_with_backoff().await;
+        let _ = daemon.restart_with_backoff().await;
+
+        logs_assert(|lines: &[&str]| {
+            let count = lines
+                .iter()
+                .filter(|line| line.contains("ERROR") && line.contains("giving up"))
+                .count();
+            match count {
+                1 => Ok(()),
+                n => Err(format!("expected one error log at the limit, got {n}")),
+            }
+        });
+    }
+
+    /// A server that stays up for the minimum healthy uptime has recovered:
+    /// the health check then clears the failure count.
+    #[tokio::test]
+    async fn test_health_check_clears_failures_after_the_minimum_healthy_uptime() {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(cat_spec(), workspace.path().to_path_buf());
+        daemon.set_min_healthy_uptime(Duration::ZERO);
+        daemon
+            .start()
+            .await
+            .expect("cat echo handshake should pass");
+        daemon.consecutive_failures = 3;
+
+        assert!(daemon.health_check(), "cat is still running");
+
+        assert_eq!(daemon.consecutive_failures, 0);
+        daemon.shutdown().await;
+    }
+
+    /// A server that is up for less than the minimum healthy uptime keeps
+    /// its failure count.
+    #[tokio::test]
+    async fn test_health_check_keeps_failures_before_the_minimum_healthy_uptime() {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(cat_spec(), workspace.path().to_path_buf());
+        daemon
+            .start()
+            .await
+            .expect("cat echo handshake should pass");
+        daemon.consecutive_failures = 3;
+
+        assert!(daemon.health_check(), "cat is still running");
+
+        assert_eq!(daemon.consecutive_failures, 3);
+        daemon.shutdown().await;
+    }
+
     #[tokio::test]
     async fn test_health_check_multiple_calls_after_exit() {
         // After a process has exited and been detected by health_check,
@@ -2234,7 +2434,7 @@ time.sleep(0.5)
             other => panic!("expected Running, got: {other:?}"),
         }
 
-        // Successful start must reset consecutive_failures.
+        // A successful start adds no failure.
         assert_eq!(daemon.consecutive_failures, 0);
 
         daemon.shutdown().await;
@@ -3109,7 +3309,7 @@ time.sleep(0.5)
             "expected restart_with_backoff to succeed: {result:?}"
         );
         assert!(matches!(daemon.state(), LspDaemonState::Running { .. }));
-        // Successful start resets consecutive_failures
+        // A successful start adds no failure
         assert_eq!(daemon.consecutive_failures, 0);
         // Must have waited at least ~1s for the backoff
         assert!(

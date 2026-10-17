@@ -9,7 +9,41 @@
 use super::McpServer;
 use std::sync::Arc;
 
+use crate::mcp::tools::code_context::{
+    install_lsp_supervisor, shutdown_lsp_supervisor, track_lsp_task, SharedLspSupervisor,
+};
+use swissarmyhammer_code_context::{SharedDb, SharedLspSession, ShutdownFlag};
 use swissarmyhammer_common::utils::find_git_repository_root_from;
+
+/// The `(server_name, session)` pairs of the running LSP servers.
+type LspClients = Vec<(String, SharedLspSession)>;
+
+/// The result of one LSP supervisor start.
+pub(super) struct LspStartup {
+    /// The supervisor that the start put in the process slot.
+    supervisor: SharedLspSupervisor,
+    /// The sessions of the servers that are running after the start.
+    clients: LspClients,
+}
+
+/// What the LSP workers of one leader tenure need.
+struct LspWorkerSetup<'a> {
+    /// The workspace root.
+    workspace_root: &'a std::path::Path,
+    /// The read-write index database of the leader.
+    shared_db: &'a SharedDb,
+    /// The supervisor that owns the sessions. Each spawned task is tied to
+    /// it, so the task stops when the supervisor leaves the slot.
+    supervisor: &'a SharedLspSupervisor,
+    /// Text added to the start logs (for example `" (after promotion)"`).
+    log_suffix: &'a str,
+    /// The bus frontend of the leader, for the cross-process fan-out.
+    bus_frontend: Option<&'a str>,
+    /// The election request socket that the leader serves.
+    socket_path: &'a std::path::Path,
+    /// The shutdown flag of this leader tenure.
+    shutdown: ShutdownFlag,
+}
 
 impl McpServer {
     /// How often followers retry promotion to leader.
@@ -157,9 +191,7 @@ impl McpServer {
     fn spawn_lsp_supervisor_if_leader(
         is_leader: bool,
         workspace_root: &std::path::Path,
-    ) -> Option<
-        tokio::task::JoinHandle<Vec<(String, swissarmyhammer_code_context::SharedLspSession)>>,
-    > {
+    ) -> Option<tokio::task::JoinHandle<LspStartup>> {
         is_leader.then(|| Self::spawn_lsp_supervisor(workspace_root.to_path_buf()))
     }
 
@@ -177,65 +209,38 @@ impl McpServer {
         }
     }
 
-    /// Spawn the LSP supervisor task. Starts every configured LSP daemon,
-    /// installs the supervisor into `LSP_SUPERVISOR`, and returns the list of
-    /// successfully-running `(server_name, session)` pairs via the task's join
-    /// handle.
+    /// Spawn the LSP supervisor task.
+    ///
+    /// The task puts a new supervisor in the process slot (this shuts down a
+    /// supervisor that was there before), starts every configured LSP daemon,
+    /// and gives the supervisor and its running `(server_name, session)`
+    /// pairs through the join handle.
+    ///
+    /// The task locks the supervisor before it puts it in the slot, and holds
+    /// the lock until the start ends. Thus a step-down that takes the
+    /// supervisor from the slot during the start waits for the start, and
+    /// then shuts down each server that the start spawned.
     fn spawn_lsp_supervisor(
         workspace_root: std::path::PathBuf,
-    ) -> tokio::task::JoinHandle<Vec<(String, swissarmyhammer_code_context::SharedLspSession)>>
-    {
+    ) -> tokio::task::JoinHandle<LspStartup> {
         tokio::spawn(async move {
-            // Build the LSP-server stderr-noise filter from code-context's
-            // stacked config and inject it into the supervisor. The filter
-            // source lives in code-context; `swissarmyhammer-lsp` only exposes
-            // the injection seam, so it carries no config dependency.
-            let mut supervisor =
-                swissarmyhammer_lsp::LspSupervisorManager::new(workspace_root.clone());
-            // Inject the path filter the same way: the ignore rules live in
-            // code-context, and the LSP sessions skip each ignored path and
-            // each path outside the workspace root. Thus no didOpen and no
-            // request goes to a language server for build output such as
-            // `.build/checkouts/`.
-            // The filter is the one shared rule set of the workspace, so a
-            // watcher that loads the rules again after an ignore file change
-            // also changes what the sessions skip.
-            supervisor = supervisor
-                .with_path_filter(workspace_ignore_filter(&workspace_root).await.path_filter());
-            if let Ok(compiled) = swissarmyhammer_code_context::CompiledCodeContextConfig::compile(
-                &swissarmyhammer_code_context::load_code_context_config(),
-            ) {
-                let compiled = std::sync::Arc::new(compiled);
-                supervisor =
-                    supervisor.with_stderr_filter(std::sync::Arc::new(move |line: &str| {
-                        swissarmyhammer_code_context::should_filter_stderr(line, &compiled)
-                    }));
-            }
-            let results = supervisor.start().await;
-            let ok_count = results.iter().filter(|r| r.is_ok()).count();
-            let err_count = results.iter().filter(|r| r.is_err()).count();
-            tracing::info!(
-                "code-context: LSP supervisor started — {} servers ok, {} failed",
-                ok_count,
-                err_count
-            );
-            for r in &results {
-                if let Err(e) = r {
-                    tracing::warn!("code-context: LSP start error: {}", e);
-                }
-            }
-
-            let clients = collect_running_lsp_clients(&supervisor);
+            let supervisor: SharedLspSupervisor = Arc::new(tokio::sync::Mutex::new(
+                build_lsp_supervisor(&workspace_root).await,
+            ));
+            let mut start_guard = Arc::clone(&supervisor).lock_owned().await;
+            install_lsp_supervisor(Arc::clone(&supervisor)).await;
+            log_lsp_start_results(&start_guard.start().await);
+            let clients = collect_running_lsp_clients(&start_guard);
+            drop(start_guard);
             tracing::info!(
                 "code-context: {} LSP clients available for indexing: {:?}",
                 clients.len(),
                 clients.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>()
             );
-
-            use crate::mcp::tools::code_context::LSP_SUPERVISOR;
-            let _ = LSP_SUPERVISOR.set(Arc::new(tokio::sync::Mutex::new(supervisor)));
-
-            clients
+            LspStartup {
+                supervisor,
+                clients,
+            }
         })
     }
 
@@ -353,7 +358,7 @@ impl McpServer {
                     workspace = %workspace_root.display(),
                     "code-context: lost leadership lease, stepping down"
                 );
-                ws.lock().expect("workspace mutex poisoned").step_down();
+                step_down_and_stop_lsp(&ws).await;
                 // Now a follower again — poll for re-promotion and stop this loop.
                 Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone(), None);
                 break;
@@ -364,46 +369,62 @@ impl McpServer {
     /// Waits for the LSP supervisor to finish, starts LSP indexing workers if
     /// we're the leader, then runs the 60s LSP health-check loop forever.
     fn spawn_lsp_health_loop(
-        lsp_handle: tokio::task::JoinHandle<
-            Vec<(String, swissarmyhammer_code_context::SharedLspSession)>,
-        >,
+        lsp_handle: tokio::task::JoinHandle<LspStartup>,
         ws: Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
         workspace_root: std::path::PathBuf,
     ) {
-        Self::spawn_drain_supervisor_and_health_loop(lsp_handle, move |clients| {
-            start_lsp_workers_if_leader(&ws, &workspace_root, clients, "");
-        });
+        let shutdown = ws
+            .lock()
+            .expect("workspace mutex poisoned")
+            .leader_shutdown_flag()
+            .expect("leader has a shutdown flag");
+        Self::spawn_drain_supervisor_and_health_loop(
+            lsp_handle,
+            shutdown,
+            move |supervisor, clients| {
+                start_lsp_workers_if_leader(&ws, &workspace_root, supervisor, clients, "");
+            },
+        );
     }
 
-    /// Await the LSP supervisor's startup task, hand its running clients to
-    /// `start_workers` (skipped when none are available), then run the LSP
-    /// health-check loop for the rest of the process's lifetime.
+    /// Await the LSP supervisor's startup task, hand its supervisor and
+    /// running clients to `start_workers` (skipped when no client runs), then
+    /// run the LSP health-check loop until the leader tenure ends.
+    ///
+    /// `shutdown` is the shutdown flag of the leader tenure. When it is set
+    /// before the start ends (a step-down came first), no worker starts and
+    /// no health loop runs.
     ///
     /// Shared by initial-leader startup and the post-promotion cold re-spawn;
     /// the two differ only in how they start workers (the `start_workers`
     /// closure), so the await/drain/health-loop shell lives here once.
     fn spawn_drain_supervisor_and_health_loop<F>(
-        lsp_handle: tokio::task::JoinHandle<
-            Vec<(String, swissarmyhammer_code_context::SharedLspSession)>,
-        >,
+        lsp_handle: tokio::task::JoinHandle<LspStartup>,
+        shutdown: ShutdownFlag,
         start_workers: F,
     ) where
-        F: FnOnce(&[(String, swissarmyhammer_code_context::SharedLspSession)]) + Send + 'static,
+        F: FnOnce(&SharedLspSupervisor, &[(String, SharedLspSession)]) + Send + 'static,
     {
         tokio::spawn(async move {
-            let clients = match lsp_handle.await {
-                Ok(clients) => clients,
+            let startup = match lsp_handle.await {
+                Ok(startup) => startup,
                 Err(e) => {
                     tracing::error!("code-context: LSP supervisor task failed: {e}");
-                    Vec::new()
+                    return;
                 }
             };
-            if clients.is_empty() {
+            if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                tracing::info!(
+                    "code-context: the leader stepped down before the LSP start ended; starting no LSP worker"
+                );
+                return;
+            }
+            if startup.clients.is_empty() {
                 tracing::info!("code-context: no LSP clients available, skipping LSP indexing");
             } else {
-                start_workers(&clients);
+                start_workers(&startup.supervisor, &startup.clients);
             }
-            run_lsp_health_check_loop().await;
+            run_lsp_health_check_loop(&startup.supervisor, &shutdown).await;
         });
     }
 
@@ -518,17 +539,23 @@ impl McpServer {
         // here, so workers start directly (no further is_leader gate).
         let lsp_db = std::sync::Arc::clone(&shared_db);
         let lsp_handle = Self::spawn_lsp_supervisor(workspace_root.clone());
-        Self::spawn_drain_supervisor_and_health_loop(lsp_handle, move |clients| {
-            spawn_lsp_workers_for_clients(
-                &workspace_root,
-                &lsp_db,
-                clients,
-                " (after promotion)",
-                bus_frontend.as_deref(),
-                &socket_path,
-                std::sync::Arc::clone(&shutdown),
-            );
-        });
+        let worker_shutdown = std::sync::Arc::clone(&shutdown);
+        Self::spawn_drain_supervisor_and_health_loop(
+            lsp_handle,
+            shutdown,
+            move |supervisor, clients| {
+                let setup = LspWorkerSetup {
+                    workspace_root: &workspace_root,
+                    shared_db: &lsp_db,
+                    supervisor,
+                    log_suffix: " (after promotion)",
+                    bus_frontend: bus_frontend.as_deref(),
+                    socket_path: &socket_path,
+                    shutdown: worker_shutdown,
+                };
+                spawn_lsp_workers_for_clients(&setup, clients);
+            },
+        );
     }
 }
 
@@ -588,6 +615,66 @@ fn ignore_filter_or_hard_skips(
         );
         swissarmyhammer_code_context::IgnoreFilter::hard_skips_only(workspace_root)
     })
+}
+
+/// Make a new LSP supervisor for `workspace_root` with the filters of this
+/// process.
+///
+/// The path filter is the one shared ignore rule set of the workspace: the
+/// LSP sessions skip each ignored path and each path outside the workspace
+/// root. Thus no didOpen and no request goes to a language server for build
+/// output such as `.build/checkouts/`, and a watcher that loads the rules
+/// again after an ignore file change also changes what the sessions skip.
+/// Each supervisor that a promotion makes gets the same filter.
+///
+/// The stderr-noise filter comes from the stacked code-context config. The
+/// filter sources live in code-context; `swissarmyhammer-lsp` only gives the
+/// injection seams, so it carries no config dependency.
+async fn build_lsp_supervisor(
+    workspace_root: &std::path::Path,
+) -> swissarmyhammer_lsp::LspSupervisorManager {
+    let supervisor = swissarmyhammer_lsp::LspSupervisorManager::new(workspace_root.to_path_buf())
+        .with_path_filter(workspace_ignore_filter(workspace_root).await.path_filter());
+    match swissarmyhammer_code_context::CompiledCodeContextConfig::compile(
+        &swissarmyhammer_code_context::load_code_context_config(),
+    ) {
+        Ok(compiled) => {
+            let compiled = Arc::new(compiled);
+            supervisor.with_stderr_filter(Arc::new(move |line: &str| {
+                swissarmyhammer_code_context::should_filter_stderr(line, &compiled)
+            }))
+        }
+        Err(_) => supervisor,
+    }
+}
+
+/// Log the outcome of one supervisor start: the counts, and each error.
+fn log_lsp_start_results(results: &[Result<(), swissarmyhammer_lsp::LspError>]) {
+    let ok_count = results.iter().filter(|r| r.is_ok()).count();
+    let err_count = results.len() - ok_count;
+    tracing::info!(
+        "code-context: LSP supervisor started — {} servers ok, {} failed",
+        ok_count,
+        err_count
+    );
+    for e in results.iter().filter_map(|r| r.as_ref().err()) {
+        tracing::warn!("code-context: LSP start error: {}", e);
+    }
+}
+
+/// Step the leader down to follower and stop its LSP servers.
+///
+/// `step_down` sets the shutdown flag of the tenure, so the indexing workers
+/// and the health loop stop. Then the supervisor leaves the process slot: the
+/// tasks that use its sessions (the diagnostics watcher, the request server,
+/// the diagnostics feeds) are aborted, and each LSP server is shut down. The
+/// shutdown waits for a start in progress, so no LSP child of this tenure
+/// stays alive.
+async fn step_down_and_stop_lsp(
+    ws: &Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
+) {
+    ws.lock().expect("workspace mutex poisoned").step_down();
+    shutdown_lsp_supervisor().await;
 }
 
 /// Walk up from `work_dir` to find the enclosing git repository root. Returns
@@ -666,14 +753,13 @@ fn lsp_client_if_running(
 /// `bus_frontend` is the leader's bus frontend address (from
 /// [`CodeContextWorkspace::bus_addresses`]); `None` skips the cross-process
 /// fan-out (the in-process diagnostics fan-out is unaffected).
+///
+/// Each task this spawns (except the indexing worker, which obeys the
+/// shutdown flag) is tied to `setup.supervisor`, so it stops when that
+/// supervisor leaves the process slot at a step-down or at exit.
 fn spawn_lsp_workers_for_clients(
-    workspace_root: &std::path::Path,
-    shared_db: &swissarmyhammer_code_context::SharedDb,
-    clients: &[(String, swissarmyhammer_code_context::SharedLspSession)],
-    log_suffix: &str,
-    bus_frontend: Option<&str>,
-    socket_path: &std::path::Path,
-    shutdown: swissarmyhammer_code_context::ShutdownFlag,
+    setup: &LspWorkerSetup<'_>,
+    clients: &[(String, SharedLspSession)],
 ) {
     if clients.is_empty() {
         return;
@@ -684,74 +770,101 @@ fn spawn_lsp_workers_for_clients(
     // route diagnose/query calls to this one server. Done here — the single
     // chokepoint both initial-leader and post-promotion startup pass through —
     // right where the running sessions first become available.
-    spawn_request_server_for_leader(socket_path, clients);
-    use swissarmyhammer_code_context::{spawn_lsp_indexing_worker, LspWorkerConfig};
+    if let Some(task) = spawn_request_server_for_leader(setup.socket_path, clients) {
+        track_lsp_task(setup.supervisor, task.abort_handle());
+    }
     for (server_name, session) in clients {
-        let worker_db = std::sync::Arc::clone(shared_db);
-        spawn_lsp_indexing_worker(
-            workspace_root.to_path_buf(),
-            worker_db,
-            session.clone(),
-            LspWorkerConfig::default(),
-            server_name.clone(),
-            shutdown.clone(),
-        );
-        tracing::info!(
-            "code-context: LSP indexing worker started for {}{} (server: {})",
-            workspace_root.display(),
-            log_suffix,
-            server_name,
-        );
+        spawn_session_workers(setup, server_name, session);
+    }
+    spawn_diagnostics_watcher(setup, clients);
+}
 
-        // Each session has its own in-process diagnostics fan-out, so the
-        // cross-process re-publisher is per session.
-        spawn_diagnostics_fan_out(server_name, session, bus_frontend);
+/// Spawn the workers of one LSP session: the indexing worker, the
+/// cross-process diagnostics fan-out, and the diagnostics resource feed.
+fn spawn_session_workers(
+    setup: &LspWorkerSetup<'_>,
+    server_name: &str,
+    session: &SharedLspSession,
+) {
+    use swissarmyhammer_code_context::{spawn_lsp_indexing_worker, LspWorkerConfig};
+    spawn_lsp_indexing_worker(
+        setup.workspace_root.to_path_buf(),
+        Arc::clone(setup.shared_db),
+        session.clone(),
+        LspWorkerConfig::default(),
+        server_name.to_string(),
+        setup.shutdown.clone(),
+    );
+    tracing::info!(
+        "code-context: LSP indexing worker started for {}{} (server: {})",
+        setup.workspace_root.display(),
+        setup.log_suffix,
+        server_name,
+    );
 
-        // A third consumer of the same in-process fan-out: feed each per-uri
-        // update into the subscribable diagnostics MCP resource so a host that
-        // subscribed gets `notifications/resources/updated` without a tool call.
-        // Runs regardless of `bus_frontend` — the resource lives in-process.
-        spawn_diagnostics_resource_feed(server_name, session);
+    // Each session has its own in-process diagnostics fan-out, so the
+    // cross-process re-publisher is per session.
+    if let Some(task) = spawn_diagnostics_fan_out(server_name, session, setup.bus_frontend) {
+        track_lsp_task(setup.supervisor, task.abort_handle());
     }
 
-    // Exactly ONE diagnostics file watcher per workdir (not per session): it
-    // watches the tree once and routes each changed file to the session whose
-    // server handles that extension, so a multi-language workspace does not run
-    // N watchers and a `.py` edit is never fed into the rust session. The watch
-    // root is canonicalized so the watcher's `didChange` uris match the
-    // canonical paths the sessions open documents under (on macOS `/var`
-    // resolves to `/private/var`); a mismatch would split a file into two
-    // documents from the server's view.
-    let routes = build_diagnostics_routes(clients);
-    if !routes.is_empty() {
-        let watch_root =
-            std::fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
-        // Best-effort watcher-push: tell a connected host (via a plain MCP
-        // `notifications/message`) when a native edit is seen. The notifier is a
-        // courtesy channel — a `None`/absent peer never gates the re-diagnose.
-        let notifier: swissarmyhammer_diagnostics::WatcherNotifier =
-            std::sync::Arc::new(|path: &std::path::Path| {
-                crate::mcp::diagnostics_resource::watcher_push_log(path);
-            });
-        // The watcher shares the one ignore rule set of the workspace. The
-        // rules have the workspace root; the watcher gives each path in the
-        // canonical form of `watch_root`.
-        let filter_root = workspace_root.to_path_buf();
-        tokio::spawn(async move {
-            let filter = workspace_ignore_filter(&filter_root).await;
-            swissarmyhammer_diagnostics::start_diagnostics_watcher_with_notifier(
-                watch_root,
-                routes,
-                filter,
-                Some(notifier),
-            );
+    // A third consumer of the same in-process fan-out: feed each per-uri
+    // update into the subscribable diagnostics MCP resource so a host that
+    // subscribed gets `notifications/resources/updated` without a tool call.
+    // Runs regardless of `bus_frontend` — the resource lives in-process.
+    let feed = spawn_diagnostics_resource_feed(server_name, session);
+    track_lsp_task(setup.supervisor, feed.abort_handle());
+}
+
+/// Spawn the one diagnostics file watcher of the workspace.
+///
+/// Exactly ONE diagnostics file watcher per workdir (not per session): it
+/// watches the tree once and routes each changed file to the session whose
+/// server handles that extension, so a multi-language workspace does not run
+/// N watchers and a `.py` edit is never fed into the rust session. The watch
+/// root is canonicalized so the watcher's `didChange` uris match the
+/// canonical paths the sessions open documents under (on macOS `/var`
+/// resolves to `/private/var`); a mismatch would split a file into two
+/// documents from the server's view.
+///
+/// The watcher task and the task that starts it are both tied to the
+/// supervisor, so a step-down stops the watcher.
+fn spawn_diagnostics_watcher(setup: &LspWorkerSetup<'_>, clients: &[(String, SharedLspSession)]) {
+    let routes = build_diagnostics_routes(setup.supervisor, clients);
+    if routes.is_empty() {
+        return;
+    }
+    let workspace_root = setup.workspace_root;
+    let watch_root =
+        std::fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
+    // Best-effort watcher-push: tell a connected host (via a plain MCP
+    // `notifications/message`) when a native edit is seen. The notifier is a
+    // courtesy channel — a `None`/absent peer never gates the re-diagnose.
+    let notifier: swissarmyhammer_diagnostics::WatcherNotifier =
+        Arc::new(|path: &std::path::Path| {
+            crate::mcp::diagnostics_resource::watcher_push_log(path);
         });
-        tracing::info!(
-            "diagnostics: file watcher started for {}{}",
-            workspace_root.display(),
-            log_suffix,
+    // The watcher shares the one ignore rule set of the workspace. The
+    // rules have the workspace root; the watcher gives each path in the
+    // canonical form of `watch_root`.
+    let filter_root = workspace_root.to_path_buf();
+    let owner = Arc::clone(setup.supervisor);
+    let starter = tokio::spawn(async move {
+        let filter = workspace_ignore_filter(&filter_root).await;
+        let watcher = swissarmyhammer_diagnostics::start_diagnostics_watcher_with_notifier(
+            watch_root,
+            routes,
+            filter,
+            Some(notifier),
         );
-    }
+        track_lsp_task(&owner, watcher.abort_handle());
+    });
+    track_lsp_task(setup.supervisor, starter.abort_handle());
+    tracing::info!(
+        "diagnostics: file watcher started for {}{}",
+        workspace_root.display(),
+        setup.log_suffix,
+    );
 }
 
 /// Bind the leader-election request socket and serve the SAH request API onto
@@ -770,13 +883,13 @@ fn spawn_lsp_workers_for_clients(
 /// and skipped — it must not take down the leader's indexing/diagnostics workers.
 /// A follower that then cannot connect surfaces the typed not-leader error on its
 /// own side.
+///
+/// Returns the serve task, or `None` when no task started.
 fn spawn_request_server_for_leader(
     socket_path: &std::path::Path,
-    clients: &[(String, swissarmyhammer_code_context::SharedLspSession)],
-) {
-    let Some((server_name, session)) = clients.first() else {
-        return;
-    };
+    clients: &[(String, SharedLspSession)],
+) -> Option<tokio::task::JoinHandle<()>> {
+    let (server_name, session) = clients.first()?;
     let server = match swissarmyhammer_diagnostics::RequestServer::bind(socket_path) {
         Ok(server) => server,
         Err(e) => {
@@ -785,7 +898,7 @@ fn spawn_request_server_for_leader(
                 error = %e,
                 "diagnostics: leader could not bind the request socket; followers cannot route to it",
             );
-            return;
+            return None;
         }
     };
     tracing::info!(
@@ -794,7 +907,7 @@ fn spawn_request_server_for_leader(
         "diagnostics: leader serving the request socket for follower diagnose/query",
     );
     let session = session.clone();
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         let result = swissarmyhammer_diagnostics::serve_session_requests(
             server,
             session,
@@ -805,23 +918,21 @@ fn spawn_request_server_for_leader(
         if let Err(e) = result {
             tracing::warn!(error = %e, "diagnostics: request socket serve loop ended with error");
         }
-    });
+    }))
 }
 
 /// Build the diagnostics watcher's per-server routing table from the running
-/// clients, resolving each server's file extensions from the supervisor.
+/// clients, resolving each server's file extensions from `supervisor`.
 ///
 /// A server whose extensions cannot be resolved (supervisor lock contended, or
 /// daemon gone) is dropped from the table — its files simply will not be
 /// re-diagnosed by the watcher until the next startup, which is safe.
 fn build_diagnostics_routes(
-    clients: &[(String, swissarmyhammer_code_context::SharedLspSession)],
+    supervisor: &SharedLspSupervisor,
+    clients: &[(String, SharedLspSession)],
 ) -> Vec<swissarmyhammer_diagnostics::SessionRoute> {
-    use crate::mcp::tools::code_context::LSP_SUPERVISOR;
-
     let extensions_for = |server_name: &str| -> Option<Vec<String>> {
-        let sup = LSP_SUPERVISOR.get()?;
-        let guard = sup.try_lock().ok()?;
+        let guard = supervisor.try_lock().ok()?;
         let daemon = guard.get_daemon(server_name)?;
         Some(daemon.file_extensions().to_vec())
     };
@@ -847,18 +958,17 @@ fn build_diagnostics_routes(
 /// [`fan_out_to_bus`](swissarmyhammer_diagnostics::fan_out_to_bus). A follower
 /// (no `bus_frontend`) or a publisher that fails to connect is skipped: the
 /// in-process fan-out still works, only the cross-process mirror is absent.
+///
+/// Returns the fan-out task, or `None` when there is no bus frontend.
 fn spawn_diagnostics_fan_out(
     server_name: &str,
-    session: &swissarmyhammer_code_context::SharedLspSession,
+    session: &SharedLspSession,
     bus_frontend: Option<&str>,
-) {
-    let Some(frontend) = bus_frontend else {
-        return;
-    };
-    let frontend = frontend.to_string();
+) -> Option<tokio::task::JoinHandle<()>> {
+    let frontend = bus_frontend?.to_string();
     let rx = session.subscribe();
     let server = server_name.to_string();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         if let Err(e) = swissarmyhammer_diagnostics::fan_out_over_bus(&frontend, rx).await {
             tracing::warn!(
                 server = %server,
@@ -868,6 +978,7 @@ fn spawn_diagnostics_fan_out(
         }
     });
     tracing::info!("diagnostics: cross-process fan-out started (server: {server_name})");
+    Some(task)
 }
 
 /// Feed one session's in-process diagnostics fan-out into the subscribable
@@ -882,15 +993,17 @@ fn spawn_diagnostics_fan_out(
 /// subscribing host (best-effort). A `Lagged` receiver skips ahead — diagnostics
 /// are full per-uri replacements, so missing an intermediate update only delays
 /// the host one tick.
+///
+/// Returns the feed task.
 fn spawn_diagnostics_resource_feed(
     server_name: &str,
-    session: &swissarmyhammer_code_context::SharedLspSession,
-) {
+    session: &SharedLspSession,
+) -> tokio::task::JoinHandle<()> {
     use tokio::sync::broadcast::error::RecvError;
 
     let mut rx = session.subscribe();
     let server = server_name.to_string();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(update) => {
@@ -911,6 +1024,7 @@ fn spawn_diagnostics_resource_feed(
         }
     });
     tracing::info!("diagnostics: resource feed started (server: {server_name})");
+    task
 }
 
 /// Try to promote the workspace to leader. Returns `Ok(Some(db))` on success,
@@ -998,7 +1112,8 @@ fn handle_promotion_result(
 fn start_lsp_workers_if_leader(
     ws: &Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
     workspace_root: &std::path::Path,
-    clients: &[(String, swissarmyhammer_code_context::SharedLspSession)],
+    supervisor: &SharedLspSupervisor,
+    clients: &[(String, SharedLspSession)],
     log_suffix: &str,
 ) {
     let ws_lock = ws.lock().expect("workspace mutex poisoned");
@@ -1015,26 +1130,32 @@ fn start_lsp_workers_if_leader(
         .leader_shutdown_flag()
         .expect("leader has a shutdown flag");
     drop(ws_lock);
-    spawn_lsp_workers_for_clients(
+    let setup = LspWorkerSetup {
         workspace_root,
-        &shared_db,
-        clients,
+        shared_db: &shared_db,
+        supervisor,
         log_suffix,
-        bus_frontend.as_deref(),
-        &socket_path,
+        bus_frontend: bus_frontend.as_deref(),
+        socket_path: &socket_path,
         shutdown,
-    );
+    };
+    spawn_lsp_workers_for_clients(&setup, clients);
 }
 
-/// Run the LSP supervisor health-check loop forever, polling on the
-/// `McpServer::LSP_HEALTH_CHECK_INTERVAL` cadence.
-async fn run_lsp_health_check_loop() -> ! {
+/// Run the health-check loop of `supervisor` on the
+/// `McpServer::LSP_HEALTH_CHECK_INTERVAL` cadence, until `shutdown` is set.
+///
+/// `shutdown` is the flag of one leader tenure. A step-down sets it, so the
+/// loop of that tenure ends, and a later promotion runs a new loop over its
+/// new supervisor. Thus a process runs at most one health loop.
+async fn run_lsp_health_check_loop(supervisor: &SharedLspSupervisor, shutdown: &ShutdownFlag) {
     loop {
         tokio::time::sleep(McpServer::LSP_HEALTH_CHECK_INTERVAL).await;
-        use crate::mcp::tools::code_context::LSP_SUPERVISOR;
-        if let Some(sup) = LSP_SUPERVISOR.get() {
-            sup.lock().await.health_check_all().await;
+        if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::info!("code-context: the leader stepped down; the LSP health loop stops");
+            return;
         }
+        supervisor.lock().await.health_check_all().await;
     }
 }
 
@@ -1101,6 +1222,40 @@ mod tests {
         );
         // Drive the spawned task to completion so it does not outlive the test.
         let _ = leader_handle.unwrap().await;
+    }
+
+    /// Whether the process slot holds exactly `supervisor`.
+    fn slot_holds(supervisor: &SharedLspSupervisor) -> bool {
+        crate::mcp::tools::code_context::lsp_supervisor()
+            .is_some_and(|current| Arc::ptr_eq(&current, supervisor))
+    }
+
+    /// A step-down stops the supervisor of the old tenure and empties the
+    /// slot. A later promotion puts a new, live supervisor in the slot; the
+    /// slot does not drop it (the old `OnceLock` did, and `kill_on_drop` then
+    /// killed the new LSP).
+    #[tokio::test]
+    async fn step_down_then_promotion_leaves_a_live_supervisor_in_the_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let ws = Arc::new(std::sync::Mutex::new(
+            swissarmyhammer_code_context::CodeContextWorkspace::open(&root).unwrap(),
+        ));
+        assert!(ws.lock().unwrap().is_leader());
+        let first = McpServer::spawn_lsp_supervisor(root.clone()).await.unwrap();
+        assert!(slot_holds(&first.supervisor));
+
+        step_down_and_stop_lsp(&ws).await;
+
+        assert!(crate::mcp::tools::code_context::lsp_supervisor().is_none());
+        assert!(first.supervisor.lock().await.is_shut_down());
+        let promoted = ws.lock().unwrap().try_promote().unwrap();
+        assert!(promoted.is_some(), "the stepped-down process must promote");
+        let second = McpServer::spawn_lsp_supervisor(root).await.unwrap();
+        assert!(!Arc::ptr_eq(&first.supervisor, &second.supervisor));
+        assert!(slot_holds(&second.supervisor));
+        assert!(!second.supervisor.lock().await.is_shut_down());
+        shutdown_lsp_supervisor().await;
     }
 
     /// Server start must leave `.reviewignore` on disk before any review runs,

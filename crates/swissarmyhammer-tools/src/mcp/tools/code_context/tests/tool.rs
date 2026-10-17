@@ -154,7 +154,7 @@ async fn test_code_context_tool_missing_op() {
 
 #[test]
 fn test_lsp_degradation_notice_no_supervisor() {
-    // When LSP_SUPERVISOR is not set and no projects, should return None
+    // When the supervisor slot is empty and no projects, should return None
     let tmp = tempfile::tempdir().unwrap();
     assert!(lsp_degradation_notice(tmp.path()).is_none());
 }

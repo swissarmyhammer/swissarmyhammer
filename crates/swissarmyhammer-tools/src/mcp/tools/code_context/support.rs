@@ -14,6 +14,7 @@ use swissarmyhammer_code_context::{BlockingStatus, CodeContextWorkspace, IndexLa
 use swissarmyhammer_common::utils::find_git_repository_root_from;
 
 use super::doctor;
+use super::supervisor_slot::lsp_supervisor;
 
 /// Default cap on result count for ops that take an optional `max_results`
 /// (`query ast`, `search workspace_symbol`) when the caller omits it. Surfaced
@@ -167,12 +168,6 @@ pub(super) fn resolve_workspace_root(context: &ToolContext) -> PathBuf {
     find_git_repository_root_from(&working_dir).unwrap_or(working_dir)
 }
 
-/// Global LSP supervisor handle, initialized once at MCP startup.
-/// Used by `get status` to report LSP server state and by `server.rs` for init.
-pub(crate) static LSP_SUPERVISOR: std::sync::OnceLock<
-    std::sync::Arc<tokio::sync::Mutex<swissarmyhammer_lsp::LspSupervisorManager>>,
-> = std::sync::OnceLock::new();
-
 /// Look up the shared [`SharedLspSession`](swissarmyhammer_code_context::SharedLspSession)
 /// for a file by matching its extension against the running LSP daemons in the
 /// global supervisor.
@@ -188,7 +183,7 @@ pub(crate) fn lsp_session_for_file(
     let ext = std::path::Path::new(file_path)
         .extension()
         .and_then(|e| e.to_str())?;
-    let sup = LSP_SUPERVISOR.get()?;
+    let sup = lsp_supervisor()?;
     let guard = sup.try_lock().ok()?;
     for name in guard.daemon_names() {
         if let Some(daemon) = guard.get_daemon(&name) {
@@ -209,7 +204,7 @@ pub(crate) fn lsp_session_for_file(
 /// Useful for workspace-wide LSP requests (e.g. `workspace/symbol`) that are
 /// not scoped to a single file extension.
 pub(crate) fn any_lsp_session() -> Option<swissarmyhammer_code_context::SharedLspSession> {
-    let sup = LSP_SUPERVISOR.get()?;
+    let sup = lsp_supervisor()?;
     let guard = sup.try_lock().ok()?;
     for name in guard.daemon_names() {
         if let Some(daemon) = guard.get_daemon(&name) {
@@ -281,12 +276,12 @@ pub(super) fn check_ts_readiness(
 
 /// Check if any LSP servers are missing and return a notice string if so.
 ///
-/// Checks the global LSP_SUPERVISOR for daemons in NotFound state.
-/// Falls back to the doctor check if the supervisor isn't initialized.
+/// Checks the LSP supervisor in the process slot for daemons in NotFound
+/// state. Falls back to the doctor check if the slot holds no supervisor.
 /// Returns None if all LSP servers are available (no noise).
 pub(super) fn lsp_degradation_notice(workspace_root: &std::path::Path) -> Option<String> {
     // Try the supervisor first (it has live state)
-    if let Some(sup) = LSP_SUPERVISOR.get() {
+    if let Some(sup) = lsp_supervisor() {
         if let Ok(guard) = sup.try_lock() {
             let statuses = guard.status();
             let missing: Vec<_> = statuses

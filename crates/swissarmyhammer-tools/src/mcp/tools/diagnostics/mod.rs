@@ -19,7 +19,7 @@
 //!
 //! The session and the code-context index (for blast radius) are obtained the
 //! same way the `code_context` tool obtains them — the shared
-//! [`LSP_SUPERVISOR`](crate::mcp::tools::code_context) daemon sessions and the
+//! [`supervisor_slot`](crate::mcp::tools::code_context::supervisor_slot) daemon sessions and the
 //! workspace DB — so this tool reuses those helpers rather than re-deriving them.
 
 use std::collections::HashSet;
@@ -44,7 +44,7 @@ use swissarmyhammer_operations::{
 use crate::mcp::op_tool_helpers::{json_result, string_arg};
 use crate::mcp::tool_registry::{McpTool, ToolContext, ToolRegistry};
 use crate::mcp::tools::code_context::{
-    any_lsp_session, lsp_session_for_file, open_workspace, LSP_SUPERVISOR,
+    any_lsp_session, lsp_session_for_file, lsp_supervisor, open_workspace,
 };
 
 // ---------------------------------------------------------------------------
@@ -561,7 +561,7 @@ impl McpTool for DiagnosticsTool {
 /// Snapshot every managed LSP server's status (empty when the supervisor has not
 /// been initialised, e.g. in a bare test registry).
 async fn server_statuses() -> Vec<swissarmyhammer_lsp::DaemonStatus> {
-    match LSP_SUPERVISOR.get() {
+    match lsp_supervisor() {
         Some(supervisor) => supervisor.lock().await.status(),
         None => Vec::new(),
     }
@@ -1016,7 +1016,7 @@ mod tests {
 
     #[tokio::test]
     async fn produce_outcome_without_a_session_surfaces_the_typed_not_leader_error() {
-        // A follower (no in-process LSP session — LSP_SUPERVISOR is unset in this
+        // A follower (no in-process LSP session — the supervisor slot is empty in this
         // bare test process) must NOT silently return an empty report. It routes
         // to the leader over the election socket; with nothing serving that
         // socket, connect fails with the typed not-leader / leader-pid error,
