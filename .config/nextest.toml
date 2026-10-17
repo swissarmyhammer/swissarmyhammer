@@ -1,3 +1,11 @@
+# Minimum nextest version. Before 0.9.145, nextest on macOS (no `pipe2`) could
+# leak the stdout/stderr capture pipes of one test into a sibling test process
+# spawned at the same time (rust-lang/rust#95584). The test that owns the pipe
+# then shows a false LEAK marker, also when it starts no child process.
+# nextest-rs/nextest#3553 fixed this in 0.9.145. An older nextest stops with
+# exit code 92 and tells you to upgrade: `cargo install cargo-nextest --locked`.
+nextest-version = { required = "0.9.145", recommended = "0.9.148" }
+
 [profile.default]
 fail-fast = false
 # Warn every 5s, hard-kill after 60 periods (5 minutes)
