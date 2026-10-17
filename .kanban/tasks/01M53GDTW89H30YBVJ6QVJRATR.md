@@ -164,8 +164,24 @@ comments:
     - evidence: `cargo nextest run -p swissarmyhammer-lsp --test-threads=1` ran 269 tests: 269 passed, 0 failed, 0 skipped, 0 LEAK.
     - next: review.
   timestamp: 2026-10-17T15:28:38.194701+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01m557txazkf6tztn4ws7jkngf
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (commit 03117dd25). 0 findings, 0 confirmed, 0 refuted. 7 validator runs, 0 failed. All items of the two prior Review Findings sections are checked.
+    - next: none. The task moved to done.
+  timestamp: 2026-10-17T15:31:38.463858+00:00
+- actor: claude-code
+  id: 01m557vfx2jzyyfq5a59htj72e
+  text: |-
+    ### finish iteration 3 — clean
+    - implement: changed — HeaderBlock in framing.rs, used by both readers
+    - test: green — nextest rdeps(lsp) 5308 passed, 0 LEAK; -p swissarmyhammer-lsp --test-threads=1 269 passed, 0 LEAK
+    - commit: 03117dd25
+    - review: clean — task in done
+  timestamp: 2026-10-17T15:31:57.474896+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffc180
 title: Close LSP documents that sah opened only to index them
 ---
 ## Problem

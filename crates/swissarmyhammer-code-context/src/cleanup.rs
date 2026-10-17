@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rayon::prelude::*;
@@ -37,6 +37,11 @@ pub struct CleanupStats {
     pub files_dirty: usize,
     /// Files whose content hash is unchanged.
     pub files_unchanged: usize,
+    /// Walk entries that could not be read (for example, a directory with no
+    /// read permission, or a file that is deleted during the walk). The walk
+    /// skips each one and continues, and the rows at or under their paths
+    /// stay.
+    pub entries_skipped: usize,
 }
 
 /// Hashed file ready for DB reconciliation.
@@ -61,16 +66,20 @@ struct HashedFile {
 ///    - Files on disk not in DB -> INSERT with dirty flags.
 /// 4. Returns [`CleanupStats`] summarising what changed.
 ///
+/// A walk entry that cannot be read does not stop the walk. The walk skips it,
+/// the rows at or under its path stay, and the count is in
+/// [`CleanupStats::entries_skipped`].
+///
 /// # Errors
 ///
-/// Returns [`CodeContextError::Io`] if filesystem walking fails, or
-/// [`CodeContextError::Database`] if a SQL operation fails.
+/// Returns [`CodeContextError::Database`] if a SQL operation fails.
 pub fn startup_cleanup(
     conn: &Connection,
     workspace_root: &Path,
 ) -> Result<CleanupStats, CodeContextError> {
     // 1. Walk and hash all non-ignored files in parallel
-    let disk_files = walk_and_hash(workspace_root)?;
+    let walked = walk_and_hash(workspace_root);
+    let disk_files = &walked.files;
 
     // Build a lookup map: rel_path -> (hash, size)
     let disk_map: HashMap<&str, (&[u8], u64)> = disk_files
@@ -89,7 +98,16 @@ pub fn startup_cleanup(
         .unwrap_or_default()
         .as_secs() as i64;
 
-    let mut stats = CleanupStats::default();
+    let mut stats = CleanupStats {
+        entries_skipped: walked.unreadable.entries_skipped(),
+        ..CleanupStats::default()
+    };
+    if stats.entries_skipped > 0 {
+        tracing::info!(
+            "code-context cleanup: skipped {} walk entries that could not be read, and kept their rows",
+            stats.entries_skipped
+        );
+    }
 
     // 3a. Reconcile existing DB entries against files on disk.
     reconcile_db_entries(
@@ -97,6 +115,7 @@ pub fn startup_cleanup(
         workspace_root,
         &db_entries,
         &disk_map,
+        &walked.unreadable,
         now,
         &mut stats,
     )?;
@@ -110,7 +129,7 @@ pub fn startup_cleanup(
     // 3b. Insert files found on disk but not yet in the DB.
     let db_paths: std::collections::HashSet<&str> =
         db_entries.iter().map(|(p, _)| p.as_str()).collect();
-    insert_new_disk_files(conn, &disk_files, &db_paths, now, &mut stats)?;
+    insert_new_disk_files(conn, disk_files, &db_paths, now, &mut stats)?;
 
     // 3c. Bulk-mark any existing files with non-LSP-capable extensions as lsp_indexed=1.
     // This handles files already in the DB from previous runs that were inserted before
@@ -123,8 +142,10 @@ pub fn startup_cleanup(
 /// Reconcile existing DB entries against files currently on disk.
 ///
 /// For each row in `db_entries`:
-/// - If the walk did not give the file, delete it (CASCADE cleans up chunks/symbols/edges).
-///   See [`delete_unwalked_row`].
+/// - If the walk did not give the file, and the file is not at or under a
+///   path in `unreadable`, delete it (CASCADE cleans up chunks/symbols/edges).
+///   See [`delete_unwalked_row`]. A row under an unreadable path stays as it
+///   is, because a temporary read error must not delete valid rows.
 /// - If the hash changed, update `content_hash`, clear both indexed flags, and touch `last_seen_at`.
 /// - Otherwise just touch `last_seen_at`.
 ///
@@ -134,11 +155,13 @@ fn reconcile_db_entries(
     workspace_root: &Path,
     db_entries: &[(String, Vec<u8>)],
     disk_map: &HashMap<&str, (&[u8], u64)>,
+    unreadable: &UnreadablePaths,
     now: i64,
     stats: &mut CleanupStats,
 ) -> Result<(), CodeContextError> {
     for (db_path, db_hash) in db_entries {
         match disk_map.get(db_path.as_str()) {
+            None if unreadable.covers(db_path) => {}
             None => delete_unwalked_row(conn, workspace_root, db_path, stats)?,
             Some((disk_hash, _size)) => {
                 if *disk_hash != db_hash.as_slice() {
@@ -291,23 +314,134 @@ fn mark_non_lsp_capable_files(conn: &Connection) -> Result<usize, CodeContextErr
     Ok(count)
 }
 
+/// The paths that the workspace walk could not read.
+///
+/// The walk gives an error entry for a directory it cannot read (permission
+/// denied), for a file that is deleted between the list and the stat, and for
+/// a symlink loop. The walk records each such path here and continues. The
+/// reconcile keeps each row at or under one of these paths, because the walk
+/// does not know if the file of the row is still there.
+#[derive(Debug, Default)]
+struct UnreadablePaths {
+    /// Paths relative to the workspace root. An empty path is the root
+    /// itself: it covers each row.
+    paths: Vec<PathBuf>,
+    /// The count of error entries, also when two entries have one path.
+    entries_skipped: usize,
+}
+
+impl UnreadablePaths {
+    /// Record the path of one error entry of the walk, and count the entry.
+    ///
+    /// An error with no path, or with a path outside `workspace_root`, records
+    /// the root, so that the reconcile deletes no row. Returns `true` when the
+    /// path was not recorded before.
+    fn record(&mut self, workspace_root: &Path, err: &ignore::Error) -> bool {
+        self.entries_skipped += 1;
+        let rel = walk_error_path(err)
+            .and_then(|path| path.strip_prefix(workspace_root).ok())
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        if self.paths.contains(&rel) {
+            return false;
+        }
+        self.paths.push(rel);
+        true
+    }
+
+    /// Tell if `rel_path` (relative to the workspace root) is at or under a
+    /// path that the walk could not read.
+    fn covers(&self, rel_path: &str) -> bool {
+        let rel_path = Path::new(rel_path);
+        self.paths.iter().any(|path| rel_path.starts_with(path))
+    }
+
+    /// The count of error entries that the walk skipped.
+    fn entries_skipped(&self) -> usize {
+        self.entries_skipped
+    }
+}
+
+/// Find the path that one walk error is about, if the error has one.
+fn walk_error_path(err: &ignore::Error) -> Option<&Path> {
+    match err {
+        ignore::Error::WithPath { path, .. } => Some(path),
+        ignore::Error::Loop { child, .. } => Some(child),
+        ignore::Error::WithDepth { err, .. } | ignore::Error::WithLineNumber { err, .. } => {
+            walk_error_path(err)
+        }
+        ignore::Error::Partial(errs) => errs.iter().find_map(walk_error_path),
+        _ => None,
+    }
+}
+
+/// Log one error entry of the walk.
+///
+/// A permission error goes to `warn` the first time the walk records its path
+/// (`is_new`). Each other error goes to `debug`, because files are made and
+/// deleted all the time during a build.
+fn log_walk_error(err: &ignore::Error, is_new: bool) {
+    let denied = err
+        .io_error()
+        .is_some_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
+    if denied && is_new {
+        tracing::warn!("code-context cleanup: cannot read, skipped: {}", err);
+    } else {
+        tracing::debug!("code-context cleanup: walk entry skipped: {}", err);
+    }
+}
+
+/// The result of one workspace walk.
+struct WalkedWorkspace {
+    /// The files that the walk read and hashed.
+    files: Vec<HashedFile>,
+    /// The paths that the walk could not read.
+    unreadable: UnreadablePaths,
+}
+
 /// Walk non-ignored files and hash them in parallel.
 ///
 /// Uses [`workspace_walk_builder`], which obeys the same ignore rules as the
 /// file watchers ([`crate::IgnoreFilter`]), and `rayon` for parallel hashing.
-/// Only includes files with extensions that tree-sitter can parse.
-/// Returns a `Vec<HashedFile>` with relative paths and truncated SHA-256 hashes.
-fn walk_and_hash(workspace_root: &Path) -> Result<Vec<HashedFile>, CodeContextError> {
-    // Collect file paths first (WalkBuilder is not Send)
+/// Only includes files with extensions that tree-sitter can parse. An error
+/// entry does not stop the walk: its path goes into
+/// [`WalkedWorkspace::unreadable`].
+fn walk_and_hash(workspace_root: &Path) -> WalkedWorkspace {
+    let (paths, unreadable) = collect_parseable_paths(workspace_root);
+    WalkedWorkspace {
+        files: hash_files(workspace_root, &paths),
+        unreadable,
+    }
+}
+
+/// Walk the workspace and collect the paths of the parseable files.
+///
+/// The paths are collected before the hash, because `WalkBuilder` is not
+/// `Send`. Each error entry is logged and recorded, and the walk continues.
+fn collect_parseable_paths(workspace_root: &Path) -> (Vec<PathBuf>, UnreadablePaths) {
     let mut paths = Vec::new();
+    let mut unreadable = UnreadablePaths::default();
     for entry in workspace_walk_builder(workspace_root).build() {
-        let entry = entry.map_err(std::io::Error::other)?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                let is_new = unreadable.record(workspace_root, &err);
+                log_walk_error(&err, is_new);
+                continue;
+            }
+        };
         if entry.file_type().is_some_and(|ft| ft.is_file()) && is_parseable(entry.path()) {
             paths.push(entry.into_path());
         }
     }
+    (paths, unreadable)
+}
 
-    // Hash in parallel
+/// Hash `paths` in parallel.
+///
+/// Returns one [`HashedFile`] with a relative path and a truncated SHA-256
+/// hash for each file that can be read.
+fn hash_files(workspace_root: &Path, paths: &[PathBuf]) -> Vec<HashedFile> {
     let workspace_root_owned = workspace_root.to_path_buf();
     let results: Vec<Option<HashedFile>> = paths
         .par_iter()
@@ -340,7 +474,7 @@ fn walk_and_hash(workspace_root: &Path) -> Result<Vec<HashedFile>, CodeContextEr
         })
         .collect();
 
-    Ok(results.into_iter().flatten().collect())
+    results.into_iter().flatten().collect()
 }
 
 #[cfg(test)]
@@ -615,6 +749,157 @@ mod tests {
         assert_eq!(stats.files_ignored, 1);
         assert_eq!(stats.files_removed, 0);
         assert_eq!(stats.files_added, 1);
+    }
+
+    /// The mode that makes a directory unreadable for a user that is not root.
+    #[cfg(unix)]
+    const UNREADABLE_DIR_MODE: u32 = 0o000;
+
+    /// The mode that makes a directory readable again, so the temp dir can be
+    /// removed.
+    #[cfg(unix)]
+    const READABLE_DIR_MODE: u32 = 0o755;
+
+    /// Gives the mode [`READABLE_DIR_MODE`] back to a directory when it drops.
+    #[cfg(unix)]
+    struct RestoreDirMode {
+        /// The directory to make readable again.
+        path: std::path::PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl Drop for RestoreDirMode {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::Permissions::from_mode(READABLE_DIR_MODE);
+            if let Err(e) = fs::set_permissions(&self.path, mode) {
+                eprintln!("cannot restore the mode of {}: {e}", self.path.display());
+            }
+        }
+    }
+
+    /// Make the directory `rel` under `root` unreadable.
+    ///
+    /// Returns `None` when the process runs as root: then the mode does not
+    /// stop the read, and the test cannot make an unreadable directory.
+    #[cfg(unix)]
+    fn make_unreadable_dir(root: &Path, rel: &str) -> Option<RestoreDirMode> {
+        use std::os::unix::fs::PermissionsExt;
+        let path = root.join(rel);
+        fs::set_permissions(&path, fs::Permissions::from_mode(UNREADABLE_DIR_MODE)).unwrap();
+        let guard = RestoreDirMode { path };
+        if fs::read_dir(&guard.path).is_ok() {
+            eprintln!("skip: the process runs as root, so a mode of 000 does not stop the read");
+            return None;
+        }
+        Some(guard)
+    }
+
+    /// An unreadable directory does not stop the walk: the cleanup gives `Ok`
+    /// and adds the files in the other directories.
+    #[cfg(unix)]
+    #[test]
+    fn test_cleanup_walk_continues_past_unreadable_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "src/a.rs", "fn a() {}");
+        write_file(dir.path(), "locked/b.rs", "fn b() {}");
+        let Some(_restore) = make_unreadable_dir(dir.path(), "locked") else {
+            return;
+        };
+
+        let conn = open_memory_db();
+        let stats = startup_cleanup(&conn, dir.path())
+            .expect("an unreadable directory must not stop the walk");
+
+        assert!(has_row(&conn, "src/a.rs"), "the readable file is added");
+        assert_eq!(stats.files_added, 1);
+        assert_eq!(
+            stats.entries_skipped, 1,
+            "the unreadable directory is counted"
+        );
+    }
+
+    /// Make the walk error that the walker gives for a file that is deleted
+    /// between the list and the stat.
+    fn vanished_file_error(path: PathBuf) -> ignore::Error {
+        let not_found = std::io::Error::from(std::io::ErrorKind::NotFound);
+        ignore::Error::WithDepth {
+            depth: 1,
+            err: Box::new(ignore::Error::WithPath {
+                path,
+                err: Box::new(ignore::Error::Io(not_found)),
+            }),
+        }
+    }
+
+    /// A file that is deleted during the walk is recorded and counted. Only
+    /// its own row is kept; a row beside it is not covered.
+    #[test]
+    fn test_vanished_file_during_walk_covers_only_its_own_row() {
+        let root = Path::new("/workspace");
+        let mut unreadable = UnreadablePaths::default();
+
+        let is_new = unreadable.record(root, &vanished_file_error(root.join("src/gone.rs")));
+
+        assert!(is_new);
+        assert!(unreadable.covers("src/gone.rs"));
+        assert!(!unreadable.covers("src/kept.rs"));
+        assert_eq!(unreadable.entries_skipped(), 1);
+    }
+
+    /// The same path two times is one recorded path, but two skipped entries.
+    #[test]
+    fn test_walk_error_for_same_path_is_new_only_once() {
+        let root = Path::new("/workspace");
+        let mut unreadable = UnreadablePaths::default();
+
+        assert!(unreadable.record(root, &vanished_file_error(root.join("a.rs"))));
+        assert!(!unreadable.record(root, &vanished_file_error(root.join("a.rs"))));
+        assert_eq!(unreadable.entries_skipped(), 2);
+    }
+
+    /// A walk error with no path covers each row, so that the reconcile
+    /// deletes no row when it does not know what the walk missed.
+    #[test]
+    fn test_walk_error_with_no_path_covers_each_row() {
+        let root = Path::new("/workspace");
+        let mut unreadable = UnreadablePaths::default();
+        let err = ignore::Error::Io(std::io::Error::from(std::io::ErrorKind::Other));
+
+        unreadable.record(root, &err);
+
+        assert!(unreadable.covers("src/lib.rs"));
+        assert!(unreadable.covers("README.toml"));
+    }
+
+    /// A row under a directory that the walk could not read stays, but a row
+    /// for a file that is gone is still deleted.
+    #[cfg(unix)]
+    #[test]
+    fn test_cleanup_keeps_rows_under_unreadable_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let locked = "locked/nested/b.rs";
+        write_file(dir.path(), "src/a.rs", "fn a() {}");
+        write_file(dir.path(), locked, "fn b() {}");
+        let conn = open_memory_db();
+        seed_row(&conn, locked, "fn b() {}");
+        seed_row(&conn, "gone.rs", "fn gone() {}");
+        let Some(_restore) = make_unreadable_dir(dir.path(), "locked") else {
+            return;
+        };
+
+        let stats = startup_cleanup(&conn, dir.path()).unwrap();
+
+        assert!(
+            has_row(&conn, locked),
+            "the row under the unreadable directory must stay"
+        );
+        assert!(
+            !has_row(&conn, "gone.rs"),
+            "the row for the gone file is deleted"
+        );
+        assert_eq!(stats.files_removed, 1);
+        assert_eq!(stats.files_ignored, 0);
     }
 
     #[test]
