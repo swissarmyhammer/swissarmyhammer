@@ -214,6 +214,11 @@ where
     let all_files: Vec<&String> = targets.iter().chain(dependent_files.iter()).collect();
     if session.is_running() {
         for path in &all_files {
+            // The session's path filter skips an ignored path and a path
+            // outside the workspace root: send no didOpen and no pull for it.
+            if session.skips_path(Path::new(path.as_str())) {
+                continue;
+            }
             if let Ok(text) = std::fs::read_to_string(path.as_str()) {
                 let _ = session.sync_open(Path::new(path.as_str()), &text);
             }
@@ -712,6 +717,36 @@ mod tests {
             outcome.report.diagnostics.is_empty(),
             "no diagnostics are available while the server is still loading"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn filtered_target_gets_no_did_open_and_no_pull() {
+        use crate::test_support::RecordingTransport;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, "fn a() {}\n").unwrap();
+        let client = Arc::new(Mutex::new(Some(RecordingTransport::default())));
+        let session = LspSession::new(Arc::clone(&client), "rust");
+        session.set_path_filter(Arc::new(|_path: &Path| true));
+
+        let timer = ManualTimer::default();
+        let driver = timer.clone();
+        let config = DiagnosticsConfig::default();
+        let window = config.settle_window;
+        let paths = vec![file.to_string_lossy().into_owned()];
+        let deps = stub(&[]);
+        let handle = tokio::spawn(async move {
+            diagnose_with_outcome(&session, &paths, &config, &deps, &timer).await
+        });
+        tokio::task::yield_now().await;
+        driver.advance(window);
+        let outcome = handle.await.unwrap();
+
+        assert!(outcome.report.diagnostics.is_empty());
+        let guard = client.lock().unwrap();
+        let t = guard.as_ref().unwrap();
+        assert_eq!(t.notification_count("textDocument/didOpen"), 0);
+        assert_eq!(t.request_count("textDocument/diagnostic"), 0);
     }
 
     #[tokio::test(flavor = "current_thread")]

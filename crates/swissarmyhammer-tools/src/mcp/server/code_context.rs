@@ -190,7 +190,17 @@ impl McpServer {
             // stacked config and inject it into the supervisor. The filter
             // source lives in code-context; `swissarmyhammer-lsp` only exposes
             // the injection seam, so it carries no config dependency.
-            let mut supervisor = swissarmyhammer_lsp::LspSupervisorManager::new(workspace_root);
+            let mut supervisor =
+                swissarmyhammer_lsp::LspSupervisorManager::new(workspace_root.clone());
+            // Inject the path filter the same way: the ignore rules live in
+            // code-context, and the LSP sessions skip each ignored path and
+            // each path outside the workspace root. Thus no didOpen and no
+            // request goes to a language server for build output such as
+            // `.build/checkouts/`.
+            match swissarmyhammer_code_context::IgnoreFilter::load(&workspace_root).await {
+                Ok(filter) => supervisor = supervisor.with_path_filter(filter.into_path_filter()),
+                Err(e) => tracing::warn!("code-context: cannot load the LSP path filter: {}", e),
+            }
             if let Ok(compiled) = swissarmyhammer_code_context::CompiledCodeContextConfig::compile(
                 &swissarmyhammer_code_context::load_code_context_config(),
             ) {

@@ -141,8 +141,10 @@ fn current_runtime_supports_block_in_place() -> bool {
 /// [`SessionRequestClient::lsp_request`].
 ///
 /// Returns `Ok(Some(json))` with the leader's raw LSP result (which the op's
-/// existing parser then turns into the typed result), or an error mapped through
-/// [`ipc_err_to_code_context`].
+/// existing parser then turns into the typed result), `Ok(None)` when the
+/// leader's session skips the document (an ignored path or a path outside the
+/// workspace root — the op then falls back to its index layers, the same as an
+/// in-process skip), or an error mapped through [`ipc_err_to_code_context`].
 async fn route_one(
     client: &SessionRequestClient,
     file_path: &str,
@@ -150,13 +152,13 @@ async fn route_one(
     params: Value,
 ) -> Result<Option<Value>, CodeContextError> {
     let result = if file_path.is_empty() {
-        client.lsp_request(method, params).await
+        client.lsp_request(method, params).await.map(Some)
     } else {
         client
             .lsp_request_with_document(file_path, method, params)
             .await
     };
-    result.map(Some).map_err(ipc_err_to_code_context)
+    result.map_err(ipc_err_to_code_context)
 }
 
 /// Round-trip an ordered multi-step LSP batch to the leader over `client`.
@@ -166,8 +168,8 @@ async fn route_one(
 /// single-request seam cannot give a multi-step op. `file_path` is the document
 /// the leader syncs once before the batch. Returns `Ok(Some(responses))` with the
 /// leader's ordered raw step envelopes (the op's existing per-step parser then
-/// unwraps them), or an error mapped through [`ipc_err_to_code_context`] — never a
-/// silent empty.
+/// unwraps them), `Ok(None)` when the leader's session skips the document, or an
+/// error mapped through [`ipc_err_to_code_context`] — never a silent empty.
 async fn route_multi(
     client: &SessionRequestClient,
     file_path: &str,
@@ -176,7 +178,6 @@ async fn route_multi(
     client
         .lsp_multi_request_with_document(file_path, steps)
         .await
-        .map(Some)
         .map_err(ipc_err_to_code_context)
 }
 

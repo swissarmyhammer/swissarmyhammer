@@ -349,7 +349,6 @@ async fn follower_request_with_document_gets_real_definition_without_leader_preo
                             router_client
                                 .lsp_request_with_document(&file_path, &method, params)
                                 .await
-                                .map(Some)
                                 .map_err(|e| {
                                     swissarmyhammer_code_context::CodeContextError::LspError(
                                         format!("leader LSP request failed: {e}"),
@@ -481,7 +480,6 @@ async fn follower_multi_step_rename_gets_real_leader_edits_under_one_lock() {
                             router_client
                                 .lsp_multi_request_with_document(&file_path, steps)
                                 .await
-                                .map(Some)
                                 .map_err(|e| {
                                     swissarmyhammer_code_context::CodeContextError::LspError(
                                         format!("leader LSP multi request failed: {e}"),

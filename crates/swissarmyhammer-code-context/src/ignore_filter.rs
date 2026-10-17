@@ -16,9 +16,11 @@
 use std::cmp::Reverse;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use ignore::{Match, WalkBuilder};
+use swissarmyhammer_lsp::PathFilter;
 
 /// Directory names that are always skipped, also with no ignore file.
 pub const HARD_SKIP_DIRS: &[&str] = &[
@@ -174,6 +176,16 @@ impl IgnoreFilter {
             }
         }
         false
+    }
+
+    /// Make this filter the [`PathFilter`] of the LSP sessions.
+    ///
+    /// The LSP crate cannot depend on this crate, so the owner gives it this
+    /// predicate. The predicate skips each path that [`is_ignored`](Self::is_ignored)
+    /// skips: an ignored path, and a path outside the workspace root. Thus the
+    /// walk, the watchers and the language server obey one rule set.
+    pub fn into_path_filter(self) -> PathFilter {
+        Arc::new(move |path: &Path| self.is_ignored(path))
     }
 
     /// Give `path` relative to the workspace root, or `None` when it is not
@@ -387,6 +399,20 @@ mod tests {
         let filter = IgnoreFilter::new(dir.path());
         assert!(filter.is_ignored(Path::new(".build/a.swift")));
         assert!(!filter.is_ignored(Path::new("Sources/a.swift")));
+    }
+
+    #[test]
+    fn path_filter_skips_ignored_and_outside_paths_and_keeps_normal_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let normal = touch(dir.path(), "Sources/main.swift");
+        let filter = IgnoreFilter::new(dir.path()).into_path_filter();
+
+        assert!(filter(
+            &dir.path().join(".build/checkouts/pkg/Package.swift")
+        ));
+        assert!(filter(&other.path().join("a.rs")));
+        assert!(!filter(&normal));
     }
 
     #[tokio::test]

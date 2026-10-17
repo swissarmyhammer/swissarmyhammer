@@ -21,7 +21,7 @@ use rusqlite::types::Value;
 use rusqlite::Connection;
 use tracing::{debug, info, warn};
 
-use swissarmyhammer_lsp::LspJsonRpcClient;
+use swissarmyhammer_lsp::{DocumentSync, LspJsonRpcClient};
 // Re-exported so existing `crate::lsp_worker::SharedLspClient` paths in this
 // crate keep resolving after the alias moved into `swissarmyhammer-lsp`.
 pub use swissarmyhammer_lsp::SharedLspClient;
@@ -206,7 +206,8 @@ fn session_available(
 ///
 /// Files that fail are still marked as indexed to prevent infinite retry loops.
 /// A file skipped because the client vanished mid-batch is left unindexed so a
-/// later pass retries it once the client returns.
+/// later pass retries it once the client returns. A file that the session's
+/// path filter skips is marked indexed and is not counted.
 fn process_lsp_batch(
     session: &SharedLspSession,
     db: &SharedDb,
@@ -219,7 +220,7 @@ fn process_lsp_batch(
         let full_path = workspace_root.join(relative_path);
 
         match index_single_file(session, db, &full_path, relative_path) {
-            Ok(Some(symbol_count)) => {
+            Ok(FileIndexOutcome::Indexed(symbol_count)) => {
                 debug!(
                     "LSP indexed {} ({} symbols, {} total in batch)",
                     relative_path,
@@ -231,10 +232,14 @@ fn process_lsp_batch(
             // The client vanished between the availability check and the work —
             // leave the file unindexed so a later pass retries it. Do NOT count
             // it or mark it indexed.
-            Ok(None) => debug!(
+            Ok(FileIndexOutcome::ClientUnavailable) => debug!(
                 "LSP client unavailable while indexing {}, leaving unindexed",
                 relative_path
             ),
+            // The session's path filter skips the file, so no request went to
+            // the server. Mark it indexed so the next query does not select
+            // it again; do NOT count it as indexed.
+            Ok(FileIndexOutcome::Skipped) => mark_skipped_file_indexed(db, relative_path),
             Err(e) => {
                 mark_failed_file_indexed(db, relative_path, &e);
                 count += 1;
@@ -260,6 +265,34 @@ fn mark_failed_file_indexed(db: &SharedDb, relative_path: &str, error: &CodeCont
             relative_path, mark_err
         );
     }
+}
+
+/// Mark a file as `lsp_indexed = 1` after the session's path filter skipped it.
+///
+/// The filter skips an ignored path and a path outside the workspace root.
+/// Such a file never goes to the server, so the flag must flip; otherwise the
+/// worker would select the file again on every pass. A failure of the mark
+/// step is logged, never propagated.
+fn mark_skipped_file_indexed(db: &SharedDb, relative_path: &str) {
+    debug!("LSP indexing skipped filtered path {}", relative_path);
+    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
+    if let Err(mark_err) = mark_lsp_indexed(&conn, relative_path) {
+        warn!(
+            "Failed to mark skipped {} as lsp_indexed: {}",
+            relative_path, mark_err
+        );
+    }
+}
+
+/// The result of one [`index_single_file`] pass that did not fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileIndexOutcome {
+    /// The file was indexed; the value is the count of persisted symbols.
+    Indexed(usize),
+    /// The session had no live client; the file stays unindexed for a retry.
+    ClientUnavailable,
+    /// The session's path filter skipped the file; nothing went to the server.
+    Skipped,
 }
 
 /// Index a single file via the shared session: open, documentSymbol, call
@@ -290,9 +323,13 @@ fn mark_failed_file_indexed(db: &SharedDb, relative_path: &str, error: &CodeCont
 /// marking the affected dependent file as `lsp_indexed = 0`.
 ///
 /// Returns:
-/// * `Ok(Some(count))` — the file was indexed; `count` symbols were persisted.
-/// * `Ok(None)` — the session had no live client (it vanished between the
-///   availability check and the work); the file is left unindexed for a retry.
+/// * `Ok(Indexed(count))` — the file was indexed; `count` symbols were persisted.
+/// * `Ok(ClientUnavailable)` — the session had no live client (it vanished
+///   between the availability check and the work); the file is left
+///   unindexed for a retry.
+/// * `Ok(Skipped)` — the session's path filter skipped the file; no
+///   `didOpen`, `documentSymbol` or call-hierarchy request went out. The
+///   caller marks the file indexed so it is not selected again.
 /// * `Err(_)` — a genuine collection failure; the caller still marks the file
 ///   indexed to avoid an infinite retry loop.
 ///
@@ -303,7 +340,7 @@ fn index_single_file(
     db: &SharedDb,
     full_path: &Path,
     relative_path: &str,
-) -> Result<Option<usize>, CodeContextError> {
+) -> Result<FileIndexOutcome, CodeContextError> {
     // Read file content
     let content = std::fs::read_to_string(full_path)?;
 
@@ -314,10 +351,14 @@ fn index_single_file(
     // a content-hash change) — otherwise `documentSymbol`/call-hierarchy would
     // run against the stale buffer the server still holds from the first open. A
     // client that vanished after the availability check surfaces as NotRunning —
-    // treat that as "skip, leave unindexed", not a hard error.
+    // treat that as "skip, leave unindexed", not a hard error. A path that the
+    // session's filter skips gets no request at all.
     match session.sync_open(full_path, &content) {
-        Ok(()) => {}
-        Err(swissarmyhammer_lsp::LspError::NotRunning) => return Ok(None),
+        Ok(DocumentSync::Synced) => {}
+        Ok(DocumentSync::Skipped) => return Ok(FileIndexOutcome::Skipped),
+        Err(swissarmyhammer_lsp::LspError::NotRunning) => {
+            return Ok(FileIndexOutcome::ClientUnavailable)
+        }
         Err(e) => return Err(e.into()),
     }
 
@@ -330,7 +371,7 @@ fn index_single_file(
     let result = match phase_result {
         Some(inner) => inner?,
         // Client vanished between `open` and here: leave the file unindexed.
-        None => return Ok(None),
+        None => return Ok(FileIndexOutcome::ClientUnavailable),
     };
 
     // Apply invalidation propagation: any file whose outgoing edges pointed
@@ -340,7 +381,7 @@ fn index_single_file(
         apply_invalidation_actions(db, relative_path, &result.pending_actions);
     }
 
-    Ok(Some(result.symbol_count))
+    Ok(FileIndexOutcome::Indexed(result.symbol_count))
 }
 
 /// Run the symbol and edge collection phases against the locked client.
@@ -1530,10 +1571,11 @@ mod tests {
             "index_single_file should succeed: {:?}",
             result
         );
-        let symbol_count = result
-            .unwrap()
-            .expect("client was live, so the file should be indexed");
-        assert_eq!(symbol_count, 1, "should have persisted 1 symbol");
+        assert_eq!(
+            result.unwrap(),
+            FileIndexOutcome::Indexed(1),
+            "client was live, so the file should be indexed with 1 symbol"
+        );
 
         // Verify lsp_indexed was marked
         let conn = shared_db.lock().unwrap();
@@ -1715,6 +1757,31 @@ mod tests {
             "index_single_file should fail with I/O error for missing file"
         );
         // `child` (a MockLsp/KillOnDrop guard) is killed and reaped on drop.
+    }
+
+    #[test]
+    fn test_process_lsp_batch_marks_a_filtered_file_indexed_so_it_is_not_read_again() {
+        let workspace = tempfile::tempdir().unwrap();
+        let relative_path = ".build/checkouts/pkg/Sources/a.rs";
+        let full_path = workspace.path().join(relative_path);
+        std::fs::create_dir_all(full_path.parent().unwrap()).unwrap();
+        std::fs::write(&full_path, "fn a() {}").unwrap();
+        let db = create_test_db();
+        insert_test_file(&db, relative_path);
+        let shared_db: SharedDb = Arc::new(Mutex::new(db));
+        let session = none_session();
+        session.set_path_filter(crate::IgnoreFilter::new(workspace.path()).into_path_filter());
+
+        process_lsp_batch(
+            &session,
+            &shared_db,
+            workspace.path(),
+            &[relative_path.to_string()],
+        );
+
+        let conn = shared_db.lock().unwrap();
+        let dirty = query_lsp_dirty_files(&conn, TEST_BATCH_SIZE, &["rs"]).unwrap();
+        assert!(dirty.is_empty(), "a skipped row must not be read again");
     }
 
     // -- Poison recovery tests --

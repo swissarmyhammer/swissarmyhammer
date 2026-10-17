@@ -69,7 +69,7 @@ fn not_running_is_none<T>(result: Result<T, LspError>) -> Result<Option<T>, Code
 }
 
 use crate::lsp_communication::LspJsonRpcClient;
-use swissarmyhammer_lsp::{LspError, LspSession};
+use swissarmyhammer_lsp::{DocumentSync, LspError, LspSession};
 
 /// The concrete session handle the layered context consumes.
 ///
@@ -608,7 +608,9 @@ impl<'a> LayeredContext<'a> {
     ///
     /// Thin wrapper over [`LspSession::sync_open`] (the one place that opens or
     /// refreshes the server buffer) that reads the file and maps
-    /// [`LspError::NotRunning`] to `Ok(None)` for graceful degradation.
+    /// [`LspError::NotRunning`] to `Ok(None)` for graceful degradation. A path
+    /// that the session's path filter skips ([`DocumentSync::Skipped`]) also
+    /// gives `Ok(None)`, so the caller sends no request for it.
     ///
     /// LSP-unavailability is checked *first*, before touching the filesystem: if
     /// the session has no live client the document can never be synced, so this
@@ -627,7 +629,12 @@ impl<'a> LayeredContext<'a> {
         }
         let path = std::path::Path::new(file_path);
         let text = std::fs::read_to_string(file_path)?;
-        not_running_is_none(session.sync_open(path, &text))
+        match not_running_is_none(session.sync_open(path, &text))? {
+            Some(DocumentSync::Synced) => Ok(Some(())),
+            // A filtered path never goes to the server: fall back to the
+            // index layers, the same as with no live client.
+            Some(DocumentSync::Skipped) | None => Ok(None),
+        }
     }
 
     // === Layer 2: LSP index (lsp_symbols, lsp_call_edges tables) ===
@@ -2933,6 +2940,34 @@ mod tests {
             ctx.lsp_multi_request_with_document("src/main.rs", |_rpc| {
                 panic!("closure should not be called when no client");
             });
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_lsp_multi_request_with_document_returns_none_for_a_filtered_path() {
+        // The mock would answer a didOpen and one request. A filtered path
+        // must get neither: the closure does not run, and the ops fall back
+        // to the index layers.
+        let responses = vec![
+            serde_json::Value::Null,
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": [1]}),
+        ];
+        let mut child = spawn_mock_lsp(&responses);
+        let session = mock_lsp_session(&mut child);
+        let temp_dir = create_temp_source_file();
+        let file_path = temp_dir.path().join("test.rs");
+        let skipped = file_path.clone();
+        session.set_path_filter(std::sync::Arc::new(move |path: &std::path::Path| {
+            path == skipped
+        }));
+
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(session));
+        let result: Result<Option<Value>, _> =
+            ctx.lsp_multi_request_with_document(file_path.to_str().unwrap(), |_rpc| {
+                panic!("closure must not run for a filtered path");
+            });
+
         assert!(result.unwrap().is_none());
     }
 

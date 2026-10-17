@@ -39,7 +39,7 @@ use serde_json::{json, Value};
 
 use swissarmyhammer_leader_election::request_ipc::{IpcError, RequestClient, RequestServer};
 use swissarmyhammer_lsp::client::LspTransport;
-use swissarmyhammer_lsp::LspSession;
+use swissarmyhammer_lsp::{DocumentSync, LspSession};
 
 use crate::config::DiagnosticsConfig;
 use crate::diagnose::{diagnose, Dependents};
@@ -60,6 +60,15 @@ pub const METHOD_LSP_REQUEST: &str = "lsp_request";
 /// other consumer interleaves a request and steals a response off the shared
 /// stdio pipe. The document is synced once before the batch.
 pub const METHOD_LSP_MULTI_REQUEST: &str = "lsp_multi_request";
+
+/// The response of [`METHOD_LSP_REQUEST`] and [`METHOD_LSP_MULTI_REQUEST`] when
+/// the leader's session skips the document.
+///
+/// The session's path filter skips an ignored path and a path outside the
+/// workspace root. The leader then sends no `didOpen` and no request, and it
+/// gives this value. This is not an error: a real response is always a JSON
+/// object (one request) or a JSON array (a batch), so `null` is unambiguous.
+pub const SKIPPED_DOCUMENT_RESPONSE: Value = Value::Null;
 
 /// Dispatch one SAH request `(method, params)` against `session`, returning the
 /// JSON result or an error message.
@@ -102,6 +111,29 @@ where
     }
 }
 
+/// Read `path` from disk and sync it onto the leader's session.
+///
+/// The shared document step of [`lsp_request_blocking`] and
+/// [`lsp_multi_request_blocking`]. `op` names the caller in the error text. A
+/// read or sync failure is an error. A path that the session's path filter
+/// skips gives [`DocumentSync::Skipped`]; the caller then sends no request
+/// and answers [`SKIPPED_DOCUMENT_RESPONSE`]. A skipped path is not read.
+fn sync_document<C: LspTransport>(
+    session: &LspSession<C>,
+    path: &str,
+    op: &str,
+) -> Result<DocumentSync, String> {
+    let path = std::path::Path::new(path);
+    if session.skips_path(path) {
+        return Ok(DocumentSync::Skipped);
+    }
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("{op} failed to read {}: {e}", path.display()))?;
+    session
+        .sync_open(path, &text)
+        .map_err(|e| format!("{op} failed to sync document: {e}"))
+}
+
 /// Run one synchronous LSP round-trip off the async runtime, syncing the
 /// document first when a `file_path` is supplied.
 ///
@@ -135,12 +167,9 @@ where
     let session = session.clone();
     tokio::task::spawn_blocking(move || {
         if let Some(path) = file_path {
-            let path = std::path::PathBuf::from(&path);
-            let text = std::fs::read_to_string(&path)
-                .map_err(|e| format!("lsp request failed to read {}: {e}", path.display()))?;
-            session
-                .sync_open(&path, &text)
-                .map_err(|e| format!("lsp request failed to sync document: {e}"))?;
+            if sync_document(&session, &path, "lsp request")? == DocumentSync::Skipped {
+                return Ok(SKIPPED_DOCUMENT_RESPONSE);
+            }
         }
         session
             .request(&lsp_method, lsp_params)
@@ -180,12 +209,9 @@ where
     let session = session.clone();
     tokio::task::spawn_blocking(move || {
         if let Some(path) = &file_path {
-            let path = std::path::PathBuf::from(path);
-            let text = std::fs::read_to_string(&path)
-                .map_err(|e| format!("lsp multi request failed to read {}: {e}", path.display()))?;
-            session
-                .sync_open(&path, &text)
-                .map_err(|e| format!("lsp multi request failed to sync document: {e}"))?;
+            if sync_document(&session, path, "lsp multi request")? == DocumentSync::Skipped {
+                return Ok(SKIPPED_DOCUMENT_RESPONSE);
+            }
         }
         // Hold the client lock across the WHOLE batch so no other consumer
         // interleaves a request and steals a step's response off the pipe.
@@ -443,18 +469,22 @@ impl SessionRequestClient {
     /// server analyzes the current on-disk content; routed to the leader, the
     /// `file_path` makes the leader do that same `sync_open` on its single
     /// session before the request.
+    ///
+    /// Gives `Ok(None)` when the leader's session skips the document (see
+    /// [`SKIPPED_DOCUMENT_RESPONSE`]): no request went to the server.
     pub async fn lsp_request_with_document(
         &self,
         file_path: &str,
         method: &str,
         params: Value,
-    ) -> Result<Value, IpcError> {
+    ) -> Result<Option<Value>, IpcError> {
         self.client
             .call(
                 METHOD_LSP_REQUEST,
                 lsp_request_envelope(method, params, Some(file_path)),
             )
             .await
+            .map(decode_document_response)
     }
 
     /// Round-trip an ordered batch of LSP requests to the leader, to be run as
@@ -467,12 +497,13 @@ impl SessionRequestClient {
     /// shared stdio pipe. Sending the whole `steps` list in one call lets the
     /// leader hold its `with_client` lock across every step. `file_path` is synced
     /// once before the batch. Returns the ordered raw step responses (a JSON
-    /// array), which the caller unwraps per step.
+    /// array), which the caller unwraps per step, or `None` when the leader's
+    /// session skips the document (see [`SKIPPED_DOCUMENT_RESPONSE`]).
     pub async fn lsp_multi_request_with_document(
         &self,
         file_path: &str,
         steps: Vec<(String, Value)>,
-    ) -> Result<Vec<Value>, IpcError> {
+    ) -> Result<Option<Vec<Value>>, IpcError> {
         let result = self
             .client
             .call(
@@ -480,12 +511,30 @@ impl SessionRequestClient {
                 lsp_multi_request_envelope(file_path, steps),
             )
             .await?;
-        match result {
-            Value::Array(responses) => Ok(responses),
-            other => Err(IpcError::Decode(serde::de::Error::custom(format!(
-                "lsp_multi_request expected an array of step responses, got: {other}"
-            )))),
-        }
+        decode_multi_response(result)
+    }
+}
+
+/// Decode the leader's answer to a document-scoped [`METHOD_LSP_REQUEST`].
+///
+/// [`SKIPPED_DOCUMENT_RESPONSE`] gives `None`: the leader skipped the
+/// document and sent no request. Any other value is the raw LSP response.
+fn decode_document_response(response: Value) -> Option<Value> {
+    (response != SKIPPED_DOCUMENT_RESPONSE).then_some(response)
+}
+
+/// Decode the leader's answer to a [`METHOD_LSP_MULTI_REQUEST`].
+///
+/// [`SKIPPED_DOCUMENT_RESPONSE`] gives `Ok(None)`: the leader skipped the
+/// document and sent no request. A JSON array gives the ordered step
+/// responses. Any other value is a decode error.
+fn decode_multi_response(response: Value) -> Result<Option<Vec<Value>>, IpcError> {
+    match response {
+        SKIPPED_DOCUMENT_RESPONSE => Ok(None),
+        Value::Array(responses) => Ok(Some(responses)),
+        other => Err(IpcError::Decode(serde::de::Error::custom(format!(
+            "lsp_multi_request expected an array of step responses, got: {other}"
+        )))),
     }
 }
 
@@ -668,8 +717,12 @@ mod tests {
     /// method with a benign empty object.
     #[derive(Clone)]
     struct SharedRecordingTransport {
-        log: Arc<Mutex<Vec<(String, Value)>>>,
+        log: WireLog,
     }
+
+    /// The shared wire log of a [`SharedRecordingTransport`]: one
+    /// `(method, params)` entry for each message, in send order.
+    type WireLog = Arc<Mutex<Vec<(String, Value)>>>;
 
     impl LspTransport for SharedRecordingTransport {
         fn send_request(&mut self, method: &str, params: Value) -> Result<Value, LspError> {
@@ -683,6 +736,90 @@ mod tests {
         fn read_message(&mut self) -> Result<Value, LspError> {
             Err(LspError::NotRunning)
         }
+    }
+
+    /// Build a session over a recording transport whose path filter skips
+    /// every path, and return it with the shared wire log.
+    fn filtered_recording_session() -> (LspSession<SharedRecordingTransport>, WireLog) {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let transport = SharedRecordingTransport {
+            log: Arc::clone(&log),
+        };
+        let session = LspSession::new(Arc::new(Mutex::new(Some(transport))), "rust");
+        session.set_path_filter(Arc::new(|_path: &std::path::Path| true));
+        (session, log)
+    }
+
+    #[test]
+    fn document_response_maps_the_skipped_sentinel_to_none() {
+        assert_eq!(decode_document_response(SKIPPED_DOCUMENT_RESPONSE), None);
+        let real = json!({ "jsonrpc": "2.0", "id": 1, "result": [] });
+        assert_eq!(decode_document_response(real.clone()), Some(real));
+    }
+
+    #[test]
+    fn multi_response_maps_the_skipped_sentinel_to_none() {
+        assert_eq!(
+            decode_multi_response(SKIPPED_DOCUMENT_RESPONSE).unwrap(),
+            None
+        );
+        let step = json!({ "result": 1 });
+        assert_eq!(
+            decode_multi_response(json!([step.clone()])).unwrap(),
+            Some(vec![step])
+        );
+        assert!(decode_multi_response(json!({ "not": "an array" })).is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dispatch_lsp_request_for_a_filtered_document_sends_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let (session, log) = filtered_recording_session();
+
+        let value = dispatch(
+            &session,
+            &PrecomputedDependents::default(),
+            &ManualTimer::default(),
+            &DiagnosticsConfig::default(),
+            METHOD_LSP_REQUEST,
+            json!({
+                "method": "textDocument/definition",
+                "params": {},
+                "file_path": file.to_string_lossy(),
+            }),
+        )
+        .await
+        .expect("a filtered document is skipped, not an error");
+
+        assert_eq!(value, SKIPPED_DOCUMENT_RESPONSE);
+        assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dispatch_lsp_multi_request_for_a_filtered_document_sends_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let (session, log) = filtered_recording_session();
+
+        let value = dispatch(
+            &session,
+            &PrecomputedDependents::default(),
+            &ManualTimer::default(),
+            &DiagnosticsConfig::default(),
+            METHOD_LSP_MULTI_REQUEST,
+            lsp_multi_request_envelope(
+                &file.to_string_lossy(),
+                vec![("textDocument/prepareRename".to_string(), json!({}))],
+            ),
+        )
+        .await
+        .expect("a filtered document is skipped, not an error");
+
+        assert_eq!(value, SKIPPED_DOCUMENT_RESPONSE);
+        assert!(log.lock().unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

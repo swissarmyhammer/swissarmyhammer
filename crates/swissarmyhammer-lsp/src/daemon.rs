@@ -20,7 +20,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::client::{LspJsonRpcClient, SharedLspClient};
 use crate::error::LspError;
-use crate::session::LspSession;
+use crate::session::{LspSession, PathFilter};
 use crate::types::{LspDaemonState, OwnedLspServerSpec};
 
 /// Predicate that decides whether a line of LSP-server stderr should be
@@ -139,6 +139,16 @@ impl LspDaemon {
     /// in the owning crate instead of this one.
     pub fn set_stderr_filter(&mut self, filter: StderrFilter) {
         self.stderr_filter = Some(filter);
+    }
+
+    /// Set the filter of the paths that this daemon's session must not send
+    /// to the server.
+    ///
+    /// The filter goes to the one session of this daemon, so every consumer
+    /// that holds a clone of [`session`](Self::session) obeys it. See
+    /// [`LspSession::set_path_filter`].
+    pub fn set_path_filter(&mut self, filter: PathFilter) {
+        self.session.set_path_filter(filter);
     }
 
     /// Override the graceful-shutdown grace period.
@@ -1154,6 +1164,20 @@ mod tests {
 
         daemon.shutdown().await;
         assert_eq!(daemon.state(), LspDaemonState::NotStarted);
+    }
+
+    #[test]
+    fn test_set_path_filter_reaches_the_daemon_session() {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let mut daemon = LspDaemon::new(cat_spec(), workspace.path().to_path_buf());
+        daemon.set_path_filter(Arc::new(|path: &Path| path.ends_with("skip.rs")));
+
+        let outcome = daemon
+            .session()
+            .sync_open(&workspace.path().join("skip.rs"), "fn s() {}")
+            .expect("a filtered path is skipped, not an error");
+
+        assert_eq!(outcome, crate::session::DocumentSync::Skipped);
     }
 
     #[tokio::test]

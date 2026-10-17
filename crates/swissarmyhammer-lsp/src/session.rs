@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use lsp_types::Diagnostic;
 use serde_json::{json, Value};
@@ -35,6 +35,28 @@ use crate::error::LspError;
 /// the cache rather than blocking publishers. Diagnostics are low-frequency
 /// (one batch per document per re-analysis), so a modest buffer is ample.
 const DIAGNOSTICS_CHANNEL_CAPACITY: usize = 256;
+
+/// Predicate that tells if the session must not send a path to the server.
+///
+/// The predicate gets the path of a document and returns `true` to skip it.
+/// A skipped path gets no `didOpen` and no `didChange`, and the callers then
+/// send no request for it. The owner injects the predicate (via
+/// [`LspSupervisorManager::with_path_filter`](crate::LspSupervisorManager::with_path_filter)),
+/// for example from the ignore rules of the workspace walk, so this crate
+/// does not depend on the source of those rules. When no filter is set, no
+/// path is skipped.
+pub type PathFilter = Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+
+/// The result of an [`LspSession::open`] or an [`LspSession::sync_open`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DocumentSync {
+    /// The server's buffer for the document matches the text. The session
+    /// sent a `didOpen` or a `didChange`, or the buffer was already current.
+    Synced,
+    /// The [`PathFilter`] skips the path. The session sent nothing, and the
+    /// caller must send no request for the document.
+    Skipped,
+}
 
 /// What the server is believed to know about one open document.
 ///
@@ -115,6 +137,9 @@ struct SessionInner<C: LspTransport> {
     /// [`is_ready`](LspSession::is_ready) and
     /// [`pull_diagnostics`](LspSession::pull_diagnostics).
     ready: AtomicBool,
+    /// The paths the session must not send to the server. `None` skips no
+    /// path. See [`set_path_filter`](LspSession::set_path_filter).
+    path_filter: RwLock<Option<PathFilter>>,
 }
 
 /// A single owned LSP session with a shared open-document set.
@@ -156,9 +181,42 @@ impl<C: LspTransport> LspSession<C> {
                 diagnostics: Mutex::new(HashMap::new()),
                 diagnostics_tx,
                 ready: AtomicBool::new(true),
+                path_filter: RwLock::new(None),
             }),
             language_id: language_id.into(),
         }
+    }
+
+    /// Set the filter of the paths that this session must not send.
+    ///
+    /// Every clone of the session shares the filter. After this call,
+    /// [`open`](Self::open) and [`sync_open`](Self::sync_open) give
+    /// [`DocumentSync::Skipped`] for each path that the filter skips, and
+    /// send nothing to the server.
+    pub fn set_path_filter(&self, filter: PathFilter) {
+        *self
+            .inner
+            .path_filter
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(filter);
+    }
+
+    /// Tell if the path filter skips `path`.
+    ///
+    /// A caller that sends a path-scoped request with no `sync_open` before
+    /// it (for example a diagnostics pull for a file it cannot read) uses
+    /// this to send nothing for a skipped path.
+    pub fn skips_path(&self, path: &Path) -> bool {
+        let filter = self
+            .inner
+            .path_filter
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let skipped = filter.as_ref().is_some_and(|filter| filter(path));
+        if skipped {
+            tracing::debug!("lsp session: skipped filtered path {}", path.display());
+        }
+        skipped
     }
 
     /// Snapshot the current open-document set (`uri -> `[`DocState`]).
@@ -180,7 +238,14 @@ impl<C: LspTransport> LspSession<C> {
     /// records it in the open set. A subsequent `open` for an already-open uri
     /// is a no-op: no duplicate `didOpen` is emitted and the recorded state is
     /// unchanged. The document then stays open across requests.
-    pub fn open(&self, path: &Path, text: &str) -> Result<(), LspError> {
+    ///
+    /// A path that the [`PathFilter`] skips gets no `didOpen`, and the result
+    /// is [`DocumentSync::Skipped`]. Otherwise the result is
+    /// [`DocumentSync::Synced`].
+    pub fn open(&self, path: &Path, text: &str) -> Result<DocumentSync, LspError> {
+        if self.skips_path(path) {
+            return Ok(DocumentSync::Skipped);
+        }
         let uri = file_uri(path);
         // Hold the docs lock across the wire send so the check-and-emit is
         // atomic: two concurrent clones cannot both observe "not open" and each
@@ -189,7 +254,7 @@ impl<C: LspTransport> LspSession<C> {
         let mut docs = self.lock_docs();
         if docs.contains_key(&uri) {
             // Already open — suppress the duplicate didOpen.
-            return Ok(());
+            return Ok(DocumentSync::Synced);
         }
 
         self.notify(
@@ -211,7 +276,7 @@ impl<C: LspTransport> LspSession<C> {
                 text_hash: hash_text(text),
             },
         );
-        Ok(())
+        Ok(DocumentSync::Synced)
     }
 
     /// Apply a full-text change to an open document.
@@ -271,10 +336,17 @@ impl<C: LspTransport> LspSession<C> {
     /// analyzed against the stale buffer the server still holds from the first
     /// open. Both underlying steps are no-ops when nothing changed, so an
     /// unchanged re-sync costs nothing on the wire.
-    pub fn sync_open(&self, path: &Path, text: &str) -> Result<(), LspError> {
-        if self.is_open(path) {
+    ///
+    /// A path that the [`PathFilter`] skips gets nothing on the wire, and the
+    /// result is [`DocumentSync::Skipped`]. The caller must then send no
+    /// request for the document. This is not an error: a skipped path is a
+    /// normal outcome, also when the session has no live client.
+    pub fn sync_open(&self, path: &Path, text: &str) -> Result<DocumentSync, LspError> {
+        if self.skips_path(path) {
+            Ok(DocumentSync::Skipped)
+        } else if self.is_open(path) {
             // Already open — refresh the buffer (no-op when text is unchanged).
-            self.change(path, text)
+            self.change(path, text).map(|()| DocumentSync::Synced)
         } else {
             self.open(path, text)
         }
@@ -736,6 +808,82 @@ mod tests {
             .with_client(|_c| panic!("closure must not run without a live client"))
             .expect("with_client should be Ok when absent");
         assert!(out.is_none(), "absent client yields Ok(None)");
+    }
+
+    /// Workspace root that the path-filter tests use.
+    const FILTER_TEST_ROOT: &str = "/ws";
+
+    /// Install a path filter that skips each path under `<root>/.build/` and
+    /// each path outside `<root>`.
+    fn install_build_dir_filter<C: LspTransport>(session: &LspSession<C>) {
+        session.set_path_filter(Arc::new(|path: &Path| {
+            let root = Path::new(FILTER_TEST_ROOT);
+            !path.starts_with(root) || path.starts_with(root.join(".build"))
+        }));
+    }
+
+    #[test]
+    fn sync_open_skips_a_filtered_path_and_sends_the_normal_path() {
+        let (session, client) = session_with_fake();
+        install_build_dir_filter(&session);
+        let ignored = PathBuf::from("/ws/.build/checkouts/pkg/Sources/a.swift");
+        let normal = PathBuf::from("/ws/Sources/main.swift");
+
+        let ignored_outcome = session.sync_open(&ignored, "let a = 1").expect("ignored");
+        let normal_outcome = session.sync_open(&normal, "let b = 2").expect("normal");
+
+        assert_eq!(ignored_outcome, DocumentSync::Skipped);
+        assert_eq!(normal_outcome, DocumentSync::Synced);
+        let guard = client.lock().unwrap();
+        let fake = guard.as_ref().unwrap();
+        let uris: Vec<&str> = fake
+            .sent_notifications
+            .iter()
+            .filter_map(|(_, params)| params["textDocument"]["uri"].as_str())
+            .collect();
+        assert_eq!(uris, vec![file_uri(&normal).as_str()]);
+        assert!(fake.sent_requests.is_empty());
+        assert!(!session.is_open(&ignored));
+    }
+
+    #[test]
+    fn open_skips_a_path_outside_the_filtered_root() {
+        let (session, client) = session_with_fake();
+        install_build_dir_filter(&session);
+        let outside = PathBuf::from("/elsewhere/lib.rs");
+
+        let outcome = session.open(&outside, "fn a() {}").expect("outside");
+
+        assert_eq!(outcome, DocumentSync::Skipped);
+        assert_eq!(notification_count(&client, "textDocument/didOpen"), 0);
+        assert!(!session.is_open(&outside));
+    }
+
+    #[test]
+    fn path_filter_is_shared_by_every_clone() {
+        let (session, client) = session_with_fake();
+        let clone = session.clone();
+        install_build_dir_filter(&session);
+
+        let outcome = clone
+            .sync_open(Path::new("/ws/.build/a.swift"), "let a = 1")
+            .expect("clone");
+
+        assert_eq!(outcome, DocumentSync::Skipped);
+        assert_eq!(notification_count(&client, "textDocument/didOpen"), 0);
+    }
+
+    #[test]
+    fn filtered_path_is_skipped_also_with_no_live_client() {
+        let absent: Arc<Mutex<Option<FakeTransport>>> = Arc::new(Mutex::new(None));
+        let session = LspSession::new(absent, "rust");
+        install_build_dir_filter(&session);
+
+        let outcome = session
+            .sync_open(Path::new("/ws/.build/a.swift"), "let a = 1")
+            .expect("a skipped path is not an error");
+
+        assert_eq!(outcome, DocumentSync::Skipped);
     }
 
     #[test]

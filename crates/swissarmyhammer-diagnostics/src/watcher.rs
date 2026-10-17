@@ -34,7 +34,7 @@ use async_watcher::{notify::RecursiveMode, AsyncDebouncer};
 
 use swissarmyhammer_code_context::IgnoreFilter;
 use swissarmyhammer_lsp::client::LspTransport;
-use swissarmyhammer_lsp::LspSession;
+use swissarmyhammer_lsp::{DocumentSync, LspSession};
 
 use crate::language::is_diagnosable;
 
@@ -121,7 +121,8 @@ pub const DIAGNOSTICS_WATCH_DEBOUNCE: Duration = Duration::from_secs(1);
 /// down the watcher.
 ///
 /// Returns `true` when the file was diagnosable and a refresh was attempted,
-/// `false` when it was skipped (non-diagnosable or unreadable).
+/// `false` when it was skipped (non-diagnosable, unreadable, or skipped by
+/// the session's path filter).
 pub fn refresh_file<C: LspTransport>(session: &LspSession<C>, path: &Path) -> bool {
     if !is_diagnosable(path) {
         return false;
@@ -129,9 +130,12 @@ pub fn refresh_file<C: LspTransport>(session: &LspSession<C>, path: &Path) -> bo
     let Ok(text) = std::fs::read_to_string(path) else {
         return false;
     };
-    if session.sync_open(path, &text).is_err() {
+    match session.sync_open(path, &text) {
+        Ok(DocumentSync::Synced) => {}
+        // The session's path filter skips the file: send no pull for it.
+        Ok(DocumentSync::Skipped) => return false,
         // No live client (or a transient notify failure) — nothing to pull.
-        return false;
+        Err(_) => return false,
     }
     // Pull so the result feeds the cache + fan-out. The push model is not wired
     // into the daemon read loop, so the pull is what makes the change observable.
@@ -340,6 +344,22 @@ mod tests {
         // The pulled diagnostics landed in the session cache + fan-out.
         let uri = swissarmyhammer_lsp::file_uri_from_path(&rs.to_string_lossy());
         assert_eq!(session.diagnostics_for(&uri).len(), 1);
+    }
+
+    #[test]
+    fn refresh_file_sends_nothing_for_a_filtered_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let rs = dir.path().join("main.rs");
+        std::fs::write(&rs, "fn main() {}\n").unwrap();
+
+        let (session, client) = recording_session();
+        session.set_path_filter(Arc::new(|_path: &Path| true));
+        assert!(!refresh_file(&session, &rs));
+
+        let guard = client.lock().unwrap();
+        let t = guard.as_ref().unwrap();
+        assert_eq!(t.notification_count("textDocument/didOpen"), 0);
+        assert_eq!(t.request_count("textDocument/diagnostic"), 0);
     }
 
     #[test]

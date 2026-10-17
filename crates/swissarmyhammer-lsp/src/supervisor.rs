@@ -13,6 +13,7 @@ use tracing::{info, warn};
 use crate::daemon::{LspDaemon, StderrFilter};
 use crate::error::LspError;
 use crate::registry::servers_for_project;
+use crate::session::PathFilter;
 use crate::types::{DaemonStatus, LspDaemonState, OwnedLspServerSpec};
 
 /// Outcome of a leader-gated supervisor start.
@@ -51,6 +52,10 @@ pub struct LspSupervisorManager {
     /// spawns. Injected by the owner so this crate carries no
     /// configuration-source dependency.
     stderr_filter: Option<StderrFilter>,
+    /// Optional filter of the paths that the session of each daemon this
+    /// supervisor spawns must not send. Injected by the owner so this crate
+    /// carries no dependency on the source of the ignore rules.
+    path_filter: Option<PathFilter>,
 }
 
 impl std::fmt::Debug for LspSupervisorManager {
@@ -69,6 +74,7 @@ impl LspSupervisorManager {
             workspace_root,
             daemons: HashMap::new(),
             stderr_filter: None,
+            path_filter: None,
         }
     }
 
@@ -82,6 +88,30 @@ impl LspSupervisorManager {
     pub fn with_stderr_filter(mut self, filter: StderrFilter) -> Self {
         self.stderr_filter = Some(filter);
         self
+    }
+
+    /// Attach a path filter to the session of every daemon this supervisor
+    /// spawns.
+    ///
+    /// The predicate receives the path of each document that a consumer
+    /// syncs, and returns `true` to skip it. A skipped path never goes to the
+    /// server. The owner supplies the filter (e.g. backed by code-context's
+    /// ignore rules) so this crate stays free of that dependency.
+    pub fn with_path_filter(mut self, filter: PathFilter) -> Self {
+        self.path_filter = Some(filter);
+        self
+    }
+
+    /// Make a daemon for `spec` with the filters of this supervisor.
+    fn new_daemon(&self, spec: OwnedLspServerSpec) -> LspDaemon {
+        let mut daemon = LspDaemon::new(spec, self.workspace_root.clone());
+        if let Some(filter) = &self.stderr_filter {
+            daemon.set_stderr_filter(filter.clone());
+        }
+        if let Some(filter) = &self.path_filter {
+            daemon.set_path_filter(filter.clone());
+        }
+        daemon
     }
 
     /// Detect projects in the workspace and start an LSP daemon for each
@@ -124,10 +154,7 @@ impl LspSupervisorManager {
                 // Already running — skip
                 continue;
             }
-            let mut daemon = LspDaemon::new(spec, self.workspace_root.clone());
-            if let Some(filter) = &self.stderr_filter {
-                daemon.set_stderr_filter(filter.clone());
-            }
+            let mut daemon = self.new_daemon(spec);
             let outcome = daemon.start().await;
             self.daemons.insert(command, daemon);
             results.push(outcome);
@@ -273,6 +300,8 @@ mod tests {
     // -- helper -----------------------------------------------------------
 
     use crate::types::OwnedLspServerSpec;
+    use std::path::Path;
+    use std::sync::Arc;
 
     /// Startup timeout (seconds) used by test specs — short so failing
     /// handshakes resolve quickly.
@@ -298,6 +327,20 @@ mod tests {
         let cmd = spec.command.clone();
         let daemon = LspDaemon::new(spec, mgr.workspace_root.clone());
         mgr.daemons.insert(cmd, daemon);
+    }
+
+    #[test]
+    fn test_with_path_filter_reaches_each_new_daemon_session() {
+        let mgr = LspSupervisorManager::new(PathBuf::from("/tmp/test"))
+            .with_path_filter(Arc::new(|path: &Path| path.starts_with("/tmp/test/out")));
+
+        let daemon = mgr.new_daemon(fake_spec("fake-filtered-lsp"));
+        let outcome = daemon
+            .session()
+            .sync_open(Path::new("/tmp/test/out/a.rs"), "fn a() {}")
+            .expect("a filtered path is skipped, not an error");
+
+        assert_eq!(outcome, crate::session::DocumentSync::Skipped);
     }
 
     // -- start (spawn_all) tests ------------------------------------------
