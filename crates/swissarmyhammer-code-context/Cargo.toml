@@ -28,6 +28,7 @@ swissarmyhammer-entity-search = { workspace = true }
 swissarmyhammer-search = { workspace = true }
 swissarmyhammer-sem = { workspace = true }
 tree-sitter = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

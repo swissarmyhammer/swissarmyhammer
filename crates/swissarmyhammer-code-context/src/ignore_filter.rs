@@ -133,6 +133,21 @@ impl IgnoreFilter {
         }
     }
 
+    /// Load the ignore rules for `workspace_root` on the blocking pool.
+    ///
+    /// [`IgnoreFilter::new`] walks the workspace, so an async caller must not
+    /// run it on a runtime worker thread. This constructor runs it with
+    /// [`tokio::task::spawn_blocking`] and gives the result.
+    ///
+    /// # Errors
+    ///
+    /// Gives the [`tokio::task::JoinError`] when the blocking task panics or
+    /// the runtime cancels it.
+    pub async fn load(workspace_root: &Path) -> Result<Self, tokio::task::JoinError> {
+        let root = workspace_root.to_path_buf();
+        tokio::task::spawn_blocking(move || Self::new(&root)).await
+    }
+
     /// Tell if the watchers must skip `path`.
     ///
     /// `path` is absolute, or relative to the workspace root. A path that is
@@ -327,12 +342,60 @@ mod tests {
         assert!(filter.is_ignored(&other.path().join("a.rs")));
     }
 
+    /// Make a workspace root that is a symlink to a real directory in `outer`.
+    ///
+    /// The canonical form of the returned root is different from the root, the
+    /// same as `/var/...` and `/private/var/...` on macOS. The function returns
+    /// the root and its canonical form.
+    fn symlinked_root(outer: &Path) -> (PathBuf, PathBuf) {
+        let real = outer.join("real");
+        fs::create_dir_all(&real).unwrap();
+        let link = outer.join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        #[cfg(not(unix))]
+        std::os::windows::fs::symlink_dir(&real, &link).unwrap();
+        let canonical = link.canonicalize().unwrap();
+        assert_ne!(
+            canonical, link,
+            "precondition: the root must not be canonical"
+        );
+        (link, canonical)
+    }
+
+    #[test]
+    fn path_under_the_canonical_root_is_not_ignored() {
+        let outer = tempfile::tempdir().unwrap();
+        let (root, canonical) = symlinked_root(outer.path());
+        let path = touch(&canonical, "src/a.rs");
+        let filter = IgnoreFilter::new(&root);
+        assert!(!filter.is_ignored(&path));
+    }
+
+    #[test]
+    fn hard_skip_path_under_the_canonical_root_is_ignored() {
+        let outer = tempfile::tempdir().unwrap();
+        let (root, canonical) = symlinked_root(outer.path());
+        let path = touch(&canonical, ".build/checkouts/X/Sources/a.swift");
+        let filter = IgnoreFilter::new(&root);
+        assert!(filter.is_ignored(&path));
+    }
+
     #[test]
     fn relative_path_is_read_from_the_root() {
         let dir = tempfile::tempdir().unwrap();
         let filter = IgnoreFilter::new(dir.path());
         assert!(filter.is_ignored(Path::new(".build/a.swift")));
         assert!(!filter.is_ignored(Path::new("Sources/a.swift")));
+    }
+
+    #[tokio::test]
+    async fn load_obeys_the_ignore_files_of_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".gitignore"), "gen/\n").unwrap();
+        let filter = IgnoreFilter::load(dir.path()).await.unwrap();
+        assert!(filter.is_ignored(&dir.path().join("gen/a.rs")));
+        assert!(!filter.is_ignored(&dir.path().join("src/a.rs")));
     }
 
     #[test]

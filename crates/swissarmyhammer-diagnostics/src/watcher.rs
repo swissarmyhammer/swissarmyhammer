@@ -241,12 +241,8 @@ async fn run_diagnostics_watcher<C: LspTransport>(
         workspace_root.display()
     );
 
-    // Load the ignore rules one time. The load walks the workspace, so it
-    // runs on the blocking pool.
-    let filter = {
-        let root = workspace_root.to_path_buf();
-        tokio::task::spawn_blocking(move || IgnoreFilter::new(&root)).await?
-    };
+    // Load the ignore rules one time, before the first event.
+    let filter = IgnoreFilter::load(workspace_root).await?;
 
     while let Some(events_result) = event_rx.recv().await {
         match events_result {

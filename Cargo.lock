@@ -6514,6 +6514,7 @@ dependencies = [
  "swissarmyhammer-sem",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "tree-sitter",
  "tree-sitter-rust",

@@ -158,12 +158,8 @@ async fn run_watcher(
 
     let fanout = FanoutWatcher::new();
     let ws_root = workspace_root.to_path_buf();
-    // Load the ignore rules one time. The load walks the workspace, so it
-    // runs on the blocking pool.
-    let filter = {
-        let root = ws_root.clone();
-        tokio::task::spawn_blocking(move || IgnoreFilter::new(&root)).await?
-    };
+    // Load the ignore rules one time, before the first event.
+    let filter = IgnoreFilter::load(&ws_root).await?;
 
     // Wake on the SHUTDOWN_CHECK_INTERVAL_MILLIS tick even with no filesystem
     // events so a step-down (which sets the shutdown flag) is observed promptly
