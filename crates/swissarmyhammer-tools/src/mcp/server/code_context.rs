@@ -200,9 +200,8 @@ impl McpServer {
             // The filter is the one shared rule set of the workspace, so a
             // watcher that loads the rules again after an ignore file change
             // also changes what the sessions skip.
-            if let Some(filter) = workspace_ignore_filter(&workspace_root).await {
-                supervisor = supervisor.with_path_filter(filter.path_filter());
-            }
+            supervisor = supervisor
+                .with_path_filter(workspace_ignore_filter(&workspace_root).await.path_filter());
             if let Ok(compiled) = swissarmyhammer_code_context::CompiledCodeContextConfig::compile(
                 &swissarmyhammer_code_context::load_code_context_config(),
             ) {
@@ -457,9 +456,7 @@ impl McpServer {
         let watcher_shutdown = std::sync::Arc::clone(&shutdown);
         tokio::spawn(async move {
             use crate::mcp::tools::code_context::watcher::start_code_context_watcher;
-            let Some(filter) = workspace_ignore_filter(&watcher_root).await else {
-                return;
-            };
+            let filter = workspace_ignore_filter(&watcher_root).await;
             let _watcher_handle =
                 start_code_context_watcher(watcher_root, watcher_db, filter, watcher_shutdown);
             std::future::pending::<()>().await;
@@ -549,17 +546,48 @@ static WORKSPACE_IGNORE_FILTER: tokio::sync::OnceCell<
 /// Give the shared ignore rule set of `workspace_root`, and load it on the
 /// first call.
 ///
-/// Returns `None`, with a warning, when the rules cannot be loaded. The caller
-/// then starts no consumer that needs the rules.
+/// This always gives a rule set, so each consumer always starts: the LSP path
+/// filter, the code-context watcher and the diagnostics watcher. When the
+/// rules cannot be loaded, the rule set has the hard-skip rules only (see
+/// [`ignore_filter_or_hard_skips`]). The next change to an ignore file loads
+/// the full rules again.
 async fn workspace_ignore_filter(
     workspace_root: &std::path::Path,
-) -> Option<swissarmyhammer_code_context::SharedIgnoreFilter> {
+) -> swissarmyhammer_code_context::SharedIgnoreFilter {
     WORKSPACE_IGNORE_FILTER
-        .get_or_try_init(|| swissarmyhammer_code_context::SharedIgnoreFilter::load(workspace_root))
+        .get_or_init(|| async {
+            let loaded = swissarmyhammer_code_context::IgnoreFilter::load(workspace_root).await;
+            swissarmyhammer_code_context::SharedIgnoreFilter::new(ignore_filter_or_hard_skips(
+                workspace_root,
+                loaded,
+            ))
+        })
         .await
-        .cloned()
-        .inspect_err(|e| tracing::warn!("code-context: cannot load the ignore rules: {}", e))
-        .ok()
+        .clone()
+}
+
+/// Pick the ignore rules that the watchers start with.
+///
+/// `loaded` is the result of [`IgnoreFilter::load`]. When the load succeeded,
+/// its rules are given. When it failed, a warning is logged and the rules are
+/// [`IgnoreFilter::hard_skips_only`]: hidden paths and the hard-skip
+/// directories, with no ignore file. An empty rule set is not correct here.
+/// With no rules, the watchers would send events for `.build/`, `target/` and
+/// `node_modules/` to the index and to the language server again.
+///
+/// [`IgnoreFilter::load`]: swissarmyhammer_code_context::IgnoreFilter::load
+/// [`IgnoreFilter::hard_skips_only`]: swissarmyhammer_code_context::IgnoreFilter::hard_skips_only
+fn ignore_filter_or_hard_skips(
+    workspace_root: &std::path::Path,
+    loaded: Result<swissarmyhammer_code_context::IgnoreFilter, tokio::task::JoinError>,
+) -> swissarmyhammer_code_context::IgnoreFilter {
+    loaded.unwrap_or_else(|e| {
+        tracing::warn!(
+            "code-context: cannot load the ignore rules, the watchers start with the hard-skip rules only: {}",
+            e
+        );
+        swissarmyhammer_code_context::IgnoreFilter::hard_skips_only(workspace_root)
+    })
 }
 
 /// Walk up from `work_dir` to find the enclosing git repository root. Returns
@@ -710,9 +738,7 @@ fn spawn_lsp_workers_for_clients(
         // canonical form of `watch_root`.
         let filter_root = workspace_root.to_path_buf();
         tokio::spawn(async move {
-            let Some(filter) = workspace_ignore_filter(&filter_root).await else {
-                return;
-            };
+            let filter = workspace_ignore_filter(&filter_root).await;
             swissarmyhammer_diagnostics::start_diagnostics_watcher_with_notifier(
                 watch_root,
                 routes,
@@ -1015,6 +1041,41 @@ async fn run_lsp_health_check_loop() -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Make the [`tokio::task::JoinError`] of a task that the runtime
+    /// cancelled, the same error a failed [`IgnoreFilter::load`] gives.
+    ///
+    /// [`IgnoreFilter::load`]: swissarmyhammer_code_context::IgnoreFilter::load
+    async fn cancelled_join_error() -> tokio::task::JoinError {
+        let task = tokio::spawn(std::future::pending::<()>());
+        task.abort();
+        task.await.unwrap_err()
+    }
+
+    /// When the ignore rules cannot load, the watchers start with the
+    /// hard-skip rules. Build output stays out of the index and out of the
+    /// language server, and a source file is kept.
+    #[tokio::test]
+    async fn ignore_filter_or_hard_skips_gives_the_hard_skips_when_the_load_fails() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let filter = ignore_filter_or_hard_skips(dir.path(), Err(cancelled_join_error().await));
+
+        assert!(filter.is_ignored(&dir.path().join(".build/x.swift")));
+        assert!(!filter.is_ignored(&dir.path().join("src/a.rs")));
+    }
+
+    /// When the ignore rules load, the watchers use them.
+    #[tokio::test]
+    async fn ignore_filter_or_hard_skips_keeps_the_loaded_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "gen/\n").unwrap();
+        let loaded = swissarmyhammer_code_context::IgnoreFilter::load(dir.path()).await;
+
+        let filter = ignore_filter_or_hard_skips(dir.path(), loaded);
+
+        assert!(filter.is_ignored(&dir.path().join("gen/a.rs")));
+    }
 
     /// The leader-gated supervisor spawn is the single decision point that
     /// stops a follower from launching its own rust-analyzer. A follower

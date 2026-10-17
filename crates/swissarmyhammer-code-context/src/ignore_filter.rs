@@ -125,6 +125,22 @@ impl IgnoreFilter {
         }
         matchers.sort_by_key(|m| Reverse(m.path().components().count()));
 
+        Self {
+            matchers,
+            ..Self::hard_skips_only(workspace_root)
+        }
+    }
+
+    /// Make the rules for `workspace_root` with no ignore file.
+    ///
+    /// The filter skips each hidden path, each directory in
+    /// [`HARD_SKIP_DIRS`], and each path outside the root. It reads no
+    /// `.gitignore`, no `.ignore` and no `.git/info/exclude`, so it walks no
+    /// directory and cannot fail. Use it when [`IgnoreFilter::load`] fails: a
+    /// watcher that starts with no rules at all would send build output (for
+    /// example `.build/`, `target/` and `node_modules/`) to the index and to
+    /// the language server again.
+    pub fn hard_skips_only(workspace_root: &Path) -> Self {
         let canonical_root = workspace_root
             .canonicalize()
             .ok()
@@ -132,7 +148,7 @@ impl IgnoreFilter {
         Self {
             root: workspace_root.to_path_buf(),
             canonical_root,
-            matchers,
+            matchers: Vec::new(),
         }
     }
 
@@ -256,11 +272,11 @@ impl IgnoreFilter {
 /// The one ignore rule set of a workspace, shared by each consumer.
 ///
 /// The code-context watcher, the diagnostics watcher and the [`PathFilter`] of
-/// the LSP sessions hold clones of one `SharedIgnoreFilter`. When a watcher
-/// sees a change to an ignore file, [`reload_if_changed`](Self::reload_if_changed)
-/// loads the rules again, and each clone then uses the new rules. Thus the
-/// rules change in one place, and no consumer keeps the old rules until sah
-/// starts again.
+/// the LSP sessions hold clones of one `SharedIgnoreFilter`. Each watcher gives
+/// each event batch to [`rules_for_batch`](Self::rules_for_batch). When the
+/// batch changes an ignore file, that method loads the rules again, and each
+/// clone then uses the new rules. Thus the rules change in one place, and no
+/// consumer keeps the old rules until sah starts again.
 #[derive(Debug, Clone)]
 pub struct SharedIgnoreFilter {
     /// The current rules. A reload puts a new filter here, so a caller that
@@ -306,7 +322,7 @@ impl SharedIgnoreFilter {
     /// ignore file reads no file and keeps the current rules. Returns `true`
     /// when the rules were loaded again. A load that fails is logged, and the
     /// current rules stay.
-    pub async fn reload_if_changed<'a, I>(&self, paths: I) -> bool
+    async fn reload_if_changed<'a, I>(&self, paths: I) -> bool
     where
         I: IntoIterator<Item = &'a Path>,
     {
@@ -328,6 +344,23 @@ impl SharedIgnoreFilter {
                 false
             }
         }
+    }
+
+    /// Give the rules that one watcher event batch must obey.
+    ///
+    /// `paths` are the raw paths of the batch, before the watcher filters it.
+    /// When one of them is an ignore file, the rules are loaded again first
+    /// (see [`IgnoreFilter::is_ignore_file`]). Then the current rules are
+    /// given. Thus this batch and each batch after it obey the new rules, with
+    /// no restart. A batch with no ignore file reads no file. Each watcher
+    /// calls this one method, so the watchers cannot differ in when they load
+    /// the rules again.
+    pub async fn rules_for_batch<'a, I>(&self, paths: I) -> Arc<IgnoreFilter>
+    where
+        I: IntoIterator<Item = &'a Path>,
+    {
+        self.reload_if_changed(paths).await;
+        self.current()
     }
 
     /// Make these rules the [`PathFilter`] of the LSP sessions.
@@ -658,6 +691,61 @@ mod tests {
         shared.reload_if_changed([gitignore.as_path()]).await;
 
         assert!(path_filter(&generated));
+    }
+
+    #[tokio::test]
+    async fn rules_for_batch_gives_the_reloaded_rules_after_an_ignore_file_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = SharedIgnoreFilter::load(dir.path()).await.unwrap();
+        let gitignore = dir.path().join(".gitignore");
+        fs::write(&gitignore, "gen/\n").unwrap();
+
+        let rules = shared.rules_for_batch([gitignore.as_path()]).await;
+
+        assert!(rules.is_ignored(&dir.path().join("gen/a.rs")));
+        assert!(Arc::ptr_eq(&rules, &shared.current()));
+    }
+
+    #[tokio::test]
+    async fn rules_for_batch_gives_the_same_rules_for_a_batch_with_no_ignore_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = SharedIgnoreFilter::load(dir.path()).await.unwrap();
+        let before = shared.current();
+        let source = dir.path().join("src/a.rs");
+
+        let rules = shared.rules_for_batch([source.as_path()]).await;
+
+        assert!(Arc::ptr_eq(&before, &rules));
+    }
+
+    #[test]
+    fn hard_skips_only_ignores_hard_skip_and_hidden_paths_and_keeps_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let filter = IgnoreFilter::hard_skips_only(dir.path());
+        assert!(filter.is_ignored(&dir.path().join(".build/x.swift")));
+        assert!(filter.is_ignored(&dir.path().join("target/debug/a.rs")));
+        assert!(filter.is_ignored(&dir.path().join("node_modules/pkg/index.js")));
+        assert!(filter.is_ignored(&dir.path().join(".hidden/a.rs")));
+        assert!(!filter.is_ignored(&dir.path().join("src/a.rs")));
+    }
+
+    #[test]
+    fn hard_skips_only_reads_no_ignore_file() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".gitignore"), "gen/\n").unwrap();
+        let filter = IgnoreFilter::hard_skips_only(dir.path());
+        assert!(!filter.is_ignored(&dir.path().join("gen/a.rs")));
+    }
+
+    #[test]
+    fn hard_skips_only_strips_the_canonical_root() {
+        let outer = tempfile::tempdir().unwrap();
+        let (root, canonical) = symlinked_root(outer.path());
+        let filter = IgnoreFilter::hard_skips_only(&root);
+        assert_eq!(
+            filter.relative(&canonical.join("src/a.rs")),
+            Some(Path::new("src/a.rs"))
+        );
     }
 
     #[test]

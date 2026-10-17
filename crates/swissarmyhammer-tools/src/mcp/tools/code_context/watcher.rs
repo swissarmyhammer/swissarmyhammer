@@ -248,13 +248,11 @@ pub(crate) fn collect_file_events(
 
 /// Convert one debounced batch into [`FileEvent`]s with the current rules.
 ///
-/// When the batch changes an ignore file (`.gitignore`, `.ignore` or
-/// `.git/info/exclude`), the shared rules are loaded again first
-/// ([`SharedIgnoreFilter::reload_if_changed`]). The check reads the raw event
-/// paths, because [`collect_file_events`] drops each ignore file: it is not a
-/// source file, and `.git/` is a hard skip directory. Thus this batch and each
-/// batch after it obey the new rules, with no restart. A batch with no ignore
-/// file reads no ignore file.
+/// The rules come from [`SharedIgnoreFilter::rules_for_batch`], which loads
+/// them again when the batch changes an ignore file (`.gitignore`, `.ignore`
+/// or `.git/info/exclude`). It gets the raw event paths, because
+/// [`collect_file_events`] drops each ignore file: it is not a source file,
+/// and `.git/` is a hard skip directory.
 pub(crate) async fn collect_batch_events(
     debounced_events: &[async_watcher::DebouncedEvent],
     filter: &SharedIgnoreFilter,
@@ -262,8 +260,8 @@ pub(crate) async fn collect_batch_events(
     let raw_paths = debounced_events
         .iter()
         .flat_map(|debounced| debounced.event.paths.iter().map(PathBuf::as_path));
-    filter.reload_if_changed(raw_paths).await;
-    collect_file_events(debounced_events, &filter.current())
+    let rules = filter.rules_for_batch(raw_paths).await;
+    collect_file_events(debounced_events, &rules)
 }
 
 /// Handle one debounced batch of successful filesystem events.

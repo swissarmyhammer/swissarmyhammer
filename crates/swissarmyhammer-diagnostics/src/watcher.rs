@@ -281,20 +281,18 @@ async fn run_diagnostics_watcher<C: LspTransport>(
 
 /// Turn one debounced batch into the changed paths to re-diagnose.
 ///
-/// When the batch changes an ignore file (`.gitignore`, `.ignore` or
-/// `.git/info/exclude`), the shared rules are loaded again first
-/// ([`SharedIgnoreFilter::reload_if_changed`]). The check reads the raw event
-/// paths, because [`changed_paths`] drops each ignore file. Thus this batch
-/// and each batch after it obey the new rules, with no restart. A batch with
-/// no ignore file reads no ignore file.
+/// The rules come from [`SharedIgnoreFilter::rules_for_batch`], which loads
+/// them again when the batch changes an ignore file (`.gitignore`, `.ignore`
+/// or `.git/info/exclude`). It gets the raw event paths, because
+/// [`changed_paths`] drops each ignore file.
 async fn batch_changed_paths(
     events: &[async_watcher::DebouncedEvent],
     filter: &SharedIgnoreFilter,
 ) -> Vec<PathBuf> {
-    filter
-        .reload_if_changed(events.iter().map(|e| e.path.as_path()))
+    let rules = filter
+        .rules_for_batch(events.iter().map(|e| e.path.as_path()))
         .await;
-    changed_paths(events, &filter.current())
+    changed_paths(events, &rules)
 }
 
 /// Flatten a debounced batch into the deduped set of changed file paths.
