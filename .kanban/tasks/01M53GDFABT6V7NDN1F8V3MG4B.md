@@ -85,6 +85,38 @@ comments:
     - evidence: `cargo nextest run --no-fail-fast -E 'rdeps(swissarmyhammer-code-context)'` ran 4996 tests. 4996 passed, 0 failed, 0 skipped (62 slow). `cargo clippy --workspace --all-targets -- -D warnings` shows no warnings (exit 0). `cargo fmt --check` shows no differences (exit 0).
     - next: Do the review step.
   timestamp: 2026-10-17T10:30:11.597748+00:00
+- actor: claude-code
+  id: 01m54pt3h5zssf3cdcjdzk1fyz
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD (9fd7dc013); 1 finding, 1 confirmed, 0 refuted — crates/swissarmyhammer-code-context/src/layered_context.rs:2982. All items of the 2026-10-17 05:11 section are checked.
+    - next: implement the open item of the 2026-10-17 05:30 section, then review again.
+  timestamp: 2026-10-17T10:34:06.245145+00:00
+- actor: claude-code
+  id: 01m54ptnvpj5t02c89qjn3kzav
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — layered_context.rs, lsp_worker.rs (filter before read, shared helper, 3 tests)
+    - test: green — nextest rdeps(code-context), 4996 passed
+    - commit: 9fd7dc013
+    - review: findings — crates/swissarmyhammer-code-context/src/layered_context.rs:2982
+  timestamp: 2026-10-17T10:34:25.014527+00:00
+- actor: claude-code
+  id: 01m54pw8k4yrxnmgvwp4ra6cm6
+  text: |-
+    Review finding layered_context.rs:2982 (reuse/reuse) fixed. The test `test_lsp_multi_request_with_document_returns_none_for_a_filtered_path` now calls `multi_request_on_a_filtered_path` with its `file_path` and keeps its assertion. The mock responses for didOpen and one request were removed: a filtered path sends no request, so the helper's empty mock is sufficient. A search of the test module found no other copy of this setup (`set_path_filter` occurs only in the helper now). This is a test-only refactor, so no new RED test applies.
+
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-code-context/src/layered_context.rs. `cargo nextest run -p swissarmyhammer-code-context`: 735 passed, 0 failed, 0 skipped. `cargo clippy -p swissarmyhammer-code-context --all-targets -- -D warnings`: clean. `cargo fmt --all`: done.
+    - next: /test, then /review
+  timestamp: 2026-10-17T10:35:16.964695+00:00
+- actor: claude-code
+  id: 01m54pybfrc7va7hybb9899ntm
+  text: |-
+    ### test — green (iteration 3)
+    - evidence: `cargo nextest run --no-fail-fast -p swissarmyhammer-code-context` ran 735 tests: 735 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets -- -D warnings` gave no warnings (exit 0). `cargo fmt --check` found no format differences (exit 0).
+    - next: Do the review step.
+  timestamp: 2026-10-17T10:36:25.464956+00:00
 depends_on:
 - 01M53GC28P974P34HEP7XN651M
 position_column: doing
@@ -118,3 +150,12 @@ The LSP worker (`crates/swissarmyhammer-code-context/src/lsp_worker.rs`) reads r
 - [x] `crates/swissarmyhammer-code-context/src/layered_context.rs:632` `completeness/invariant-propagation` — The path filter is checked only inside session.sync_open, after sync_document has already read the file. For a filtered path that cannot be read as UTF-8, or that was deleted, read_to_string fails first and the error propagates. The doc comment says a skipped path gives Ok(None) with no request sent, so this contradicts the contract. Ignored build output such as .build/ or target/ can hold binary files, so this is reachable in practice. Check the path filter before reading the file, the same way the is_running check short-circuits. Either expose a session method that asks the filter, or return Ok(None) early when the path is filtered. Add a test where a filtered path holds non-UTF-8 bytes or does not exist, and assert Ok(None).
 - [x] `crates/swissarmyhammer-code-context/src/lsp_worker.rs:276` `duplication/duplication` — The new `mark_skipped_file_indexed` repeats the body of the existing `mark_failed_file_indexed`. Both lock the DB with the same poison recovery, call `mark_lsp_indexed` with the same arguments, and log a warning when the mark fails. Only the log wording differs. The mark-and-warn logic can now drift between the two copies, for example if the poison handling or the mark step changes in one function only. Extract one shared helper that takes the message as a parameter, for example `fn mark_indexed_or_warn(db: &SharedDb, relative_path: &str, context: &str)`, and call it from `mark_skipped_file_indexed` in the changed code. Keep the `debug!` line in the new function. Because `mark_failed_file_indexed` is outside this change, switching it to the helper is a separate follow-up task and should not be done in this change.
 - [x] `crates/swissarmyhammer-code-context/src/lsp_worker.rs:276` `reuse/reuse` — `mark_skipped_file_indexed` repeats the body of `mark_failed_file_indexed` (lock the DB, call `mark_lsp_indexed`, log a warning on failure) and differs only in its log messages. Two parallel copies of the same mark-and-log step will drift apart, so a fix to one path will be missed in the other. Extract one helper, for example `mark_file_indexed(db, relative_path, context: &str)`, that takes the log context. Have both `mark_failed_file_indexed` and `mark_skipped_file_indexed` call it, or fold the skipped case into the failure helper with a parameter for the message.
+
+## Review Findings (2026-10-17 05:30)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 2 file(s) reviewed, 2 not reviewed.
+
+> 2 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 2 file(s)
+
+- [x] `crates/swissarmyhammer-code-context/src/layered_context.rs:2982` `reuse/reuse` — The new helper `multi_request_on_a_filtered_path` repeats the setup of the existing test `test_lsp_multi_request_with_document_returns_none_for_a_filtered_path`. That test already builds the mock session, sets a path filter that skips one path, creates the test DB and the LayeredContext, then calls `lsp_multi_request_with_document` with a panicking closure. Two copies of the same setup will drift apart. Make the existing test at layered_context.rs:2952 call `multi_request_on_a_filtered_path` with its `file_path`, and keep the assertion in the test. Alternatively, move the helper's setup into a shared function that both tests use.

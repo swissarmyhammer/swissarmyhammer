@@ -2951,28 +2951,12 @@ mod tests {
 
     #[test]
     fn test_lsp_multi_request_with_document_returns_none_for_a_filtered_path() {
-        // The mock would answer a didOpen and one request. A filtered path
-        // must get neither: the closure does not run, and the ops fall back
-        // to the index layers.
-        let responses = vec![
-            serde_json::Value::Null,
-            serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": [1]}),
-        ];
-        let mut child = spawn_mock_lsp(&responses);
-        let session = mock_lsp_session(&mut child);
+        // A filtered path gets no didOpen and no request: the closure does
+        // not run, and the ops fall back to the index layers.
         let temp_dir = create_temp_source_file();
         let file_path = temp_dir.path().join("test.rs");
-        let skipped = file_path.clone();
-        session.set_path_filter(std::sync::Arc::new(move |path: &std::path::Path| {
-            path == skipped
-        }));
 
-        let conn = test_db();
-        let ctx = LayeredContext::new(&conn, Some(session));
-        let result: Result<Option<Value>, _> =
-            ctx.lsp_multi_request_with_document(file_path.to_str().unwrap(), |_rpc| {
-                panic!("closure must not run for a filtered path");
-            });
+        let result = multi_request_on_a_filtered_path(&file_path);
 
         assert!(result.unwrap().is_none());
     }
