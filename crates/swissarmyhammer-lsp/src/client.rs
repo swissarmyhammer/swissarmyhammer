@@ -1030,7 +1030,7 @@ mod tests {
     #[test]
     fn a_content_length_larger_than_the_maximum_puts_the_wire_out_of_step() {
         let reply = json!({"jsonrpc": "2.0", "id": 1, "result": "after"});
-        let mut bytes = b"Content-Length: 18446744073709551615\r\n\r\n".to_vec();
+        let mut bytes = framing::untrusted_header_block().into_bytes();
         bytes.extend(framed(&[reply]));
         let mut wire = wire_over(bytes);
 

@@ -488,7 +488,7 @@ fn out_of_step_cases() -> Vec<(&'static str, Vec<u8>, &'static str)> {
     vec![
         (
             "the largest u64",
-            b"Content-Length: 18446744073709551615\r\n\r\n".to_vec(),
+            crate::framing::untrusted_header_block().into_bytes(),
             "larger than the maximum",
         ),
         (

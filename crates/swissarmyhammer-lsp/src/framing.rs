@@ -26,9 +26,18 @@ pub(crate) struct Frame {
 }
 
 /// Encode `message` as a frame.
+///
+/// A body that is larger than [`MAX_CONTENT_LENGTH`] gives an error, so the
+/// writer never makes a frame that a reader must reject.
 pub(crate) fn encode(message: &Value) -> Result<Frame, LspError> {
     let body = serde_json::to_string(message)
         .map_err(|e| LspError::JsonRpc(format!("json encode: {e}")))?;
+    if body.len() > MAX_CONTENT_LENGTH {
+        return Err(LspError::JsonRpc(format!(
+            "json encode: the body of {}",
+            larger_than_the_maximum(body.len())
+        )));
+    }
     let header = format!("{CONTENT_LENGTH_HEADER} {}\r\n\r\n", body.len());
     Ok(Frame { header, body })
 }
@@ -69,11 +78,31 @@ pub(crate) fn write_frame<W: Write>(writer: &mut W, message: &Value) -> Result<(
     writer.flush().map_err(|e| WriteStep::Flush.error(e))
 }
 
-/// The largest body length, in bytes, that a reader accepts.
+/// The largest body length, in bytes, that a reader accepts and a writer
+/// makes.
 ///
 /// A larger Content-Length is not trusted. No reader makes a buffer of that
-/// size or waits for that many bytes.
+/// size or waits for that many bytes, and [`encode`] does not make a frame
+/// with a larger body.
 pub(crate) const MAX_CONTENT_LENGTH: usize = 64 * 1024 * 1024;
+
+/// The text that tells that a body of `length` bytes is larger than
+/// [`MAX_CONTENT_LENGTH`]. The reader and the writer both use it.
+fn larger_than_the_maximum(length: usize) -> String {
+    format!("{length} bytes is larger than the maximum of {MAX_CONTENT_LENGTH} bytes")
+}
+
+/// A Content-Length header line whose value is the largest `u64`. No reader
+/// trusts it. The tests of this crate share it, so the value has one owner.
+#[cfg(test)]
+pub(crate) const UNTRUSTED_CONTENT_LENGTH_LINE: &str = "Content-Length: 18446744073709551615\r\n";
+
+/// A header block that holds only [`UNTRUSTED_CONTENT_LENGTH_LINE`] and the
+/// blank line that ends the block.
+#[cfg(test)]
+pub(crate) fn untrusted_header_block() -> String {
+    format!("{UNTRUSTED_CONTENT_LENGTH_LINE}\r\n")
+}
 
 /// The largest header block, in bytes, that a reader accepts.
 ///
@@ -115,7 +144,8 @@ fn parse_content_length(value: &str) -> Result<usize, String> {
         .map_err(|e| format!("bad Content-Length: {e}"))?;
     if length > MAX_CONTENT_LENGTH {
         return Err(format!(
-            "bad Content-Length: {length} is larger than the maximum of {MAX_CONTENT_LENGTH} bytes"
+            "bad Content-Length: {}",
+            larger_than_the_maximum(length)
         ));
     }
     Ok(length)
@@ -275,8 +305,8 @@ impl FrameBuffer {
     /// reads the next frame. A header block that is not trusted (see
     /// [`HeaderBlock`]) puts the buffer out of step.
     pub(crate) fn take_message(&mut self) -> Result<Option<Value>, LspError> {
-        if let Some(reason) = &self.out_of_step {
-            return Err(LspError::OutOfStep(reason.clone()));
+        if let Some(error) = self.out_of_step_error() {
+            return Err(error);
         }
         let Some((header_len, length)) = self.scan_headers() else {
             return Ok(None);
@@ -296,13 +326,19 @@ impl FrameBuffer {
 
     /// The error for an end of stream with the bytes that the buffer holds.
     pub(crate) fn eof_error(&self) -> LspError {
-        if let Some(reason) = &self.out_of_step {
-            return LspError::OutOfStep(reason.clone());
+        if let Some(error) = self.out_of_step_error() {
+            return error;
         }
         match self.scan_headers() {
             Some(_) => LspError::JsonRpc("read body: unexpected EOF".into()),
             None => eof_in_headers(),
         }
+    }
+
+    /// The fatal error that put the buffer out of step, or `None` while the
+    /// buffer is in step.
+    fn out_of_step_error(&self) -> Option<LspError> {
+        self.out_of_step.clone().map(LspError::OutOfStep)
     }
 
     /// Remove a header block of `header_len` bytes whose result is `error`,
@@ -365,6 +401,41 @@ mod tests {
             format!("Content-Length: {}\r\n\r\n", body.len())
         );
         assert_eq!(frame.body, body);
+    }
+
+    /// The number of bytes that the two quotes of a JSON string add to its
+    /// body.
+    const JSON_STRING_QUOTES: usize = 2;
+
+    /// A message whose JSON body is `body_len` bytes long.
+    fn message_with_body_len(body_len: usize) -> Value {
+        Value::String("a".repeat(body_len - JSON_STRING_QUOTES))
+    }
+
+    #[test]
+    fn a_body_at_the_maximum_round_trips() {
+        let message = message_with_body_len(MAX_CONTENT_LENGTH);
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, &message).expect("the maximum is allowed");
+        let mut frames = FrameBuffer::default();
+
+        frames.push(&bytes);
+
+        assert_eq!(frames.take_message().expect("no error"), Some(message));
+    }
+
+    #[test]
+    fn a_body_one_byte_larger_than_the_maximum_fails_on_the_write_side() {
+        let message = message_with_body_len(MAX_CONTENT_LENGTH + 1);
+        let mut bytes = Vec::new();
+
+        let error = write_frame(&mut bytes, &message).expect_err("the body is too large");
+
+        assert!(
+            error.to_string().contains("larger than the maximum"),
+            "got: {error}"
+        );
+        assert!(bytes.is_empty(), "no byte of the frame is written");
     }
 
     #[test]
@@ -499,7 +570,7 @@ mod tests {
 
     #[test]
     fn a_content_length_larger_than_the_maximum_is_out_of_step() {
-        let result = block_result(&[b"Content-Length: 18446744073709551615\r\n", b"\r\n"]);
+        let result = block_result(&[UNTRUSTED_CONTENT_LENGTH_LINE.as_bytes(), b"\r\n"]);
 
         assert_out_of_step(result, "larger than the maximum");
     }
@@ -551,7 +622,7 @@ mod tests {
     #[test]
     fn an_out_of_step_frame_buffer_drops_its_bytes_and_keeps_the_error() {
         let mut frames = FrameBuffer::default();
-        frames.push(b"Content-Length: 18446744073709551615\r\n\r\n{}");
+        frames.push(format!("{}{{}}", untrusted_header_block()).as_bytes());
 
         let first = frames.take_message();
         frames.push(b"Content-Length: 2\r\n\r\n{}");

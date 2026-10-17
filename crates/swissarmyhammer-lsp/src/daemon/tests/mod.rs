@@ -338,15 +338,15 @@ fn install_cat_client(daemon: &LspDaemon) -> InstalledClient {
 /// A program that writes its format argument to stdout and exits.
 const PRINTF_PROGRAM: &str = "printf";
 
-/// A `printf` format that writes a header block whose Content-Length is too
-/// large for a reader to trust.
-const UNTRUSTED_HEADER_FORMAT: &str = "Content-Length: 18446744073709551615\\r\\n\\r\\n";
-
 /// Put a client into the shared client slot of `daemon` whose server sent a
 /// header block that is not trusted, and read from it one time. The client is
 /// then out of step.
+///
+/// The `printf` format is the header block itself. It has no `%` and no `\`,
+/// so `printf` writes each byte of it with no change.
 fn install_out_of_step_client(daemon: &LspDaemon) -> InstalledClient {
-    let installed = install_client(daemon, PRINTF_PROGRAM, &[UNTRUSTED_HEADER_FORMAT]);
+    let header_block = crate::framing::untrusted_header_block();
+    let installed = install_client(daemon, PRINTF_PROGRAM, &[header_block.as_str()]);
     let mut guard = daemon.client().expect("the client is installed");
     let client = guard.as_mut().expect("the slot holds the client");
     let result = client.read_message();
