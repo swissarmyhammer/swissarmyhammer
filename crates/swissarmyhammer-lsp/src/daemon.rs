@@ -104,7 +104,7 @@ pub struct LspDaemon {
     /// Read-side of the state watch (cloneable for external consumers).
     state_rx: watch::Receiver<LspDaemonState>,
     /// Grace period for [`shutdown`](Self::shutdown) before the child is killed
-    /// on drop. Defaults to [`SHUTDOWN_GRACE_SECS`]; tests override it via
+    /// and reaped. Defaults to [`SHUTDOWN_GRACE_SECS`]; tests override it via
     /// [`set_shutdown_grace`](Self::set_shutdown_grace) so they don't wait out
     /// the full production grace period when probing the timeout path.
     shutdown_grace: Duration,
@@ -182,7 +182,7 @@ impl LspDaemon {
     /// Test-only seam: the production default is [`SHUTDOWN_GRACE_SECS`], but
     /// tests that deliberately drive the timeout branch (a child that ignores
     /// the closed pipes and never exits) set a short period so they assert the
-    /// timeout → kill-on-drop behavior in milliseconds instead of seconds.
+    /// timeout → kill-and-reap behavior in milliseconds instead of seconds.
     #[cfg(test)]
     pub(crate) fn set_shutdown_grace(&mut self, grace: Duration) {
         self.shutdown_grace = grace;
@@ -286,6 +286,12 @@ impl LspDaemon {
 
         self.set_state(LspDaemonState::Starting);
 
+        // A new server replaces the old one: stop the old process first, so
+        // it does not stay alive or stay as a zombie.
+        if let Some(mut old_child) = self.child.take() {
+            self.kill_and_reap(&mut old_child).await;
+        }
+
         // Spawn child
         let mut child = match Command::new(&self.spec.command)
             .args(&self.spec.args)
@@ -387,7 +393,7 @@ impl LspDaemon {
             Ok(Err(e)) => {
                 let reason = e.to_string();
                 error!(cmd = &self.spec.command, %reason, "LSP initialize failed");
-                let _ = child.kill().await;
+                self.kill_and_reap(&mut child).await;
                 self.record_failure(reason.clone());
                 Err(e)
             }
@@ -395,7 +401,7 @@ impl LspDaemon {
                 let timeout = self.spec.startup_timeout();
                 let reason = format!("initialize timed out after {timeout:?}");
                 error!(cmd = &self.spec.command, "LSP initialize timed out");
-                let _ = child.kill().await;
+                self.kill_and_reap(&mut child).await;
                 self.record_failure(reason);
                 Err(LspError::Timeout(timeout))
             }
@@ -497,7 +503,7 @@ impl LspDaemon {
     ///
     /// Drops the JSON-RPC client (closing stdin/stdout pipes), then waits for
     /// the child process to exit. If it does not exit within
-    /// [`SHUTDOWN_GRACE_SECS`], the process is killed on drop.
+    /// [`SHUTDOWN_GRACE_SECS`], the process is killed and reaped.
     pub async fn shutdown(&mut self) {
         // Drop the client first — this closes the stdin/stdout pipes,
         // which signals the LSP server to exit.
@@ -509,7 +515,7 @@ impl LspDaemon {
         self.session.reset_documents();
         self.healthy_since = None;
 
-        let child = match self.child.take() {
+        let mut child = match self.child.take() {
             Some(c) => c,
             None => {
                 self.set_state(LspDaemonState::NotStarted);
@@ -520,7 +526,7 @@ impl LspDaemon {
         self.set_state(LspDaemonState::ShuttingDown);
 
         let result =
-            tokio::time::timeout(self.shutdown_grace, Self::graceful_shutdown(child)).await;
+            tokio::time::timeout(self.shutdown_grace, Self::graceful_shutdown(&mut child)).await;
 
         match result {
             Ok(Ok(())) => {
@@ -532,12 +538,21 @@ impl LspDaemon {
             Err(_) => {
                 warn!(
                     cmd = self.spec.command,
-                    "Shutdown timed out, process should be killed on drop"
+                    "Shutdown timed out, killing the LSP server"
                 );
+                self.kill_and_reap(&mut child).await;
             }
         }
 
         self.set_state(LspDaemonState::NotStarted);
+    }
+
+    /// Kill `child` and wait for its exit, so no process or zombie of the
+    /// server stays.
+    async fn kill_and_reap(&self, child: &mut Child) {
+        if let Err(e) = child.kill().await {
+            warn!(cmd = self.spec.command, %e, "Failed to kill the LSP server");
+        }
     }
 
     // -- internal helpers -------------------------------------------------
@@ -660,7 +675,7 @@ impl LspDaemon {
     }
 
     /// Send `shutdown` + `exit` and wait for the child to exit.
-    async fn graceful_shutdown(mut child: Child) -> Result<(), LspError> {
+    async fn graceful_shutdown(child: &mut Child) -> Result<(), LspError> {
         // Try to send shutdown/exit — if stdin is already gone, just kill.
         if let Some(stdin) = child.stdin.as_mut() {
             let mut writer = BufWriter::new(stdin);

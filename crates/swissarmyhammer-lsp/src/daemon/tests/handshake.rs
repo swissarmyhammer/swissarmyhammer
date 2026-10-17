@@ -3,190 +3,86 @@
 
 use super::*;
 
+/// A response id that differs from the id of the `initialize` request.
+const WRONG_RESPONSE_ID: u64 = 999;
+
+/// The stderr line of the mock that exits after it reads the request.
+const EXIT_STDERR_TEXT: &str = "mock LSP fatal error: config not found";
+
+/// The stderr line of the mock that closes stdout after it reads the
+/// request.
+const CLOSE_STDERR_TEXT: &str = "FATAL: mock LSP refuses to initialize";
+
+/// The stderr text of the `capture_stderr` read test.
+const CAPTURED_STDERR_TEXT: &str = "mock-error-text";
+
 // -- initialize_handshake error path tests --------------------------------
 //
-// These use Python one-liners as mock LSP servers. The Python script reads
-// the incoming JSON-RPC request, then sends a malformed response.
+// These use Python mocks (see `MOCK_PRELUDE`). Each mock reads the
+// `initialize` request first, so the write of the request always succeeds,
+// and then sends a bad response.
 
 #[tokio::test]
 async fn test_initialize_handshake_bad_json_response() {
-    // Python script reads the initialize request, then responds with
-    // valid Content-Length framing but invalid JSON body.
-    let script = r#"
-import sys
-# Read the incoming request: headers then body
-headers = ''
-while True:
-    line = sys.stdin.readline()
-    if line.strip() == '':
-        break
-    headers += line
-# Extract content length and read body
-import re
-m = re.search(r'Content-Length:\s*(\d+)', headers)
-if m:
-    body = sys.stdin.read(int(m.group(1)))
-# Send bad JSON with valid framing
+    // Valid Content-Length framing but an invalid JSON body.
+    let body = r#"read_message()
 bad = 'this is not json at all!!!'
-sys.stdout.write(f'Content-Length: {len(bad)}\r\n\r\n{bad}')
-sys.stdout.flush()
-"#;
-    let spec = python_mock_spec(script);
-    let workspace = tempfile::tempdir().expect("workspace tempdir");
-    let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+write_raw(f'Content-Length: {len(bad)}\r\n\r\n{bad}')
+wait_for_stdin_eof()"#;
+    let (_workspace, mut daemon) = daemon_in_tempdir(mock_spec(body));
 
     let result = daemon.start().await;
-    assert!(result.is_err(), "expected start to fail with bad JSON");
-    let err = result.unwrap_err();
-    assert!(
-        matches!(err, LspError::HandshakeFailed(_)),
-        "expected HandshakeFailed, got: {err:?}"
-    );
-    let msg = err.to_string();
-    assert!(
-        msg.contains("json decode") || msg.contains("json"),
-        "expected JSON decode error in message, got: {msg}"
-    );
+    assert_handshake_failed(result, "json decode");
 }
 
 #[tokio::test]
 async fn test_initialize_handshake_missing_content_length_response() {
-    // Python script reads the request, then sends a response without
-    // the Content-Length header (just raw JSON after blank line).
-    let script = r#"
-import sys, re
-headers = ''
-while True:
-    line = sys.stdin.readline()
-    if line.strip() == '':
-        break
-    headers += line
-m = re.search(r'Content-Length:\s*(\d+)', headers)
-if m:
-    body = sys.stdin.read(int(m.group(1)))
-# Send without Content-Length header -- just newline then body
-sys.stdout.write('\r\n')
-sys.stdout.flush()
-# Then close stdout so the reader gets EOF
-sys.stdout.close()
-"#;
-    let spec = python_mock_spec(script);
-    let workspace = tempfile::tempdir().expect("workspace tempdir");
-    let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+    // A blank line with no Content-Length header ends the headers.
+    let body = r#"read_message()
+write_raw('\r\n')
+wait_for_stdin_eof()"#;
+    let (_workspace, mut daemon) = daemon_in_tempdir(mock_spec(body));
 
     let result = daemon.start().await;
-    assert!(
-        result.is_err(),
-        "expected start to fail without Content-Length"
-    );
-    let err = result.unwrap_err();
-    assert!(
-        matches!(err, LspError::HandshakeFailed(_)),
-        "expected HandshakeFailed, got: {err:?}"
-    );
-    let msg = err.to_string();
-    assert!(
-        msg.contains("Content-Length") || msg.contains("EOF") || msg.contains("missing"),
-        "expected missing Content-Length or EOF error, got: {msg}"
-    );
+    assert_handshake_failed(result, "missing Content-Length header");
 }
 
 #[tokio::test]
 async fn test_initialize_handshake_truncated_body() {
-    // Python script reads the request, then sends a Content-Length
-    // that's larger than the actual body, causing an EOF during read.
-    let script = r#"
-import sys, re
-headers = ''
-while True:
-    line = sys.stdin.readline()
-    if line.strip() == '':
-        break
-    headers += line
-m = re.search(r'Content-Length:\s*(\d+)', headers)
-if m:
-    body = sys.stdin.read(int(m.group(1)))
-# Claim 1000 bytes but only send 5
-sys.stdout.write('Content-Length: 1000\r\n\r\nhello')
-sys.stdout.flush()
-sys.stdout.close()
-"#;
-    let spec = python_mock_spec(script);
-    let workspace = tempfile::tempdir().expect("workspace tempdir");
-    let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+    // A Content-Length that is larger than the body, then EOF.
+    let body = r#"read_message()
+write_raw('Content-Length: 1000\r\n\r\nhello')
+close_stdout()
+wait_for_stdin_eof()"#;
+    let (_workspace, mut daemon) = daemon_in_tempdir(mock_spec(body));
 
     let result = daemon.start().await;
-    assert!(
-        result.is_err(),
-        "expected start to fail with truncated body"
-    );
-    let err = result.unwrap_err();
-    assert!(
-        matches!(err, LspError::HandshakeFailed(_)),
-        "expected HandshakeFailed, got: {err:?}"
-    );
+    assert_handshake_failed(result, "read body");
 }
 
+/// A server that writes to stderr and then exits without an answer makes
+/// the handshake read EOF. The error message then carries the stderr text,
+/// which proves the stderr capture path.
 #[tokio::test]
 async fn test_initialize_handshake_process_exits_with_stderr() {
-    // Python script writes to stderr then exits without responding,
-    // exercising the stderr capture path in initialize_handshake.
-    let script = r#"
-import sys
-sys.stderr.write('mock LSP fatal error: config not found\n')
-sys.stderr.flush()
-sys.exit(1)
-"#;
-    let spec = python_mock_spec(script);
-    let workspace = tempfile::tempdir().expect("workspace tempdir");
-    let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+    let body = format!("read_message()\nlog('{EXIT_STDERR_TEXT}')\nsys.exit(1)");
+    let (_workspace, mut daemon) = daemon_in_tempdir(mock_spec(&body));
 
     let result = daemon.start().await;
-    assert!(result.is_err(), "expected start to fail when process exits");
-    let err = result.unwrap_err();
+    let msg = assert_handshake_failed(result, EOF_BEFORE_ANSWER_TEXT);
     assert!(
-        matches!(err, LspError::HandshakeFailed(_) | LspError::Timeout(_)),
-        "expected HandshakeFailed or Timeout, got: {err:?}"
+        msg.contains(&format!("stderr: {EXIT_STDERR_TEXT}")),
+        "expected the stderr text in the error, got: {msg}"
     );
 }
 
 #[tokio::test]
 async fn test_initialize_handshake_wrong_id_still_succeeds() {
     // initialize_handshake does NOT validate the response ID. This test
-    // documents that behavior: a response with id:999 is accepted because
-    // the code only checks framing, not content.
-    let script = r#"
-import sys, re, json
-headers = ''
-while True:
-    line = sys.stdin.readline()
-    if line.strip() == '':
-        break
-    headers += line
-m = re.search(r'Content-Length:\s*(\d+)', headers)
-if m:
-    body = sys.stdin.read(int(m.group(1)))
-# Respond with wrong id
-resp = json.dumps({"jsonrpc": "2.0", "id": 999, "result": {"capabilities": {}}})
-sys.stdout.write(f'Content-Length: {len(resp)}\r\n\r\n{resp}')
-sys.stdout.flush()
-# Read the initialized notification
-headers2 = ''
-while True:
-    line = sys.stdin.readline()
-    if line.strip() == '':
-        break
-    headers2 += line
-m2 = re.search(r'Content-Length:\s*(\d+)', headers2)
-if m2:
-    body2 = sys.stdin.read(int(m2.group(1)))
-# Keep stdin open briefly so pipes don't break
-import time
-time.sleep(0.5)
-"#;
-    let spec = python_mock_spec(script);
-    let workspace = tempfile::tempdir().expect("workspace tempdir");
-    let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+    // documents that behavior: a response with a wrong id is accepted
+    // because the code only checks framing, not content.
+    let spec = handshake_spec(WRONG_RESPONSE_ID, SERVE_UNTIL_STDIN_EOF);
+    let (_workspace, mut daemon) = daemon_in_tempdir(spec);
 
     let result = daemon.start().await;
     // This succeeds because initialize_handshake doesn't validate the ID
@@ -200,38 +96,28 @@ time.sleep(0.5)
 
 // -- Card 4: initialize_handshake and capture_stderr direct tests -------
 
+/// Run `initialize_handshake` directly against `child`, with a new
+/// temporary workspace.
+async fn handshake_in_tempdir(child: &mut Child) -> Result<(), LspError> {
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    LspDaemon::initialize_handshake(child, workspace.path(), &test_spec(IDLE_SERVER)).await
+}
+
 /// Directly invoke `initialize_handshake` with an invalid (relative)
 /// workspace path. `Url::from_file_path` rejects relative paths, so the
 /// function should return `HandshakeFailed("invalid workspace path")`.
 /// This exercises the `.map_err` branch of the `root_uri` construction.
 #[tokio::test]
 async fn test_initialize_handshake_invalid_workspace_path() {
-    let mut child = Command::new("cat")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn cat");
+    let mut child = spawn_echo();
 
-    let spec = test_spec("cat");
     // A relative path — `Url::from_file_path` requires absolute paths
     let relative = PathBuf::from("not/an/absolute/path");
-    let result = LspDaemon::initialize_handshake(&mut child, &relative, &spec).await;
+    let result =
+        LspDaemon::initialize_handshake(&mut child, &relative, &test_spec(IDLE_SERVER)).await;
 
-    let _ = child.kill().await;
-
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    match err {
-        LspError::HandshakeFailed(msg) => {
-            assert!(
-                msg.contains("invalid workspace path"),
-                "expected 'invalid workspace path', got: {msg}"
-            );
-        }
-        other => panic!("expected HandshakeFailed, got: {other:?}"),
-    }
+    assert_handshake_failed(result, "invalid workspace path");
+    kill_and_reap_child(&mut child).await;
 }
 
 /// Directly invoke `initialize_handshake` against a child that has
@@ -239,34 +125,13 @@ async fn test_initialize_handshake_invalid_workspace_path() {
 /// `None` branch that returns `HandshakeFailed("child stdin unavailable")`.
 #[tokio::test]
 async fn test_initialize_handshake_stdin_unavailable() {
-    let mut child = Command::new("cat")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn cat");
-
+    let mut child = spawn_echo();
     // Take stdin, dropping the handle so the child sees EOF on stdin
-    let _stolen_stdin = child.stdin.take();
-    drop(_stolen_stdin);
+    drop(child.stdin.take());
 
-    let spec = test_spec("cat");
-    let workspace = tempfile::tempdir().expect("workspace tempdir");
-    let result = LspDaemon::initialize_handshake(&mut child, workspace.path(), &spec).await;
-
-    let _ = child.kill().await;
-
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        LspError::HandshakeFailed(msg) => {
-            assert!(
-                msg.contains("child stdin unavailable"),
-                "expected 'child stdin unavailable', got: {msg}"
-            );
-        }
-        other => panic!("expected HandshakeFailed with stdin msg, got: {other:?}"),
-    }
+    let result = handshake_in_tempdir(&mut child).await;
+    assert_handshake_failed(result, "child stdin unavailable");
+    kill_and_reap_child(&mut child).await;
 }
 
 /// Directly invoke `initialize_handshake` against a child that has
@@ -274,82 +139,38 @@ async fn test_initialize_handshake_stdin_unavailable() {
 /// `None` branch that returns `HandshakeFailed("child stdout unavailable")`.
 #[tokio::test]
 async fn test_initialize_handshake_stdout_unavailable() {
-    let mut child = Command::new("cat")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn cat");
+    let mut child = spawn_echo();
+    drop(child.stdout.take());
 
-    // Take stdout, dropping the handle
-    let _stolen_stdout = child.stdout.take();
-    drop(_stolen_stdout);
-
-    let spec = test_spec("cat");
-    let workspace = tempfile::tempdir().expect("workspace tempdir");
-    let result = LspDaemon::initialize_handshake(&mut child, workspace.path(), &spec).await;
-
-    let _ = child.kill().await;
-
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        LspError::HandshakeFailed(msg) => {
-            assert!(
-                msg.contains("child stdout unavailable"),
-                "expected 'child stdout unavailable', got: {msg}"
-            );
-        }
-        other => panic!("expected HandshakeFailed with stdout msg, got: {other:?}"),
-    }
+    let result = handshake_in_tempdir(&mut child).await;
+    assert_handshake_failed(result, "child stdout unavailable");
+    kill_and_reap_child(&mut child).await;
 }
 
 /// `capture_stderr` on a child whose stderr handle has been taken
 /// returns an empty string (the early-return `None` path).
 #[tokio::test]
 async fn test_capture_stderr_returns_empty_when_no_stderr_handle() {
-    let mut child = Command::new("cat")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn cat");
-
-    // Take stderr so the handle is None
-    let _stolen = child.stderr.take();
-    drop(_stolen);
+    let mut child = spawn_echo();
+    drop(child.stderr.take());
 
     let captured = LspDaemon::capture_stderr(&mut child).await;
     assert_eq!(captured, "");
-
-    let _ = child.kill().await;
+    kill_and_reap_child(&mut child).await;
 }
 
 /// `capture_stderr` reads available data from the child's stderr
-/// within the 1-second timeout, trims it, and returns it.
+/// within the 1-second timeout, trims it, and returns it. The read waits
+/// for the data, so the test needs no sleep. The shell `exec`s the sleep, so
+/// the kill at the end stops the one process that holds the pipes.
 #[tokio::test]
 async fn test_capture_stderr_reads_available_bytes() {
-    let mut child = Command::new("sh")
-        .args(["-c", "echo mock-error-text 1>&2; sleep 2"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn sh");
-
-    // Give the child a moment to write to stderr
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let command = format!("echo {CAPTURED_STDERR_TEXT} 1>&2; exec sleep {LONG_SLEEP_SECS}");
+    let mut child = spawn_piped("sh", &["-c", &command]);
 
     let captured = LspDaemon::capture_stderr(&mut child).await;
-    assert!(
-        captured.contains("mock-error-text"),
-        "expected 'mock-error-text' in captured stderr, got: {captured:?}"
-    );
-
-    let _ = child.kill().await;
-    let _ = child.wait().await;
+    assert_eq!(captured, CAPTURED_STDERR_TEXT);
+    kill_and_reap_child(&mut child).await;
 }
 
 /// `capture_stderr` on a child that produces no stderr output within
@@ -357,120 +178,61 @@ async fn test_capture_stderr_reads_available_bytes() {
 /// on `timeout(read).await`).
 #[tokio::test]
 async fn test_capture_stderr_returns_empty_on_timeout() {
-    let mut child = Command::new("sh")
-        .args(["-c", "sleep 10"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn sh");
+    let mut child = spawn_silent();
 
     // No stderr output forthcoming — capture_stderr's 1s timeout kicks in
     let captured = LspDaemon::capture_stderr(&mut child).await;
     assert_eq!(captured, "");
-
-    let _ = child.kill().await;
-    let _ = child.wait().await;
+    kill_and_reap_child(&mut child).await;
 }
 
 /// When `initialize_handshake` fails because the child closes stdout
-/// immediately, the error message should be decorated with stderr
+/// while it stays alive, the error message is decorated with stderr
 /// context (via `capture_stderr`). This confirms both the error path
 /// through `read_jsonrpc_message` and the concatenation of stderr into
 /// the `HandshakeFailed` message.
 #[tokio::test]
 async fn test_initialize_handshake_includes_stderr_context_in_error() {
-    // Python script that writes to stderr and then exits without
-    // responding on stdout. The daemon will read EOF from stdout and
-    // then capture_stderr should pick up the error message.
-    let script = r#"
-import sys
-sys.stderr.write('FATAL: mock LSP refuses to initialize\n')
-sys.stderr.flush()
-# Close stdout immediately so reader gets EOF
-sys.stdout.close()
-import time
-time.sleep(0.3)
-"#;
-    let spec = python_mock_spec(script);
-    let workspace = tempfile::tempdir().expect("workspace tempdir");
-    let mut daemon = LspDaemon::new(spec, workspace.path().to_path_buf());
+    // The mock writes to stderr before it closes stdout, so the stderr
+    // text is in the pipe when the daemon reads EOF.
+    let body = format!(
+        "read_message()\nlog('{CLOSE_STDERR_TEXT}')\nclose_stdout()\n{SERVE_UNTIL_STDIN_EOF}"
+    );
+    let (_workspace, mut daemon) = daemon_in_tempdir(mock_spec(&body));
 
     let result = daemon.start().await;
-    assert!(result.is_err(), "expected start to fail");
-    match result.unwrap_err() {
-        LspError::HandshakeFailed(msg) => {
-            // capture_stderr should prepend "; stderr: " once it reads
-            // the stderr content. The exact content depends on timing,
-            // but the error should surface an EOF and optionally a
-            // stderr decoration. We accept either (timing-sensitive).
-            assert!(
-                msg.contains("EOF")
-                    || msg.contains("stderr")
-                    || msg.contains("FATAL")
-                    || msg.contains("read header"),
-                "expected EOF/stderr/FATAL/read header in msg, got: {msg}"
-            );
-        }
-        LspError::Timeout(_) => {
-            // Timing-dependent alternate path: if the timeout fires
-            // before read_jsonrpc_message completes, we get Timeout.
-        }
-        other => panic!("expected HandshakeFailed or Timeout, got: {other:?}"),
-    }
+    let msg = assert_handshake_failed(result, EOF_BEFORE_ANSWER_TEXT);
+    assert!(
+        msg.contains(&format!("; stderr: {CLOSE_STDERR_TEXT}")),
+        "expected the stderr decoration in the error, got: {msg}"
+    );
 }
 
 /// `initialize_handshake` happy path: a Python mock that plays the full
-/// initialize/initialized handshake correctly. This covers the
-/// `send_jsonrpc_message(&mut writer, &initialized)` line (the final
-/// send of the `initialized` notification).
+/// initialize/initialized handshake correctly. The mock echoes the
+/// `initialized` notification to stderr, and the test reads it back. This
+/// covers the `send_jsonrpc_message(&mut writer, &initialized)` line (the
+/// final send of the `initialized` notification).
 #[tokio::test]
 async fn test_initialize_handshake_full_happy_path_direct() {
-    let script = r#"
-import sys, re, json, time
-headers = ''
-while True:
-    line = sys.stdin.readline()
-    if line.strip() == '':
-        break
-    headers += line
-m = re.search(r'Content-Length:\s*(\d+)', headers)
-if m:
-    body = sys.stdin.read(int(m.group(1)))
-resp = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"capabilities": {}}})
-sys.stdout.write(f'Content-Length: {len(resp)}\r\n\r\n{resp}')
-sys.stdout.flush()
-# Read the initialized notification and confirm it was sent
-headers2 = ''
-while True:
-    line = sys.stdin.readline()
-    if line.strip() == '':
-        break
-    headers2 += line
-m2 = re.search(r'Content-Length:\s*(\d+)', headers2)
-if m2:
-    body2 = sys.stdin.read(int(m2.group(1)))
-    # Echo the initialized body to stderr so we can assert on it
-    sys.stderr.write(f'GOT: {body2}\n')
-    sys.stderr.flush()
-time.sleep(0.5)
-"#;
-    let mut child = Command::new("python3")
-        .args(["-c", script])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn python3");
+    let script = mock_script(&handshake_body(
+        INITIALIZE_REQUEST_ID,
+        &format!("log(f'GOT: {{initialized}}')\n{SERVE_UNTIL_STDIN_EOF}"),
+    ));
+    let mut child = spawn_piped(PYTHON_PROGRAM, &["-c", &script]);
 
-    let spec = test_spec("python3");
-    let workspace = tempfile::tempdir().expect("workspace tempdir");
-    let result = LspDaemon::initialize_handshake(&mut child, workspace.path(), &spec).await;
-
+    let result = handshake_in_tempdir(&mut child).await;
     assert!(result.is_ok(), "expected handshake to succeed: {result:?}");
 
-    let _ = child.kill().await;
-    let _ = child.wait().await;
+    let stderr = child.stderr.take().expect("child stderr");
+    let echoed = tokio::time::timeout(SIGNAL_TIMEOUT, BufReader::new(stderr).lines().next_line())
+        .await
+        .expect("the mock echoes the initialized notification")
+        .expect("read the mock stderr")
+        .expect("the mock writes one stderr line");
+    assert!(
+        echoed.starts_with("GOT: ") && echoed.contains(r#""method":"initialized""#),
+        "expected the initialized notification, got: {echoed}"
+    );
+    kill_and_reap_child(&mut child).await;
 }
