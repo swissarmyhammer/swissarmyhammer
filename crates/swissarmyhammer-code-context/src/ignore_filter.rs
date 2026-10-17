@@ -417,9 +417,35 @@ mod tests {
         let other = tempfile::tempdir().unwrap();
         let (root, canonical) = symlinked_root(outer.path());
         let filter = IgnoreFilter::new(&root);
+        let expected = Some(root.join("src/a.rs"));
+        assert_eq!(filter.to_root_form(&root.join("src/a.rs")), expected);
+        assert_eq!(filter.to_root_form(&canonical.join("src/a.rs")), expected);
+        assert_eq!(filter.to_root_form(Path::new("src/a.rs")), expected);
+        assert_eq!(filter.to_root_form(&other.path().join("a.rs")), None);
+    }
+
+    #[test]
+    fn relative_strips_a_root_that_is_already_canonical() {
+        let outer = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let (_root, canonical) = symlinked_root(outer.path());
+        let filter = IgnoreFilter::new(&canonical);
+        assert_eq!(
+            filter.relative(&canonical.join("src/a.rs")),
+            Some(Path::new("src/a.rs"))
+        );
+        assert_eq!(filter.relative(&other.path().join("a.rs")), None);
+    }
+
+    #[test]
+    fn to_root_form_keeps_a_root_that_is_already_canonical() {
+        let outer = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let (_root, canonical) = symlinked_root(outer.path());
+        let filter = IgnoreFilter::new(&canonical);
         assert_eq!(
             filter.to_root_form(&canonical.join("src/a.rs")),
-            Some(root.join("src/a.rs"))
+            Some(canonical.join("src/a.rs"))
         );
         assert_eq!(filter.to_root_form(&other.path().join("a.rs")), None);
     }

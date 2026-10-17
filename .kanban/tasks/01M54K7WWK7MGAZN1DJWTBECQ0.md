@@ -38,6 +38,48 @@ comments:
     - evidence: `cargo nextest run --no-fail-fast -E 'rdeps(swissarmyhammer-code-context)'` ran 5004 tests. 5004 passed, 0 failed, 0 skipped (52 slow). `cargo clippy --workspace --all-targets -- -D warnings` gave exit 0 and no warnings. `cargo fmt --check` gave exit 0.
     - next: review.
   timestamp: 2026-10-17T10:53:02.605707+00:00
+- actor: claude-code
+  id: 01m54r4g81125gfn1yam10sv52
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD (2ecee86cd): 1 finding (1 confirmed, 4 refuted) — crates/swissarmyhammer-code-context/src/ignore_filter.rs:218
+    - next: implement the open item in the Review Findings section, then commit and review again.
+  timestamp: 2026-10-17T10:57:15.521075+00:00
+- actor: claude-code
+  id: 01m54r54fexc6ppg59zf6wjjgb
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 4 files (relative public, to_root_form, testing module, 2 watchers)
+    - test: green — nextest rdeps(code-context), 5004 passed
+    - commit: 2ecee86cd
+    - review: findings — crates/swissarmyhammer-code-context/src/ignore_filter.rs:218
+  timestamp: 2026-10-17T10:57:36.238863+00:00
+- actor: claude-code
+  id: 01m54r88gv708tbjpf7x1qr783
+  text: |-
+    Finding ignore_filter.rs:218 (completeness/inverse-operation-coverage) done. Branch check of `relative` and `to_root_form`:
+    - `relative`: relative input, root form, canonical form, outside both roots all had a test. The branch with no canonical root (the root is already canonical) had no direct test.
+    - `to_root_form`: canonical form and outside had a test. Relative input and root-form input had no test. The branch with no canonical root had no test.
+    Changes (tests only, in ignore_filter.rs):
+    - `to_root_form_gives_a_canonical_path_the_form_of_the_root` now asserts root-form input, canonical input and relative input (`Path::new("src/a.rs")`) all give `Some(root.join("src/a.rs"))`.
+    - New `relative_strips_a_root_that_is_already_canonical` and `to_root_form_keeps_a_root_that_is_already_canonical`: filter made on the canonical root, so `canonical_root` is `None`.
+    These tests cover behavior that exists, so they passed on the first run. No production change, thus no RED is possible.
+    Tool note: `update task` and `move task` give a 900 KB result (the full board) in this session. The update still applies.
+  timestamp: 2026-10-17T10:59:18.683685+00:00
+- actor: claude-code
+  id: 01m54r8bjd8zca3t9tscgm1hj9
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-code-context/src/ignore_filter.rs (tests only). `cargo nextest run -p swissarmyhammer-code-context`: 740 passed, 0 failed, 0 skipped. `cargo clippy -p swissarmyhammer-code-context --all-targets -- -D warnings`: clean. `cargo fmt`: applied.
+    - next: /test, commit, /review
+  timestamp: 2026-10-17T10:59:21.805230+00:00
+- actor: claude-code
+  id: 01m54rahanak1556j65s9yxj3a
+  text: |-
+    ### test — green (iteration 2)
+    - evidence: `cargo nextest run --no-fail-fast -p swissarmyhammer-code-context` — 740 tests run, 740 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, no warnings. `cargo fmt --check` — exit 0, no differences.
+    - next: review.
+  timestamp: 2026-10-17T11:00:33.237503+00:00
 depends_on:
 - 01M53GC28P974P34HEP7XN651M
 position_column: doing
@@ -60,3 +102,12 @@ The Swift port session found the same problem in its watcher. In that watcher, a
 
 ## Tests
 - A unit test for `to_file_event` (or `collect_file_events`) with a symlinked temp root. Use the same `symlinked_root` helper as in `ignore_filter.rs`. #lsp-fix #bug
+
+## Review Findings (2026-10-17 05:53)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 4 file(s) reviewed, 4 not reviewed.
+
+> 4 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 4 file(s)
+
+- [x] `crates/swissarmyhammer-code-context/src/ignore_filter.rs:218` `completeness/inverse-operation-coverage` — to_root_form has a relative-input branch (it calls relative, which returns a relative path unchanged, and then joins the root). No test feeds a relative path into to_root_form. The inverse function relative has such a test (relative_strips_the_root_and_the_canonical_root), so the two directions of this pair are not tested the same way. Add one assertion to to_root_form_gives_a_canonical_path_the_form_of_the_root: filter.to_root_form(Path::new("src/a.rs")) == Some(root.join("src/a.rs")).
