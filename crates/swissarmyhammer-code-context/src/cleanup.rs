@@ -778,58 +778,152 @@ mod tests {
         }
     }
 
-    /// Make the directory `rel` under `root` unreadable.
-    ///
-    /// Returns `None` when the process runs as root: then the mode does not
-    /// stop the read, and the test cannot make an unreadable directory.
+    /// A directory with the mode [`UNREADABLE_DIR_MODE`], and what that mode
+    /// does to the process.
     #[cfg(unix)]
-    fn make_unreadable_dir(root: &Path, rel: &str) -> Option<RestoreDirMode> {
+    struct LockedDir {
+        /// Gives the readable mode back when the test ends.
+        _restore: RestoreDirMode,
+        /// `true` when the mode stops the read. It is `false` when the process
+        /// runs as root, because root reads a directory with any mode.
+        denied: bool,
+    }
+
+    /// Give the directory `rel` under `root` the mode [`UNREADABLE_DIR_MODE`].
+    ///
+    /// The result tells if the mode stops the read, so that a test asserts
+    /// the correct result for a process that is root and for one that is not.
+    #[cfg(unix)]
+    fn make_unreadable_dir(root: &Path, rel: &str) -> LockedDir {
         use std::os::unix::fs::PermissionsExt;
         let path = root.join(rel);
         fs::set_permissions(&path, fs::Permissions::from_mode(UNREADABLE_DIR_MODE)).unwrap();
-        let guard = RestoreDirMode { path };
-        if fs::read_dir(&guard.path).is_ok() {
-            eprintln!("skip: the process runs as root, so a mode of 000 does not stop the read");
-            return None;
+        let denied = fs::read_dir(&path).is_err();
+        LockedDir {
+            _restore: RestoreDirMode { path },
+            denied,
         }
-        Some(guard)
+    }
+
+    /// The count of walk entries that a directory with the mode
+    /// [`UNREADABLE_DIR_MODE`] makes the walk skip: one when the mode stops
+    /// the read, else zero.
+    #[cfg(unix)]
+    fn expected_skipped_entries(locked: &LockedDir) -> usize {
+        usize::from(locked.denied)
     }
 
     /// An unreadable directory does not stop the walk: the cleanup gives `Ok`
-    /// and adds the files in the other directories.
+    /// and adds the files in the other directories. When the process runs as
+    /// root, the walk reads the directory and also adds its file.
     #[cfg(unix)]
     #[test]
     fn test_cleanup_walk_continues_past_unreadable_dir() {
         let dir = tempfile::tempdir().unwrap();
+        let locked_file = "locked/b.rs";
         write_file(dir.path(), "src/a.rs", "fn a() {}");
-        write_file(dir.path(), "locked/b.rs", "fn b() {}");
-        let Some(_restore) = make_unreadable_dir(dir.path(), "locked") else {
-            return;
-        };
+        write_file(dir.path(), locked_file, "fn b() {}");
+        let locked = make_unreadable_dir(dir.path(), "locked");
 
         let conn = open_memory_db();
         let stats = startup_cleanup(&conn, dir.path())
             .expect("an unreadable directory must not stop the walk");
 
         assert!(has_row(&conn, "src/a.rs"), "the readable file is added");
-        assert_eq!(stats.files_added, 1);
         assert_eq!(
-            stats.entries_skipped, 1,
+            has_row(&conn, locked_file),
+            !locked.denied,
+            "the file under the directory is added only when the walk can read it"
+        );
+        assert_eq!(
+            stats.files_added,
+            1 + usize::from(!locked.denied),
+            "each file that the walk can read is added"
+        );
+        assert_eq!(
+            stats.entries_skipped,
+            expected_skipped_entries(&locked),
             "the unreadable directory is counted"
         );
+    }
+
+    /// Make the walk error that the walker gives for `path` when the read of
+    /// `path` fails with `kind`. For example, `NotFound` is a file that is
+    /// deleted between the list and the stat, and `PermissionDenied` is a
+    /// directory with no read permission.
+    fn walk_error(path: PathBuf, kind: std::io::ErrorKind) -> ignore::Error {
+        ignore::Error::WithDepth {
+            depth: 1,
+            err: Box::new(ignore::Error::WithPath {
+                path,
+                err: Box::new(ignore::Error::Io(std::io::Error::from(kind))),
+            }),
+        }
     }
 
     /// Make the walk error that the walker gives for a file that is deleted
     /// between the list and the stat.
     fn vanished_file_error(path: PathBuf) -> ignore::Error {
-        let not_found = std::io::Error::from(std::io::ErrorKind::NotFound);
-        ignore::Error::WithDepth {
-            depth: 1,
-            err: Box::new(ignore::Error::WithPath {
-                path,
-                err: Box::new(ignore::Error::Io(not_found)),
-            }),
+        walk_error(path, std::io::ErrorKind::NotFound)
+    }
+
+    /// The reconcile keeps each row under a directory that the walk could not
+    /// read, but it still deletes the row of a file that is gone. The walk
+    /// error is made in the test, so the assertions run for each user, also
+    /// for root.
+    #[test]
+    fn test_reconcile_keeps_rows_under_denied_dir_and_deletes_gone_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let locked = "locked/nested/b.rs";
+        let readable = "src/a.rs";
+        write_file(dir.path(), locked, "fn b() {}");
+        write_file(dir.path(), readable, "fn a() {}");
+        let rows = [
+            (locked, "fn b() {}"),
+            (readable, "fn a() {}"),
+            ("gone.rs", "fn gone() {}"),
+        ];
+        let conn = open_memory_db();
+        for (rel, contents) in rows {
+            seed_row(&conn, rel, contents);
         }
+        let db_entries: Vec<(String, Vec<u8>)> = rows
+            .iter()
+            .map(|(rel, contents)| (rel.to_string(), hash_bytes(contents.as_bytes())))
+            .collect();
+        let readable_hash = hash_bytes(b"fn a() {}");
+        let disk_map = HashMap::from([(readable, (readable_hash.as_slice(), 0))]);
+        let mut unreadable = UnreadablePaths::default();
+        let denied = walk_error(
+            dir.path().join("locked"),
+            std::io::ErrorKind::PermissionDenied,
+        );
+        unreadable.record(dir.path(), &denied);
+        let mut stats = CleanupStats::default();
+
+        reconcile_db_entries(
+            &conn,
+            dir.path(),
+            &db_entries,
+            &disk_map,
+            &unreadable,
+            0,
+            &mut stats,
+        )
+        .unwrap();
+
+        assert!(
+            has_row(&conn, locked),
+            "the row under the unreadable directory must stay"
+        );
+        assert!(has_row(&conn, readable), "the walked row stays");
+        assert!(
+            !has_row(&conn, "gone.rs"),
+            "the row for the gone file is deleted"
+        );
+        assert_eq!(stats.files_removed, 1);
+        assert_eq!(stats.files_ignored, 0);
+        assert_eq!(stats.files_unchanged, 1);
     }
 
     /// A file that is deleted during the walk is recorded and counted. Only
@@ -872,26 +966,27 @@ mod tests {
         assert!(unreadable.covers("README.toml"));
     }
 
-    /// A row under a directory that the walk could not read stays, but a row
-    /// for a file that is gone is still deleted.
+    /// A row under a directory with the mode [`UNREADABLE_DIR_MODE`] stays,
+    /// but a row for a file that is gone is still deleted. When the mode
+    /// stops the read, the reconcile keeps the row because the walk recorded
+    /// the directory. When the process runs as root, the walk reads the
+    /// directory, and the row stays because its file is unchanged.
     #[cfg(unix)]
     #[test]
     fn test_cleanup_keeps_rows_under_unreadable_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let locked = "locked/nested/b.rs";
+        let locked_file = "locked/nested/b.rs";
         write_file(dir.path(), "src/a.rs", "fn a() {}");
-        write_file(dir.path(), locked, "fn b() {}");
+        write_file(dir.path(), locked_file, "fn b() {}");
         let conn = open_memory_db();
-        seed_row(&conn, locked, "fn b() {}");
+        seed_row(&conn, locked_file, "fn b() {}");
         seed_row(&conn, "gone.rs", "fn gone() {}");
-        let Some(_restore) = make_unreadable_dir(dir.path(), "locked") else {
-            return;
-        };
+        let locked = make_unreadable_dir(dir.path(), "locked");
 
         let stats = startup_cleanup(&conn, dir.path()).unwrap();
 
         assert!(
-            has_row(&conn, locked),
+            has_row(&conn, locked_file),
             "the row under the unreadable directory must stay"
         );
         assert!(
@@ -900,6 +995,12 @@ mod tests {
         );
         assert_eq!(stats.files_removed, 1);
         assert_eq!(stats.files_ignored, 0);
+        assert_eq!(
+            stats.files_unchanged,
+            usize::from(!locked.denied),
+            "the row is compared with its file only when the walk can read it"
+        );
+        assert_eq!(stats.entries_skipped, expected_skipped_entries(&locked));
     }
 
     #[test]

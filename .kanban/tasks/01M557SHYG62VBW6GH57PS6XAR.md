@@ -38,6 +38,49 @@ comments:
     - evidence: `cargo nextest run --no-fail-fast -E 'rdeps(swissarmyhammer-code-context)'` ran 5044 tests. 5043 passed, 1 failed, 0 skipped. The failure is `swissarmyhammer-treesitter watcher::tests::test_watcher_fires_callback_on_file_create`. This is the known machine failure (fseventsd is stuck, task ^ygk17ma). The output has no LEAK markers. The dart validator test did not fail. `cargo clippy --workspace --all-targets -- -D warnings` is clean (exit 0). `cargo fmt --check` is clean (exit 0).
     - next: review.
   timestamp: 2026-10-17T15:43:19.922+00:00
+- actor: claude-code
+  id: 01m558scwze5asrmd7mwxtzhzq
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD (f6ec88061); 1 finding (1 confirmed, 2 refuted) — crates/swissarmyhammer-code-context/src/cleanup.rs:887
+    - next: implement the open finding. Remove the silent early return under root from all tests in cleanup.rs, then review again.
+  timestamp: 2026-10-17T15:48:17.439204+00:00
+- actor: claude-code
+  id: 01m558tabyf47jtm9cgdd2ct5q
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — cleanup.rs (UnreadablePaths, walk continues, rows kept, entries_skipped, 5 tests)
+    - test: green — nextest rdeps(code-context), 5043 of 5044; the 1 failure is the known treesitter FSEvents test (^ygk17ma)
+    - commit: f6ec88061
+    - review: findings — crates/swissarmyhammer-code-context/src/cleanup.rs:887
+  timestamp: 2026-10-17T15:48:47.614677+00:00
+- actor: claude-code
+  id: 01m558zdcxx82x9bq2wkyceq2t
+  text: |-
+    Fix for the finding `cleanup.rs:887 test-integrity/no-test-cheating`. The cause was removed from the whole file: no test in `cleanup.rs` returns early now.
+    - `make_unreadable_dir` no longer gives `Option`. It gives a `LockedDir { _restore, denied }`. `denied` is `fs::read_dir(..).is_err()` after the chmod. New helper `expected_skipped_entries`.
+    - `test_cleanup_walk_continues_past_unreadable_dir` asserts in both cases. As non-root: 1 file added, `entries_skipped == 1`, no row for `locked/b.rs`. As root: 2 files added, `entries_skipped == 0`, the row for `locked/b.rs` is there.
+    - `test_cleanup_keeps_rows_under_unreadable_dir` asserts in both cases. The locked row stays, the gone row is deleted, `files_removed == 1`, `files_ignored == 0`. `files_unchanged` and `entries_skipped` are 0/1 as non-root and 1/0 as root.
+    - New test `test_reconcile_keeps_rows_under_denied_dir_and_deletes_gone_row` calls `reconcile_db_entries` with a constructed `PermissionDenied` walk error for the `locked` directory. It runs for each user (also root) and is not `cfg(unix)`. `vanished_file_error` now calls a new shared helper `walk_error(path, kind)`.
+    - Fault check: with the `covers` guard turned off for a short time, the new constructed test and the mode-000 keep-rows test failed ("the row under the unreadable directory must stay"). Then the guard was put back.
+    - The `kanban update task` call returned an output that was too large, so I could not see the result. Make sure that the finding item is `- [x]`.
+  timestamp: 2026-10-17T15:51:34.557962+00:00
+- actor: claude-code
+  id: 01m558zs2t5yerky693avkjr8g
+  text: |-
+    ### implement — changed
+    - evidence: 1 file — crates/swissarmyhammer-code-context/src/cleanup.rs (tests only: new test_reconcile_keeps_rows_under_denied_dir_and_deletes_gone_row; test_cleanup_walk_continues_past_unreadable_dir and test_cleanup_keeps_rows_under_unreadable_dir now assert for root and for non-root; no silent early return stays). `cargo nextest run -p swissarmyhammer-code-context` 763 passed, 0 failed, 0 skipped. `cargo clippy -p swissarmyhammer-code-context --all-targets -- -D warnings` clean. `cargo fmt` applied.
+    - next: /review
+  timestamp: 2026-10-17T15:51:46.522463+00:00
+- actor: claude-code
+  id: 01m5591yqk6pjrzhcdtz3c1sjb
+  text: |-
+    ### test — green (iteration 2)
+    - evidence: `cargo nextest run --no-fail-fast -p swissarmyhammer-code-context` ran 763 tests. 763 passed, 0 failed, 0 skipped.
+    - evidence: `cargo clippy --workspace --all-targets -- -D warnings` is clean. The exit code is 0.
+    - evidence: `cargo fmt --check` is clean. The exit code is 0.
+    - next: Do the review step.
+  timestamp: 2026-10-17T15:52:57.843503+00:00
 position_column: doing
 position_ordinal: '8480'
 title: Do not stop the workspace walk at one bad entry
@@ -65,3 +108,12 @@ The Swift port session found the same problem in its walk.
 ## Tests
 - A unit test with a temp workspace and a subdirectory with mode 000 (skip the test when it runs as root).
 - A unit test that seeds a row under that directory and checks that the row stays. #lsp-fix #bug
+
+## Review Findings (2026-10-17 10:43)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 1 file(s) reviewed, 8 not reviewed.
+
+> 8 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 8 file(s)
+
+- [x] `crates/swissarmyhammer-code-context/src/cleanup.rs:887` `test-integrity/no-test-cheating` — The test returns early, without any assertion, when the process runs as root. Under root the test passes without checking that the row under the unreadable directory is kept or that the gone-file row is deleted. Do not return silently. Use the same fix as the other unreadable-directory test: assert under a condition root cannot bypass, or mark the test `#[ignore]` with a reason and make CI run it as non-root.
