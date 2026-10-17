@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
@@ -409,10 +409,14 @@ impl LspDaemon {
         }
     }
 
-    /// Check whether the child process is still alive.
+    /// Check whether the child process is still alive and its client can
+    /// still read.
     ///
     /// Returns `true` if the process is running, `false` if it has exited
-    /// (which also transitions state to `Failed`).
+    /// (which also transitions state to `Failed`). A client that went out of
+    /// step (see [`LspJsonRpcClient::is_out_of_step`]) also makes the server
+    /// not healthy: the process is killed, and the state goes to `Failed`, so
+    /// the supervisor starts the server again.
     pub fn health_check(&mut self) -> bool {
         let child = match self.child.as_mut() {
             Some(c) => c,
@@ -421,17 +425,21 @@ impl LspDaemon {
 
         match child.try_wait() {
             Ok(Some(status)) => {
-                let reason = format!("process exited: {status}");
                 warn!(cmd = self.spec.command, %status, "LSP server exited unexpectedly");
-                if let Ok(mut guard) = self.client.lock() {
-                    *guard = None;
+                self.drop_server(format!("process exited: {status}"));
+                false
+            }
+            Ok(None) if self.client_is_out_of_step() => {
+                warn!(
+                    cmd = self.spec.command,
+                    "LSP client is out of step; stopping the server"
+                );
+                if let Some(child) = self.child.as_mut() {
+                    if let Err(e) = child.start_kill() {
+                        warn!(cmd = self.spec.command, %e, "Failed to kill the LSP server");
+                    }
                 }
-                // The process is gone; the session must not keep believing its
-                // documents are open (a restart would otherwise suppress the
-                // re-opens as stale duplicates).
-                self.session.reset_documents();
-                self.child = None;
-                self.record_failure(reason);
+                self.drop_server("JSON-RPC stream out of step".into());
                 false
             }
             Ok(None) => {
@@ -439,20 +447,40 @@ impl LspDaemon {
                 true
             }
             Err(e) => {
-                let reason = format!("try_wait error: {e}");
                 warn!(cmd = self.spec.command, %e, "Error checking LSP server health");
-                if let Ok(mut guard) = self.client.lock() {
-                    *guard = None;
-                }
-                // The process is gone; the session must not keep believing its
-                // documents are open (a restart would otherwise suppress the
-                // re-opens as stale duplicates).
-                self.session.reset_documents();
-                self.child = None;
-                self.record_failure(reason);
+                self.drop_server(format!("try_wait error: {e}"));
                 false
             }
         }
+    }
+
+    /// Tell if the client went out of step.
+    ///
+    /// The check does not wait for the client lock. A worker that holds the
+    /// lock uses the client for a request, and the next health check sees the
+    /// client again.
+    fn client_is_out_of_step(&self) -> bool {
+        let guard = match self.client.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return false,
+        };
+        guard.as_ref().is_some_and(LspJsonRpcClient::is_out_of_step)
+    }
+
+    /// Forget the server after it stopped or failed, and record `reason` as
+    /// the failure.
+    ///
+    /// The client and the child handle are dropped. The session forgets its
+    /// open documents, because a restart would otherwise suppress the
+    /// re-opens as stale duplicates.
+    fn drop_server(&mut self, reason: String) {
+        if let Ok(mut guard) = self.client.lock() {
+            *guard = None;
+        }
+        self.session.reset_documents();
+        self.child = None;
+        self.record_failure(reason);
     }
 
     /// Attempt to restart after failure, respecting backoff policy.
@@ -742,32 +770,46 @@ pub async fn send_jsonrpc_message<W: AsyncWriteExt + Unpin>(
 /// The header block goes through [`framing::HeaderBlock`] and the body decode
 /// through [`framing`](crate::framing), the same as the sync client's reader.
 /// Header fields other than Content-Length (e.g. Content-Type) are ignored.
-/// A bad header line gives its error only after the whole header block is
-/// read, so the next call starts at the next frame.
+/// A header block with no Content-Length gives its error after the whole
+/// block is read, so the next call starts at the next frame. A header block
+/// that is not trusted gives an [`LspError::OutOfStep`] error: the body is not
+/// read and no buffer is made for it, and the caller must not read from the
+/// stream again.
 pub async fn read_jsonrpc_message<R: AsyncBufReadExt + Unpin>(
     reader: &mut R,
 ) -> Result<serde_json::Value, LspError> {
-    let mut block = framing::HeaderBlock::default();
-    let length = loop {
-        let mut line = String::new();
-        let n = reader
-            .read_line(&mut line)
-            .await
-            .map_err(|e| LspError::JsonRpc(format!("read header line: {e}")))?;
-        if n == 0 {
-            return Err(framing::eof_in_headers());
-        }
-        if let Some(length) = block.feed(&line) {
-            break length?;
-        }
-    };
-
+    let length = read_header_block(reader).await?;
     let mut body = vec![0u8; length];
     reader
         .read_exact(&mut body)
         .await
         .map_err(|e| LspError::JsonRpc(format!("read body: {e}")))?;
     framing::decode_body(&body)
+}
+
+/// Read one header block through [`framing::HeaderBlock`], and give its body
+/// length.
+///
+/// Each line is read as bytes, so the block checks the UTF-8 itself. Each read
+/// stops at the line limit of the block, so a line with no end does not make
+/// the read keep bytes with no limit.
+async fn read_header_block<R: AsyncBufReadExt + Unpin>(reader: &mut R) -> Result<usize, LspError> {
+    let mut block = framing::HeaderBlock::default();
+    loop {
+        let mut line = Vec::new();
+        let limit = block.line_limit() as u64;
+        let n = (&mut *reader)
+            .take(limit)
+            .read_until(b'\n', &mut line)
+            .await
+            .map_err(|e| LspError::JsonRpc(format!("read header line: {e}")))?;
+        if n == 0 {
+            return Err(framing::eof_in_headers());
+        }
+        if let Some(length) = block.feed(&line) {
+            return length;
+        }
+    }
 }
 
 // -- tests ----------------------------------------------------------------

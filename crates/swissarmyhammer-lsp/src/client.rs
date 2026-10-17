@@ -224,6 +224,16 @@ impl LspJsonRpcClient {
             .read_unsolicited(timeout, |stdout| stdout_ready(stdout, deadline))
     }
 
+    /// Tell if the server sent bytes that put this client out of step.
+    ///
+    /// After a header block that is not trusted, for example a Content-Length
+    /// that is too large, the position of the next frame is not known. Each
+    /// later read then gives an [`LspError::OutOfStep`] error, so the owner of
+    /// the client must stop the server and start it again.
+    pub fn is_out_of_step(&self) -> bool {
+        self.wire.is_out_of_step()
+    }
+
     /// Initialize the LSP server and wait for initialization response.
     pub fn initialize(&mut self, workspace_root: &Path) -> Result<(), LspError> {
         debug!("Initializing LSP server");
@@ -574,6 +584,12 @@ impl<W: Write, R: Read> Wire<W, R> {
     /// Write `message` as one frame, and flush it.
     fn send(&mut self, message: &Value) -> Result<(), LspError> {
         framing::write_frame(&mut self.writer, message)
+    }
+
+    /// Tell if the server sent bytes that put the read side out of step
+    /// (see [`FrameBuffer`]). The wire cannot read a message again.
+    fn is_out_of_step(&self) -> bool {
+        self.incoming.is_out_of_step()
     }
 
     /// Read the next complete message.
@@ -1009,6 +1025,31 @@ mod tests {
 
         assert!(timed_out.is_err());
         assert_eq!(result.expect("the second reply"), second);
+    }
+
+    #[test]
+    fn a_content_length_larger_than_the_maximum_puts_the_wire_out_of_step() {
+        let reply = json!({"jsonrpc": "2.0", "id": 1, "result": "after"});
+        let mut bytes = b"Content-Length: 18446744073709551615\r\n\r\n".to_vec();
+        bytes.extend(framed(&[reply]));
+        let mut wire = wire_over(bytes);
+
+        let first = wire.read_reply(&pending(1), ready_while_data);
+        let second = wire.read_unsolicited(TEST_TIMEOUT, ready_while_data);
+
+        assert!(
+            matches!(first, Err(LspError::OutOfStep(_))),
+            "got: {first:?}"
+        );
+        assert!(
+            matches!(second, Err(LspError::OutOfStep(_))),
+            "got: {second:?}"
+        );
+        assert!(wire.is_out_of_step());
+        assert!(
+            wire.writer.is_empty(),
+            "no cancel goes to an out-of-step server"
+        );
     }
 
     #[test]

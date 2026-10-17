@@ -42,6 +42,12 @@ pub enum LspError {
     #[error("JSON-RPC error: {0}")]
     JsonRpc(String),
 
+    /// The server sent bytes that the reader cannot frame, for example a
+    /// Content-Length that is too large. The position of the next frame is not
+    /// known, so the connection cannot be used again.
+    #[error("JSON-RPC stream out of step: {0}")]
+    OutOfStep(String),
+
     /// Project detection failed for the workspace.
     #[error("project detection failed: {0}")]
     ProjectDetection(String),

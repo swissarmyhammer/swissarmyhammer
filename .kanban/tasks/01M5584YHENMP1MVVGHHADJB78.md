@@ -1,6 +1,15 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01m5598fyhc7k36mysfjhy2qsw
+  text: |-
+    ### note — test rule from the ^7ps6xar review
+    - Do not skip the test or return early when the process runs as root. The review rule `test-integrity/no-test-cheating` flagged this in ^7ps6xar (cleanup.rs:887).
+    - Use the same design as ^7ps6xar commit 1eb198fbc: test the logic with a constructed read error (PermissionDenied) that each user can run, and make the real mode-000 test assert in both cases (non-root: the row stays and the entry is counted; root: the file is read).
+    - Use the shared `walk_error` helper and the `LockedDir` helper in cleanup.rs tests.
+  timestamp: 2026-10-17T15:56:32.081350+00:00
 position_column: todo
 position_ordinal: ffff8980
 title: Do not delete a row when the cleanup hash cannot read its file

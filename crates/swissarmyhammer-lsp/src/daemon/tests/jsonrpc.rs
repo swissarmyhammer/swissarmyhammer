@@ -460,10 +460,11 @@ async fn test_daemon_and_client_read_the_same_frame() {
 }
 
 /// The async daemon reader and the sync client frame buffer handle a bad
-/// header block the same way: each reads the whole block, gives the error, and
-/// then reads the next frame.
+/// Content-Length the same way: the length is not trusted, so each gives an
+/// out-of-step error, and neither reads the next frame. The client buffer
+/// gives the same error again on the next call.
 #[tokio::test]
-async fn test_daemon_and_client_skip_a_bad_header_block_the_same_way() {
+async fn test_daemon_and_client_stop_at_a_bad_content_length_the_same_way() {
     let next = json!({"jsonrpc": "2.0", "id": 4, "result": "next"});
     let mut raw = b"Content-Length: abc\r\nContent-Type: text\r\n\r\n".to_vec();
     crate::framing::write_frame(&mut raw, &next).unwrap();
@@ -473,14 +474,90 @@ async fn test_daemon_and_client_skip_a_bad_header_block_the_same_way() {
     frames.push(&raw);
 
     let daemon_error = read_jsonrpc_message(&mut reader).await.unwrap_err();
-    let daemon_next = read_jsonrpc_message(&mut reader).await.unwrap();
     let client_error = frames.take_message().unwrap_err();
-    let client_next = frames.take_message().unwrap();
+    let client_next = frames.take_message().unwrap_err();
 
-    assert!(daemon_error.to_string().contains("bad Content-Length"));
-    assert!(client_error.to_string().contains("bad Content-Length"));
-    assert_eq!(daemon_next, next);
-    assert_eq!(client_next, Some(next));
+    assert_same_out_of_step_error(&daemon_error, &client_error, "bad Content-Length");
+    assert!(matches!(client_next, LspError::OutOfStep(_)));
+}
+
+/// Each case of a header block that a reader cannot frame: a name, the bytes
+/// that the server sends, and a text that the error must contain.
+fn out_of_step_cases() -> Vec<(&'static str, Vec<u8>, &'static str)> {
+    let oversized_line = vec![b'a'; crate::framing::MAX_HEADER_BLOCK_BYTES + 1];
+    vec![
+        (
+            "the largest u64",
+            b"Content-Length: 18446744073709551615\r\n\r\n".to_vec(),
+            "larger than the maximum",
+        ),
+        (
+            "a negative length",
+            b"Content-Length: -5\r\n\r\n".to_vec(),
+            "bad Content-Length",
+        ),
+        (
+            "a header line that is not UTF-8",
+            b"Content-Length: 2\r\nX-Name: \xff\xfe\r\n\r\n".to_vec(),
+            "not UTF-8",
+        ),
+        ("a header line with no end", oversized_line, "header block"),
+    ]
+}
+
+/// Assert that `daemon` and `client` are the same out-of-step error, and
+/// that its text contains `expected`.
+#[track_caller]
+fn assert_same_out_of_step_error(daemon: &LspError, client: &LspError, expected: &str) {
+    assert!(
+        matches!(daemon, LspError::OutOfStep(_)),
+        "daemon error: {daemon:?}"
+    );
+    assert!(
+        matches!(client, LspError::OutOfStep(_)),
+        "client error: {client:?}"
+    );
+    assert_eq!(daemon.to_string(), client.to_string());
+    assert!(
+        daemon.to_string().contains(expected),
+        "expected {expected:?} in: {daemon}"
+    );
+}
+
+/// Each case that a reader cannot frame gives the same out-of-step error from
+/// the async daemon reader and from the sync client frame buffer. The daemon
+/// reader reads no byte after the header block, and the client buffer keeps
+/// no byte.
+#[tokio::test]
+async fn test_daemon_and_client_give_the_same_out_of_step_error_for_each_case() {
+    let next = json!({"jsonrpc": "2.0", "id": 5, "result": "next"});
+    let mut next_frame = Vec::new();
+    crate::framing::write_frame(&mut next_frame, &next).unwrap();
+
+    for (case, header, expected) in out_of_step_cases() {
+        let raw = [header.clone(), next_frame.clone()].concat();
+        let mut cursor = &raw[..];
+        let mut reader = BufReader::new(&mut cursor);
+        let mut frames = crate::framing::FrameBuffer::default();
+        frames.push(&raw);
+
+        let daemon_error = read_jsonrpc_message(&mut reader).await.unwrap_err();
+        let mut unread = Vec::new();
+        reader.read_to_end(&mut unread).await.unwrap();
+        let client_error = frames.take_message().unwrap_err();
+        frames.push(&next_frame);
+
+        assert_same_out_of_step_error(&daemon_error, &client_error, expected);
+        assert_eq!(
+            unread, next_frame,
+            "{case}: the daemon reader must read only the header block"
+        );
+        assert!(frames.is_out_of_step(), "{case}");
+        assert!(
+            matches!(frames.take_message(), Err(LspError::OutOfStep(_))),
+            "{case}: the client buffer read a frame after the error"
+        );
+    }
 }
 
 /// `read_jsonrpc_message` accepts any case and spacing variant of the

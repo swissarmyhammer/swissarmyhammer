@@ -286,11 +286,17 @@ fn child_pid(daemon: &LspDaemon) -> u32 {
 /// Return true when the process table holds `pid`. A process that exited
 /// but that nothing reaped (a zombie) is still in the table.
 fn process_is_in_table(pid: u32) -> bool {
+    !process_state(pid).is_empty()
+}
+
+/// Return the `ps` state of `pid`, or an empty string when the process table
+/// does not hold `pid`.
+fn process_state(pid: u32) -> String {
     let output = std::process::Command::new(PS_PROGRAM)
         .args(["-o", "stat=", "-p", &pid.to_string()])
         .output()
         .expect("run ps");
-    !String::from_utf8_lossy(&output.stdout).trim().is_empty()
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 /// A `cat` process whose pipes back a client that a test put into a
@@ -308,18 +314,70 @@ impl Drop for InstalledClient {
     }
 }
 
-/// Put a live client, backed by a separate `cat` process, into the shared
-/// client slot of `daemon`.
-fn install_cat_client(daemon: &LspDaemon) -> InstalledClient {
-    let mut helper = std::process::Command::new(ECHO_PROGRAM)
+/// Put a live client, backed by a separate `program` process run with
+/// `args`, into the shared client slot of `daemon`.
+fn install_client(daemon: &LspDaemon, program: &str, args: &[&str]) -> InstalledClient {
+    let mut helper = std::process::Command::new(program)
+        .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
-        .expect("spawn cat helper");
-    let stdin = helper.stdin.take().expect("cat helper stdin");
-    let stdout = helper.stdout.take().expect("cat helper stdout");
+        .unwrap_or_else(|e| panic!("spawn {program} helper: {e}"));
+    let stdin = helper.stdin.take().expect("helper stdin");
+    let stdout = helper.stdout.take().expect("helper stdout");
     *daemon.shared_client().lock().unwrap() = Some(LspJsonRpcClient::new(stdin, stdout));
     InstalledClient { helper }
+}
+
+/// Put a live client, backed by a separate `cat` process, into the shared
+/// client slot of `daemon`.
+fn install_cat_client(daemon: &LspDaemon) -> InstalledClient {
+    install_client(daemon, ECHO_PROGRAM, &[])
+}
+
+/// A program that writes its format argument to stdout and exits.
+const PRINTF_PROGRAM: &str = "printf";
+
+/// A `printf` format that writes a header block whose Content-Length is too
+/// large for a reader to trust.
+const UNTRUSTED_HEADER_FORMAT: &str = "Content-Length: 18446744073709551615\\r\\n\\r\\n";
+
+/// Put a client into the shared client slot of `daemon` whose server sent a
+/// header block that is not trusted, and read from it one time. The client is
+/// then out of step.
+fn install_out_of_step_client(daemon: &LspDaemon) -> InstalledClient {
+    let installed = install_client(daemon, PRINTF_PROGRAM, &[UNTRUSTED_HEADER_FORMAT]);
+    let mut guard = daemon.client().expect("the client is installed");
+    let client = guard.as_mut().expect("the slot holds the client");
+    let result = client.read_message();
+    assert!(
+        matches!(result, Err(LspError::OutOfStep(_))),
+        "the read must put the client out of step, got: {result:?}"
+    );
+    drop(guard);
+    installed
+}
+
+/// Wait until `pid` is no longer a running process: it is gone from the
+/// process table, or it is a zombie that nothing reaped yet.
+async fn wait_until_not_running(pid: u32) {
+    let deadline = Instant::now() + SIGNAL_TIMEOUT;
+    while process_is_running(pid) {
+        assert!(Instant::now() < deadline, "process {pid} is still running");
+        tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+    }
+}
+
+/// The time between two checks of a process state, in milliseconds.
+const POLL_INTERVAL_MS: u64 = 20;
+
+/// The `ps` state letter of a zombie process.
+const ZOMBIE_STATE: &str = "Z";
+
+/// Return true when `pid` is in the process table and is not a zombie.
+fn process_is_running(pid: u32) -> bool {
+    let state = process_state(pid);
+    !state.is_empty() && !state.starts_with(ZOMBIE_STATE)
 }
 
 /// Spawn a task that returns the first state that `daemon` sends after this
@@ -850,6 +908,9 @@ fn test_lsp_error_display_variants() {
 
     let err = LspError::JsonRpc("bad frame".to_string());
     assert!(err.to_string().contains("bad frame"));
+
+    let err = LspError::OutOfStep("length too large".to_string());
+    assert!(err.to_string().contains("out of step: length too large"));
 
     let err = LspError::ProjectDetection("no projects".to_string());
     assert!(err.to_string().contains("no projects"));

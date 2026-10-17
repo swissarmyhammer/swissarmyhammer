@@ -59,6 +59,47 @@ async fn test_health_check_clears_client_on_exit() {
     assert!(daemon.client().is_none());
 }
 
+/// A server whose client went out of step is not healthy, also while its
+/// process runs. The health check kills the server, clears the client, and
+/// goes to `Failed`, so the supervisor starts the server again.
+#[tokio::test]
+async fn test_health_check_fails_a_server_whose_client_is_out_of_step() {
+    let mut daemon = daemon_with_child(spawn_silent());
+    let pid = child_pid(&daemon);
+    let _client = install_out_of_step_client(&daemon);
+
+    let healthy = daemon.health_check();
+
+    assert!(!healthy, "an out-of-step client is not healthy");
+    assert!(daemon.client().is_none(), "the client is cleared");
+    assert!(daemon.child.is_none(), "the child is dropped");
+    assert_eq!(daemon.consecutive_failures, 1);
+    match daemon.state() {
+        LspDaemonState::Failed { reason, .. } => assert!(
+            reason.contains("out of step"),
+            "expected 'out of step' in reason, got: {reason}"
+        ),
+        other => panic!("expected Failed after an out-of-step client, got: {other:?}"),
+    }
+    wait_until_not_running(pid).await;
+}
+
+/// A health check that cannot take the client lock, because a worker holds it
+/// for a request, does not wait for the lock. It checks only the process.
+#[tokio::test]
+async fn test_health_check_does_not_wait_for_a_client_that_is_in_use() {
+    let mut daemon = daemon_with_child(spawn_silent());
+    let _client = install_out_of_step_client(&daemon);
+    let shared = daemon.shared_client();
+    let in_use = shared.lock().unwrap();
+
+    let healthy = daemon.health_check();
+
+    drop(in_use);
+    assert!(healthy, "the process runs, and the client is not checked");
+    assert!(!daemon.health_check(), "the next check sees the client");
+}
+
 #[tokio::test]
 async fn test_restart_with_backoff_sleeps_before_restart() {
     // Verify that restart_with_backoff introduces a delay before
