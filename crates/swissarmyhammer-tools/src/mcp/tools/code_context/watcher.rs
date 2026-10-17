@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use async_watcher::{notify::RecursiveMode, AsyncDebouncer};
 use rusqlite::Connection;
-use swissarmyhammer_code_context::{FanoutWatcher, FileEvent, IgnoreFilter, SharedDb};
+use swissarmyhammer_code_context::{
+    FanoutWatcher, FileEvent, IgnoreFilter, SharedDb, SharedIgnoreFilter,
+};
 
 /// Debounce window for coalescing filesystem events before processing a batch.
 ///
@@ -134,15 +136,21 @@ pub(crate) fn process_file_events(
 /// 3. Calls [`process_file_events`] to mark DB rows dirty
 /// 4. Triggers re-indexing of dirty files
 ///
+/// `filter` is the shared ignore rule set of the workspace. The watcher skips
+/// each path that it ignores, and loads it again when a batch changes an
+/// ignore file ([`collect_batch_events`]). The LSP path filter and the
+/// diagnostics watcher hold clones of it, so they obey the new rules too.
+///
 /// Returns the `JoinHandle` for the watcher task.
 pub fn start_code_context_watcher(
     workspace_root: impl AsRef<Path>,
     db: SharedDb,
+    filter: SharedIgnoreFilter,
     shutdown: swissarmyhammer_code_context::ShutdownFlag,
 ) -> tokio::task::JoinHandle<()> {
     let workspace_root = workspace_root.as_ref().to_path_buf();
     tokio::spawn(async move {
-        if let Err(e) = run_watcher(&workspace_root, &db, &shutdown).await {
+        if let Err(e) = run_watcher(&workspace_root, &db, &filter, &shutdown).await {
             tracing::error!("code-context watcher failed: {}", e);
         }
     })
@@ -151,6 +159,7 @@ pub fn start_code_context_watcher(
 async fn run_watcher(
     workspace_root: impl AsRef<Path>,
     db: &SharedDb,
+    filter: &SharedIgnoreFilter,
     shutdown: &swissarmyhammer_code_context::ShutdownFlag,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let workspace_root = workspace_root.as_ref();
@@ -168,8 +177,6 @@ async fn run_watcher(
 
     let fanout = FanoutWatcher::new();
     let ws_root = workspace_root.to_path_buf();
-    // Load the ignore rules one time, before the first event.
-    let filter = IgnoreFilter::load(&ws_root).await?;
 
     // Wake on the SHUTDOWN_CHECK_INTERVAL_MILLIS tick even with no filesystem
     // events so a step-down (which sets the shutdown flag) is observed promptly
@@ -198,8 +205,7 @@ async fn run_watcher(
 
         match events_result {
             Ok(debounced_events) => {
-                process_ok_events(db, &ws_root, &fanout, &filter, &debounced_events, shutdown)
-                    .await;
+                process_ok_events(db, &ws_root, &fanout, filter, &debounced_events, shutdown).await;
             }
             Err(errors) => {
                 for error in errors {
@@ -240,21 +246,41 @@ pub(crate) fn collect_file_events(
     file_events
 }
 
+/// Convert one debounced batch into [`FileEvent`]s with the current rules.
+///
+/// When the batch changes an ignore file (`.gitignore`, `.ignore` or
+/// `.git/info/exclude`), the shared rules are loaded again first
+/// ([`SharedIgnoreFilter::reload_if_changed`]). The check reads the raw event
+/// paths, because [`collect_file_events`] drops each ignore file: it is not a
+/// source file, and `.git/` is a hard skip directory. Thus this batch and each
+/// batch after it obey the new rules, with no restart. A batch with no ignore
+/// file reads no ignore file.
+pub(crate) async fn collect_batch_events(
+    debounced_events: &[async_watcher::DebouncedEvent],
+    filter: &SharedIgnoreFilter,
+) -> Vec<FileEvent> {
+    let raw_paths = debounced_events
+        .iter()
+        .flat_map(|debounced| debounced.event.paths.iter().map(PathBuf::as_path));
+    filter.reload_if_changed(raw_paths).await;
+    collect_file_events(debounced_events, &filter.current())
+}
+
 /// Handle one debounced batch of successful filesystem events.
 ///
 /// Filters the batch to source-file [`FileEvent`]s that `filter` does not
-/// ignore ([`collect_file_events`]), marks the affected DB rows dirty via
+/// ignore ([`collect_batch_events`]), marks the affected DB rows dirty via
 /// [`process_file_events`], then drains the dirty set by re-indexing. A batch
 /// with no relevant source-file changes is a no-op.
 async fn process_ok_events(
     db: &SharedDb,
     ws_root: &Path,
     fanout: &FanoutWatcher,
-    filter: &IgnoreFilter,
+    filter: &SharedIgnoreFilter,
     debounced_events: &[async_watcher::DebouncedEvent],
     shutdown: &swissarmyhammer_code_context::ShutdownFlag,
 ) {
-    let file_events = collect_file_events(debounced_events, filter);
+    let file_events = collect_batch_events(debounced_events, filter).await;
     if file_events.is_empty() {
         return;
     }
@@ -647,6 +673,40 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].path(), Path::new("src/main.rs"));
+    }
+
+    /// A batch that changes `.gitignore` loads the rules again. Thus the next
+    /// batch, with an event for a path that the new rule ignores, adds no row.
+    #[tokio::test]
+    async fn collect_batch_events_obeys_a_gitignore_change_from_an_earlier_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let filter = SharedIgnoreFilter::load(root).await.unwrap();
+        let gitignore = root.join(".gitignore");
+        std::fs::write(&gitignore, "gen/\n").unwrap();
+
+        collect_batch_events(&[debounced_create(gitignore)], &filter).await;
+        let events =
+            collect_batch_events(&[debounced_create(root.join("gen/a.rs"))], &filter).await;
+
+        let conn = test_db();
+        process_file_events(&conn, &FanoutWatcher::new(), &events);
+        assert_eq!(count_rows(&conn, "indexed_files"), 0);
+    }
+
+    /// A batch with no ignore file keeps the current rules: it reads no
+    /// ignore file again.
+    #[tokio::test]
+    async fn collect_batch_events_keeps_the_rules_for_a_batch_with_no_ignore_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let filter = SharedIgnoreFilter::load(dir.path()).await.unwrap();
+        let before = filter.current();
+
+        let events =
+            collect_batch_events(&[debounced_create(dir.path().join("src/a.rs"))], &filter).await;
+
+        assert_eq!(events.len(), 1);
+        assert!(std::sync::Arc::ptr_eq(&before, &filter.current()));
     }
 
     /// With a symlinked root, an event for `<canonical root>/src/a.rs` adds

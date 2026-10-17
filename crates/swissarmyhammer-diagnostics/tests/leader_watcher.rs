@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use swissarmyhammer_code_context::SharedIgnoreFilter;
 use swissarmyhammer_diagnostics::{
     refresh_file, start_diagnostics_watcher_with_notifier, SessionRoute, WatcherNotifier,
 };
@@ -260,9 +261,13 @@ async fn watcher_redreport_on_direct_disk_write() {
 
     // Start the one leader-owned watcher over the workspace.
     let (notifier, watcher_refreshes) = counting_notifier();
+    let filter = SharedIgnoreFilter::load(&workspace_root)
+        .await
+        .expect("load the ignore rules");
     let watcher = start_diagnostics_watcher_with_notifier(
         workspace_root.clone(),
         vec![SessionRoute::new(vec!["rs".to_string()], session.clone())],
+        filter,
         Some(notifier),
     );
     tokio::time::sleep(Duration::from_secs(WATCHER_STARTUP_DELAY_SECS)).await;

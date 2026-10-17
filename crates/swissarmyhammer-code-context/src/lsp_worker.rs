@@ -1780,7 +1780,10 @@ mod tests {
         insert_test_file(&db, relative_path);
         let shared_db: SharedDb = Arc::new(Mutex::new(db));
         let session = none_session();
-        session.set_path_filter(crate::IgnoreFilter::new(workspace.path()).into_path_filter());
+        session.set_path_filter(
+            crate::SharedIgnoreFilter::new(crate::IgnoreFilter::new(workspace.path()))
+                .path_filter(),
+        );
 
         process_lsp_batch(
             &session,
@@ -1805,7 +1808,10 @@ mod tests {
         insert_test_file(&db, relative_path);
         let shared_db: SharedDb = Arc::new(Mutex::new(db));
         let session = none_session();
-        session.set_path_filter(crate::IgnoreFilter::new(workspace.path()).into_path_filter());
+        session.set_path_filter(
+            crate::SharedIgnoreFilter::new(crate::IgnoreFilter::new(workspace.path()))
+                .path_filter(),
+        );
 
         let result = index_single_file(&session, &shared_db, &full_path, relative_path);
 

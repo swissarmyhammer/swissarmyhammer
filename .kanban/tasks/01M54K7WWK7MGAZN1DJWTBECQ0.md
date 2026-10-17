@@ -80,10 +80,26 @@ comments:
     - evidence: `cargo nextest run --no-fail-fast -p swissarmyhammer-code-context` — 740 tests run, 740 passed, 0 failed, 0 skipped. `cargo clippy --workspace --all-targets -- -D warnings` — exit 0, no warnings. `cargo fmt --check` — exit 0, no differences.
     - next: review.
   timestamp: 2026-10-17T11:00:33.237503+00:00
+- actor: claude-code
+  id: 01m54rf0k07sy8dyrd64c5jwzy
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (e91001a8a). 0 findings, 0 confirmed, 0 refuted. 7 validators attempted, 0 failed. 1 file reviewed. All items of the prior Review Findings section are checked.
+    - next: none. The task is in done.
+  timestamp: 2026-10-17T11:02:59.936256+00:00
+- actor: claude-code
+  id: 01m54rfj2cjy3mq1fs1f39hdt8
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — ignore_filter.rs tests for each branch of relative and to_root_form
+    - test: green — nextest -p swissarmyhammer-code-context, 740 passed
+    - commit: e91001a8a
+    - review: clean — task in done
+  timestamp: 2026-10-17T11:03:17.836365+00:00
 depends_on:
 - 01M53GC28P974P34HEP7XN651M
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffbd80
 title: Make the watcher row key from the same root form as the walk
 ---
 ## Problem

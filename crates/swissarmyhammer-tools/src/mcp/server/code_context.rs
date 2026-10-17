@@ -197,9 +197,11 @@ impl McpServer {
             // each path outside the workspace root. Thus no didOpen and no
             // request goes to a language server for build output such as
             // `.build/checkouts/`.
-            match swissarmyhammer_code_context::IgnoreFilter::load(&workspace_root).await {
-                Ok(filter) => supervisor = supervisor.with_path_filter(filter.into_path_filter()),
-                Err(e) => tracing::warn!("code-context: cannot load the LSP path filter: {}", e),
+            // The filter is the one shared rule set of the workspace, so a
+            // watcher that loads the rules again after an ignore file change
+            // also changes what the sessions skip.
+            if let Some(filter) = workspace_ignore_filter(&workspace_root).await {
+                supervisor = supervisor.with_path_filter(filter.path_filter());
             }
             if let Ok(compiled) = swissarmyhammer_code_context::CompiledCodeContextConfig::compile(
                 &swissarmyhammer_code_context::load_code_context_config(),
@@ -455,8 +457,11 @@ impl McpServer {
         let watcher_shutdown = std::sync::Arc::clone(&shutdown);
         tokio::spawn(async move {
             use crate::mcp::tools::code_context::watcher::start_code_context_watcher;
+            let Some(filter) = workspace_ignore_filter(&watcher_root).await else {
+                return;
+            };
             let _watcher_handle =
-                start_code_context_watcher(watcher_root, watcher_db, watcher_shutdown);
+                start_code_context_watcher(watcher_root, watcher_db, filter, watcher_shutdown);
             std::future::pending::<()>().await;
         });
 
@@ -528,6 +533,33 @@ impl McpServer {
             );
         });
     }
+}
+
+/// The one ignore rule set of the workspace of this process.
+///
+/// The LSP session path filter, the code-context watcher and the diagnostics
+/// watcher each hold a clone. When a watcher sees a change to an ignore file,
+/// it loads the rules again in this one place, and every consumer then obeys
+/// the new rules. One process serves one workspace (code-context
+/// initialization runs one time), so the first root loads the rules.
+static WORKSPACE_IGNORE_FILTER: tokio::sync::OnceCell<
+    swissarmyhammer_code_context::SharedIgnoreFilter,
+> = tokio::sync::OnceCell::const_new();
+
+/// Give the shared ignore rule set of `workspace_root`, and load it on the
+/// first call.
+///
+/// Returns `None`, with a warning, when the rules cannot be loaded. The caller
+/// then starts no consumer that needs the rules.
+async fn workspace_ignore_filter(
+    workspace_root: &std::path::Path,
+) -> Option<swissarmyhammer_code_context::SharedIgnoreFilter> {
+    WORKSPACE_IGNORE_FILTER
+        .get_or_try_init(|| swissarmyhammer_code_context::SharedIgnoreFilter::load(workspace_root))
+        .await
+        .cloned()
+        .inspect_err(|e| tracing::warn!("code-context: cannot load the ignore rules: {}", e))
+        .ok()
 }
 
 /// Walk up from `work_dir` to find the enclosing git repository root. Returns
@@ -673,11 +705,21 @@ fn spawn_lsp_workers_for_clients(
             std::sync::Arc::new(|path: &std::path::Path| {
                 crate::mcp::diagnostics_resource::watcher_push_log(path);
             });
-        swissarmyhammer_diagnostics::start_diagnostics_watcher_with_notifier(
-            watch_root,
-            routes,
-            Some(notifier),
-        );
+        // The watcher shares the one ignore rule set of the workspace. The
+        // rules have the workspace root; the watcher gives each path in the
+        // canonical form of `watch_root`.
+        let filter_root = workspace_root.to_path_buf();
+        tokio::spawn(async move {
+            let Some(filter) = workspace_ignore_filter(&filter_root).await else {
+                return;
+            };
+            swissarmyhammer_diagnostics::start_diagnostics_watcher_with_notifier(
+                watch_root,
+                routes,
+                filter,
+                Some(notifier),
+            );
+        });
         tracing::info!(
             "diagnostics: file watcher started for {}{}",
             workspace_root.display(),

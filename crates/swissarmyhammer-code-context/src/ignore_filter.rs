@@ -16,7 +16,7 @@
 use std::cmp::Reverse;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use ignore::{Match, WalkBuilder};
@@ -79,7 +79,8 @@ pub fn workspace_walk_builder(workspace_root: &Path) -> WalkBuilder {
 /// A path filter that obeys the same rules as [`workspace_walk_builder`].
 ///
 /// The file watchers see each changed path one at a time, with no walk. This
-/// filter loads the ignore files one time, then answers for each path. It
+/// filter loads the ignore files one time, then answers for each path
+/// ([`SharedIgnoreFilter`] loads a new filter when an ignore file changes). It
 /// tests each ancestor directory of the path with `is_dir = true` and then the
 /// path itself, in the same order as the walk descends. Thus a directory rule
 /// such as `build-out/` skips each file under that directory.
@@ -178,16 +179,6 @@ impl IgnoreFilter {
         false
     }
 
-    /// Make this filter the [`PathFilter`] of the LSP sessions.
-    ///
-    /// The LSP crate cannot depend on this crate, so the owner gives it this
-    /// predicate. The predicate skips each path that [`is_ignored`](Self::is_ignored)
-    /// skips: an ignored path, and a path outside the workspace root. Thus the
-    /// walk, the watchers and the language server obey one rule set.
-    pub fn into_path_filter(self) -> PathFilter {
-        Arc::new(move |path: &Path| self.is_ignored(path))
-    }
-
     /// Give `path` relative to the workspace root, or `None` when it is not
     /// under the root.
     ///
@@ -208,15 +199,36 @@ impl IgnoreFilter {
         })
     }
 
-    /// Give `path` as an absolute path under the root as the caller gave it,
-    /// or `None` when it is not under the root.
+    /// Give `path` as an absolute path under the canonical root, or `None`
+    /// when it is not under the root.
     ///
-    /// This joins the root to [`relative`](Self::relative). A watcher path
-    /// under the canonical root thus gets the form of the root. A caller that
-    /// keys documents by absolute path (for example the URI of a language
-    /// server document) then gets one key for each file.
-    pub fn to_root_form(&self, path: &Path) -> Option<PathBuf> {
-        self.relative(path).map(|rel| self.root.join(rel))
+    /// This joins the canonical root to [`relative`](Self::relative). When the
+    /// root is already canonical, or the root cannot be made canonical, the
+    /// root as the caller gave it is used. A watcher path in the form of the
+    /// root and a watcher path in the canonical form thus get one key. A
+    /// caller that keys documents by the canonical path (for example the URI
+    /// of a language server document) then gets one key for each file.
+    pub fn to_canonical_form(&self, path: &Path) -> Option<PathBuf> {
+        let root = self.canonical_root.as_deref().unwrap_or(&self.root);
+        self.relative(path).map(|rel| root.join(rel))
+    }
+
+    /// Tell if `path` is a file that holds ignore rules for this workspace.
+    ///
+    /// The ignore files are each `.gitignore` and each `.ignore` file under
+    /// the root, and `.git/info/exclude`. A path outside the root is not an
+    /// ignore file of this workspace. Each watcher calls this on the raw
+    /// event paths, before the filter drops them: `.git/` is a hard skip
+    /// directory, and the filter skips each hidden file.
+    pub fn is_ignore_file(&self, path: &Path) -> bool {
+        let Some(rel) = self.relative(path) else {
+            return false;
+        };
+        rel == Path::new(GIT_EXCLUDE_PATH)
+            || rel
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| IGNORE_FILE_NAMES.contains(&name))
     }
 
     /// Tell if the ignore files ignore one entry.
@@ -238,6 +250,97 @@ impl IgnoreFilter {
             }
         }
         false
+    }
+}
+
+/// The one ignore rule set of a workspace, shared by each consumer.
+///
+/// The code-context watcher, the diagnostics watcher and the [`PathFilter`] of
+/// the LSP sessions hold clones of one `SharedIgnoreFilter`. When a watcher
+/// sees a change to an ignore file, [`reload_if_changed`](Self::reload_if_changed)
+/// loads the rules again, and each clone then uses the new rules. Thus the
+/// rules change in one place, and no consumer keeps the old rules until sah
+/// starts again.
+#[derive(Debug, Clone)]
+pub struct SharedIgnoreFilter {
+    /// The current rules. A reload puts a new filter here, so a caller that
+    /// holds the old [`Arc`] keeps a consistent rule set until it is done.
+    current: Arc<RwLock<Arc<IgnoreFilter>>>,
+}
+
+/// The watchers and the LSP sessions use one `SharedIgnoreFilter` from many
+/// threads.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<SharedIgnoreFilter>();
+};
+
+impl SharedIgnoreFilter {
+    /// Share `filter` as the current rules.
+    pub fn new(filter: IgnoreFilter) -> Self {
+        Self {
+            current: Arc::new(RwLock::new(Arc::new(filter))),
+        }
+    }
+
+    /// Load the rules for `workspace_root` on the blocking pool, and share
+    /// them.
+    ///
+    /// # Errors
+    ///
+    /// Gives the [`tokio::task::JoinError`] of [`IgnoreFilter::load`].
+    pub async fn load(workspace_root: &Path) -> Result<Self, tokio::task::JoinError> {
+        IgnoreFilter::load(workspace_root).await.map(Self::new)
+    }
+
+    /// Give the current rules.
+    pub fn current(&self) -> Arc<IgnoreFilter> {
+        Arc::clone(&self.current.read().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Load the rules again when one of `paths` is an ignore file.
+    ///
+    /// `paths` are the raw paths of one watcher event batch. The check
+    /// ([`IgnoreFilter::is_ignore_file`]) runs before the watcher filters the
+    /// batch, because the filter drops each ignore file. A batch with no
+    /// ignore file reads no file and keeps the current rules. Returns `true`
+    /// when the rules were loaded again. A load that fails is logged, and the
+    /// current rules stay.
+    pub async fn reload_if_changed<'a, I>(&self, paths: I) -> bool
+    where
+        I: IntoIterator<Item = &'a Path>,
+    {
+        let current = self.current();
+        if !paths.into_iter().any(|path| current.is_ignore_file(path)) {
+            return false;
+        }
+        match IgnoreFilter::load(&current.root).await {
+            Ok(filter) => {
+                *self.current.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(filter);
+                tracing::info!(
+                    "ignore filter: an ignore file changed, loaded the rules again for {}",
+                    current.root.display()
+                );
+                true
+            }
+            Err(e) => {
+                tracing::warn!("ignore filter: cannot load the rules again: {}", e);
+                false
+            }
+        }
+    }
+
+    /// Make these rules the [`PathFilter`] of the LSP sessions.
+    ///
+    /// The LSP crate cannot depend on this crate, so the owner gives it this
+    /// predicate. The predicate skips each path that
+    /// [`IgnoreFilter::is_ignored`] skips: an ignored path, and a path outside
+    /// the workspace root. It reads the current rules on each call, so it
+    /// obeys a reload. Thus the walk, the watchers and the language server
+    /// obey one rule set.
+    pub fn path_filter(&self) -> PathFilter {
+        let shared = self.clone();
+        Arc::new(move |path: &Path| shared.current().is_ignored(path))
     }
 }
 
@@ -412,16 +515,19 @@ mod tests {
     }
 
     #[test]
-    fn to_root_form_gives_a_canonical_path_the_form_of_the_root() {
+    fn to_canonical_form_gives_each_path_the_form_of_the_canonical_root() {
         let outer = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
         let (root, canonical) = symlinked_root(outer.path());
         let filter = IgnoreFilter::new(&root);
-        let expected = Some(root.join("src/a.rs"));
-        assert_eq!(filter.to_root_form(&root.join("src/a.rs")), expected);
-        assert_eq!(filter.to_root_form(&canonical.join("src/a.rs")), expected);
-        assert_eq!(filter.to_root_form(Path::new("src/a.rs")), expected);
-        assert_eq!(filter.to_root_form(&other.path().join("a.rs")), None);
+        let expected = Some(canonical.join("src/a.rs"));
+        assert_eq!(filter.to_canonical_form(&root.join("src/a.rs")), expected);
+        assert_eq!(
+            filter.to_canonical_form(&canonical.join("src/a.rs")),
+            expected
+        );
+        assert_eq!(filter.to_canonical_form(Path::new("src/a.rs")), expected);
+        assert_eq!(filter.to_canonical_form(&other.path().join("a.rs")), None);
     }
 
     #[test]
@@ -438,16 +544,16 @@ mod tests {
     }
 
     #[test]
-    fn to_root_form_keeps_a_root_that_is_already_canonical() {
+    fn to_canonical_form_keeps_a_root_that_is_already_canonical() {
         let outer = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
         let (_root, canonical) = symlinked_root(outer.path());
         let filter = IgnoreFilter::new(&canonical);
         assert_eq!(
-            filter.to_root_form(&canonical.join("src/a.rs")),
+            filter.to_canonical_form(&canonical.join("src/a.rs")),
             Some(canonical.join("src/a.rs"))
         );
-        assert_eq!(filter.to_root_form(&other.path().join("a.rs")), None);
+        assert_eq!(filter.to_canonical_form(&other.path().join("a.rs")), None);
     }
 
     #[test]
@@ -463,13 +569,103 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
         let normal = touch(dir.path(), "Sources/main.swift");
-        let filter = IgnoreFilter::new(dir.path()).into_path_filter();
+        let filter = SharedIgnoreFilter::new(IgnoreFilter::new(dir.path())).path_filter();
 
         assert!(filter(
             &dir.path().join(".build/checkouts/pkg/Package.swift")
         ));
         assert!(filter(&other.path().join("a.rs")));
         assert!(!filter(&normal));
+    }
+
+    #[test]
+    fn is_ignore_file_names_each_ignore_file_under_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let filter = IgnoreFilter::new(dir.path());
+        for rel in [
+            ".gitignore",
+            "pkg/.gitignore",
+            "pkg/.ignore",
+            ".git/info/exclude",
+        ] {
+            assert!(filter.is_ignore_file(&dir.path().join(rel)), "{rel}");
+        }
+        assert!(filter.is_ignore_file(Path::new("pkg/.ignore")));
+        for rel in ["src/a.rs", "pkg/info/exclude", ".git/config"] {
+            assert!(!filter.is_ignore_file(&dir.path().join(rel)), "{rel}");
+        }
+        assert!(!filter.is_ignore_file(&other.path().join(".gitignore")));
+    }
+
+    #[test]
+    fn is_ignore_file_names_an_ignore_file_under_the_canonical_root() {
+        let outer = tempfile::tempdir().unwrap();
+        let (root, canonical) = symlinked_root(outer.path());
+        let filter = IgnoreFilter::new(&root);
+        assert!(filter.is_ignore_file(&canonical.join(".git/info/exclude")));
+    }
+
+    #[tokio::test]
+    async fn reload_if_changed_obeys_a_new_gitignore_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = SharedIgnoreFilter::load(dir.path()).await.unwrap();
+        let generated = dir.path().join("gen/a.rs");
+        assert!(!shared.current().is_ignored(&generated));
+
+        let gitignore = dir.path().join(".gitignore");
+        fs::write(&gitignore, "gen/\n").unwrap();
+
+        assert!(shared.reload_if_changed([gitignore.as_path()]).await);
+        assert!(shared.current().is_ignored(&generated));
+    }
+
+    #[tokio::test]
+    async fn reload_if_changed_obeys_a_new_git_exclude_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = SharedIgnoreFilter::load(dir.path()).await.unwrap();
+        let exclude = dir.path().join(".git/info/exclude");
+        fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+        fs::write(&exclude, "scratch/\n").unwrap();
+
+        assert!(shared.reload_if_changed([exclude.as_path()]).await);
+        assert!(shared
+            .current()
+            .is_ignored(&dir.path().join("scratch/a.rs")));
+    }
+
+    #[tokio::test]
+    async fn reload_if_changed_keeps_the_rules_for_a_batch_with_no_ignore_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = SharedIgnoreFilter::load(dir.path()).await.unwrap();
+        let before = shared.current();
+        let source = dir.path().join("src/a.rs");
+
+        assert!(!shared.reload_if_changed([source.as_path()]).await);
+        assert!(Arc::ptr_eq(&before, &shared.current()));
+    }
+
+    #[tokio::test]
+    async fn path_filter_obeys_the_reloaded_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = SharedIgnoreFilter::load(dir.path()).await.unwrap();
+        let path_filter = shared.path_filter();
+        let generated = dir.path().join("gen/a.rs");
+        assert!(!path_filter(&generated));
+
+        let gitignore = dir.path().join(".gitignore");
+        fs::write(&gitignore, "gen/\n").unwrap();
+        shared.reload_if_changed([gitignore.as_path()]).await;
+
+        assert!(path_filter(&generated));
+    }
+
+    #[test]
+    fn clones_share_one_rule_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = SharedIgnoreFilter::new(IgnoreFilter::new(dir.path()));
+        let clone = shared.clone();
+        assert!(Arc::ptr_eq(&shared.current(), &clone.current()));
     }
 
     #[tokio::test]

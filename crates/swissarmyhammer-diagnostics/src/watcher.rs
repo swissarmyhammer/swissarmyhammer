@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use async_watcher::{notify::RecursiveMode, AsyncDebouncer};
 
-use swissarmyhammer_code_context::IgnoreFilter;
+use swissarmyhammer_code_context::{IgnoreFilter, SharedIgnoreFilter};
 use swissarmyhammer_lsp::client::LspTransport;
 use swissarmyhammer_lsp::{DocumentSync, LspSession};
 
@@ -196,14 +196,20 @@ pub fn refresh_changed_files_notified<C: LspTransport>(
 /// table (rather than a single session) is what keeps it one watcher per
 /// workdir even when several language servers run, and stops a `.py` edit from
 /// being fed into the rust session.
+///
+/// `filter` is the shared ignore rule set of the workspace. The watcher drops
+/// each path that it ignores, and loads it again when a batch changes an
+/// ignore file, so the LSP path filter and the code-context watcher that hold
+/// clones of it obey the new rules too.
 pub fn start_diagnostics_watcher<C>(
     workspace_root: PathBuf,
     routes: Vec<SessionRoute<C>>,
+    filter: SharedIgnoreFilter,
 ) -> tokio::task::JoinHandle<()>
 where
     C: LspTransport + Send + 'static,
 {
-    start_diagnostics_watcher_with_notifier(workspace_root, routes, None)
+    start_diagnostics_watcher_with_notifier(workspace_root, routes, filter, None)
 }
 
 /// [`start_diagnostics_watcher`] plus a best-effort watcher-push notifier.
@@ -215,13 +221,16 @@ where
 pub fn start_diagnostics_watcher_with_notifier<C>(
     workspace_root: PathBuf,
     routes: Vec<SessionRoute<C>>,
+    filter: SharedIgnoreFilter,
     notifier: Option<WatcherNotifier>,
 ) -> tokio::task::JoinHandle<()>
 where
     C: LspTransport + Send + 'static,
 {
     tokio::spawn(async move {
-        if let Err(e) = run_diagnostics_watcher(&workspace_root, &routes, notifier.as_ref()).await {
+        if let Err(e) =
+            run_diagnostics_watcher(&workspace_root, &routes, &filter, notifier.as_ref()).await
+        {
             tracing::error!("diagnostics watcher failed: {}", e);
         }
     })
@@ -231,6 +240,7 @@ where
 async fn run_diagnostics_watcher<C: LspTransport>(
     workspace_root: &Path,
     routes: &[SessionRoute<C>],
+    filter: &SharedIgnoreFilter,
     notifier: Option<&WatcherNotifier>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut debouncer, mut event_rx) =
@@ -245,13 +255,10 @@ async fn run_diagnostics_watcher<C: LspTransport>(
         workspace_root.display()
     );
 
-    // Load the ignore rules one time, before the first event.
-    let filter = IgnoreFilter::load(workspace_root).await?;
-
     while let Some(events_result) = event_rx.recv().await {
         match events_result {
             Ok(debounced_events) => {
-                let paths = changed_paths(&debounced_events, &filter);
+                let paths = batch_changed_paths(&debounced_events, filter).await;
                 if paths.is_empty() {
                     continue;
                 }
@@ -272,6 +279,24 @@ async fn run_diagnostics_watcher<C: LspTransport>(
     Ok(())
 }
 
+/// Turn one debounced batch into the changed paths to re-diagnose.
+///
+/// When the batch changes an ignore file (`.gitignore`, `.ignore` or
+/// `.git/info/exclude`), the shared rules are loaded again first
+/// ([`SharedIgnoreFilter::reload_if_changed`]). The check reads the raw event
+/// paths, because [`changed_paths`] drops each ignore file. Thus this batch
+/// and each batch after it obey the new rules, with no restart. A batch with
+/// no ignore file reads no ignore file.
+async fn batch_changed_paths(
+    events: &[async_watcher::DebouncedEvent],
+    filter: &SharedIgnoreFilter,
+) -> Vec<PathBuf> {
+    filter
+        .reload_if_changed(events.iter().map(|e| e.path.as_path()))
+        .await;
+    changed_paths(events, &filter.current())
+}
+
 /// Flatten a debounced batch into the deduped set of changed file paths.
 ///
 /// Each [`DebouncedEvent`](async_watcher::DebouncedEvent) is keyed by a single
@@ -283,16 +308,16 @@ async fn run_diagnostics_watcher<C: LspTransport>(
 /// `didOpen` for build output (for example `.build/checkouts/`), and it obeys
 /// the same ignore rules as the code-context index walk.
 ///
-/// Each kept path has the form of the watch root
-/// ([`IgnoreFilter::to_root_form`]), also when the backend sends the canonical
-/// form. Thus the session opens one document for each file, with the same
-/// root form as the diagnose scope. A path outside the root and outside the
-/// canonical root is dropped with a debug log.
+/// Each kept path has the canonical form ([`IgnoreFilter::to_canonical_form`]),
+/// also when the backend sends the form of the root. Thus the session opens
+/// one document for each file, with the canonical form of the diagnose scope
+/// and of the URIs that the language server publishes. A path outside the
+/// root and outside the canonical root is dropped with a debug log.
 fn changed_paths(events: &[async_watcher::DebouncedEvent], filter: &IgnoreFilter) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = events
         .iter()
         .filter_map(|e| {
-            let path = filter.to_root_form(&e.path);
+            let path = filter.to_canonical_form(&e.path);
             if path.is_none() {
                 tracing::debug!(
                     "diagnostics watcher: dropped event outside the workspace root: {}",
@@ -526,7 +551,8 @@ mod tests {
         let filter = IgnoreFilter::new(root);
 
         let paths = changed_paths(&batch, &filter);
-        assert_eq!(paths, vec![root.join("src/a.rs")]);
+        let kept = std::fs::canonicalize(root.join("src/a.rs")).unwrap();
+        assert_eq!(paths, vec![kept]);
 
         let (session, client) = recording_session();
         let routes = vec![SessionRoute::new(vec!["rs".to_string()], session)];
@@ -536,11 +562,12 @@ mod tests {
         assert_eq!(t.notification_count("textDocument/didOpen"), 1);
     }
 
-    /// With a symlinked root, an event for `<canonical root>/src/a.rs` gives
-    /// `<root>/src/a.rs`. Thus the session opens one document for the file,
-    /// with the same root form as the other callers.
+    /// With a symlinked root, an event for `<root>/src/a.rs` and an event for
+    /// `<canonical root>/src/a.rs` both give `<canonical root>/src/a.rs`. Thus
+    /// the session opens one document for the file, with the canonical form
+    /// that the language server publishes.
     #[test]
-    fn changed_paths_gives_each_path_in_the_root_form() {
+    fn changed_paths_gives_each_path_in_the_canonical_form() {
         let outer = tempfile::tempdir().unwrap();
         let (root, canonical) = symlinked_root(outer.path());
         let file = canonical.join("src/a.rs");
@@ -548,9 +575,52 @@ mod tests {
         std::fs::write(&file, "fn a() {}\n").unwrap();
         let filter = IgnoreFilter::new(&root);
 
-        let paths = changed_paths(&[debounced(file)], &filter);
+        let paths = changed_paths(
+            &[debounced(file.clone()), debounced(root.join("src/a.rs"))],
+            &filter,
+        );
 
-        assert_eq!(paths, vec![root.join("src/a.rs")]);
+        assert_eq!(paths, vec![file]);
+    }
+
+    /// A batch that changes `.gitignore` loads the rules again. Thus the next
+    /// batch, with an event for a path that the new rule ignores, gives no
+    /// path, and the session gets no `didOpen` for it.
+    #[tokio::test]
+    async fn batch_changed_paths_obeys_a_gitignore_change_from_an_earlier_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let filter = SharedIgnoreFilter::load(root).await.unwrap();
+        let gitignore = root.join(".gitignore");
+        std::fs::write(&gitignore, "gen/\n").unwrap();
+        let generated = root.join("gen/a.rs");
+        std::fs::create_dir_all(generated.parent().unwrap()).unwrap();
+        std::fs::write(&generated, "fn a() {}\n").unwrap();
+
+        batch_changed_paths(&[debounced(gitignore)], &filter).await;
+        let paths = batch_changed_paths(&[debounced(generated)], &filter).await;
+
+        assert!(paths.is_empty());
+        let (session, client) = recording_session();
+        let routes = vec![SessionRoute::new(vec!["rs".to_string()], session)];
+        assert_eq!(refresh_changed_files(&routes, &paths), 0);
+        let guard = client.lock().unwrap();
+        let t = guard.as_ref().unwrap();
+        assert_eq!(t.notification_count("textDocument/didOpen"), 0);
+    }
+
+    /// A batch with no ignore file keeps the current rules: it reads no
+    /// ignore file again.
+    #[tokio::test]
+    async fn batch_changed_paths_keeps_the_rules_for_a_batch_with_no_ignore_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let filter = SharedIgnoreFilter::load(dir.path()).await.unwrap();
+        let before = filter.current();
+
+        let paths = batch_changed_paths(&[debounced(dir.path().join("src/a.rs"))], &filter).await;
+
+        assert_eq!(paths.len(), 1);
+        assert!(Arc::ptr_eq(&before, &filter.current()));
     }
 
     /// An event for a path outside the root and outside the canonical root

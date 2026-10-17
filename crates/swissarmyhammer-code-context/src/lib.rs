@@ -47,7 +47,7 @@ pub use config::{
 };
 pub use error::CodeContextError;
 pub use hints::hint_for_operation;
-pub use ignore_filter::IgnoreFilter;
+pub use ignore_filter::{IgnoreFilter, SharedIgnoreFilter};
 pub use invalidation::InvalidationAction;
 pub use layered_context::{
     CallEdgeInfo, ChunkInfo, DefinitionLocation, EnrichmentResult, FileEdit, LayeredContext,
