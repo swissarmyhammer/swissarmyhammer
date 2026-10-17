@@ -71,7 +71,7 @@ pub(crate) fn write_frame<W: Write>(writer: &mut W, message: &Value) -> Result<(
 
 /// What one line of a header block is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HeaderLine {
+enum HeaderLine {
     /// The blank line that ends the header block.
     End,
     /// A header field. A field other than Content-Length is ignored.
@@ -79,7 +79,7 @@ pub(crate) enum HeaderLine {
 }
 
 /// Parse one header line. A Content-Length field sets `content_length`.
-pub(crate) fn parse_header_line(
+fn parse_header_line(
     line: &str,
     content_length: &mut Option<usize>,
 ) -> Result<HeaderLine, LspError> {
@@ -98,8 +98,44 @@ pub(crate) fn parse_header_line(
 }
 
 /// The body length that a complete header block gave.
-pub(crate) fn body_length(content_length: Option<usize>) -> Result<usize, LspError> {
+fn body_length(content_length: Option<usize>) -> Result<usize, LspError> {
     content_length.ok_or_else(|| LspError::JsonRpc("missing Content-Length header".into()))
+}
+
+/// A header block that a reader takes in one line at a time.
+///
+/// This is the one parse rule for a header block, and the sync frame buffer
+/// and the async daemon reader both use it. Each line is parsed. The first bad
+/// line is kept as the error, and the lines after it are still read. The block
+/// ends only at the blank line, so a bad block is removed from the stream as
+/// one unit and the next read starts at the next frame.
+#[derive(Debug, Default)]
+pub(crate) struct HeaderBlock {
+    /// The body length that a Content-Length field gave.
+    content_length: Option<usize>,
+    /// The error of the first bad line in the block.
+    first_error: Option<LspError>,
+}
+
+impl HeaderBlock {
+    /// Take in one header line, with or without its line ending.
+    ///
+    /// The result is `None` while the block continues. At the blank line that
+    /// ends the block, the result is the body length, or the error of the
+    /// first bad line.
+    pub(crate) fn feed(&mut self, line: &str) -> Option<Result<usize, LspError>> {
+        match parse_header_line(line, &mut self.content_length) {
+            Ok(HeaderLine::End) => Some(match self.first_error.take() {
+                Some(e) => Err(e),
+                None => body_length(self.content_length),
+            }),
+            Ok(HeaderLine::Field) => None,
+            Err(e) => {
+                self.first_error.get_or_insert(e);
+                None
+            }
+        }
+    }
 }
 
 /// Decode the JSON body of a frame.
@@ -169,23 +205,16 @@ impl FrameBuffer {
     ///
     /// Give the byte length of the block and its body length, or `None` while
     /// the block is not complete. A bad header line makes the body length an
-    /// error, and the block length still covers the whole block.
+    /// error, and the block length still covers the whole block (see
+    /// [`HeaderBlock`]).
     fn scan_headers(&self) -> Option<(usize, Result<usize, LspError>)> {
-        let mut content_length = None;
-        let mut first_error = None;
+        let mut block = HeaderBlock::default();
         let mut start = 0;
         while let Some(offset) = self.bytes[start..].iter().position(|&b| b == b'\n') {
             let end = start + offset + 1;
             let line = String::from_utf8_lossy(&self.bytes[start..end]);
-            match parse_header_line(&line, &mut content_length) {
-                Ok(HeaderLine::End) => {
-                    let length = first_error.map_or_else(|| body_length(content_length), Err);
-                    return Some((end, length));
-                }
-                Ok(HeaderLine::Field) => {}
-                Err(e) => {
-                    first_error.get_or_insert(e);
-                }
+            if let Some(length) = block.feed(&line) {
+                return Some((end, length));
             }
             start = end;
         }
@@ -273,6 +302,21 @@ mod tests {
 
         assert!(error.to_string().contains("missing Content-Length header"));
         assert_eq!(frames.take_message().unwrap(), Some(next));
+    }
+
+    #[test]
+    fn a_header_block_gives_the_first_error_only_at_the_blank_line() {
+        let mut block = HeaderBlock::default();
+
+        let first = block.feed("Content-Length: abc\r\n");
+        let second = block.feed("Content-Length:\r\n");
+        let end = block.feed("\r\n").expect("the blank line ends the block");
+
+        assert!(first.is_none());
+        assert!(second.is_none());
+        let error = end.expect_err("bad Content-Length");
+        assert!(error.to_string().contains("invalid digit"));
+        assert!(!error.to_string().contains("empty string"));
     }
 
     #[test]

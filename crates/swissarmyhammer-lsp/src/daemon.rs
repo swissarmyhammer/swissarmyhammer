@@ -20,7 +20,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::client::{LspJsonRpcClient, SharedLspClient};
 use crate::error::LspError;
-use crate::framing::{self, HeaderLine, WriteStep};
+use crate::framing::{self, WriteStep};
 use crate::session::{LspSession, PathFilter};
 use crate::types::{LspDaemonState, OwnedLspServerSpec};
 
@@ -739,14 +739,16 @@ pub async fn send_jsonrpc_message<W: AsyncWriteExt + Unpin>(
 
 /// Read a single JSON-RPC message, parsing the `Content-Length` header.
 ///
-/// Each header line, the body length and the body decode go through
-/// [`framing`](crate::framing), the same as the sync client's reader. Header
-/// fields other than Content-Length (e.g. Content-Type) are ignored.
+/// The header block goes through [`framing::HeaderBlock`] and the body decode
+/// through [`framing`](crate::framing), the same as the sync client's reader.
+/// Header fields other than Content-Length (e.g. Content-Type) are ignored.
+/// A bad header line gives its error only after the whole header block is
+/// read, so the next call starts at the next frame.
 pub async fn read_jsonrpc_message<R: AsyncBufReadExt + Unpin>(
     reader: &mut R,
 ) -> Result<serde_json::Value, LspError> {
-    let mut content_length: Option<usize> = None;
-    loop {
+    let mut block = framing::HeaderBlock::default();
+    let length = loop {
         let mut line = String::new();
         let n = reader
             .read_line(&mut line)
@@ -755,12 +757,12 @@ pub async fn read_jsonrpc_message<R: AsyncBufReadExt + Unpin>(
         if n == 0 {
             return Err(framing::eof_in_headers());
         }
-        if framing::parse_header_line(&line, &mut content_length)? == HeaderLine::End {
-            break;
+        if let Some(length) = block.feed(&line) {
+            break length?;
         }
-    }
+    };
 
-    let mut body = vec![0u8; framing::body_length(content_length)?];
+    let mut body = vec![0u8; length];
     reader
         .read_exact(&mut body)
         .await

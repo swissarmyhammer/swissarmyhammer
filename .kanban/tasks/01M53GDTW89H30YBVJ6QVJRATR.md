@@ -123,6 +123,47 @@ comments:
     - The other 5305 tests pass. Clippy, fmt and `cargo check -p swissarmyhammer-lsp` (no features) are clean.
     - The user accepted this failure as known. The loop continues to commit.
   timestamp: 2026-10-17T15:06:58.071455+00:00
+- actor: claude-code
+  id: 01m5573pq443275hy5t1r2z0xa
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD (8b53b881f): 1 finding (1 confirmed, 1 refuted) — crates/swissarmyhammer-lsp/src/daemon.rs:758. All 5 items of the prior section (2026-10-17 09:28) are checked.
+    - next: implement the open item in the section "Review Findings (2026-10-17 10:07)". The task stays in review.
+  timestamp: 2026-10-17T15:18:58.020891+00:00
+- actor: claude-code
+  id: 01m55749pva2cdwt4px0wfxhps
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — 13 files (framing.rs new, client.rs, daemon.rs, session.rs, test_support.rs, test-support feature), 18 tests
+    - test: red — 5305 of 5306; the 1 failure is the treesitter FSEvents watcher test (machine: fseventsd stuck), user accepted as known
+    - commit: 8b53b881f
+    - review: findings — crates/swissarmyhammer-lsp/src/daemon.rs:758
+  timestamp: 2026-10-17T15:19:17.467211+00:00
+- actor: claude-code
+  id: 01m5579vavwab6cezhqmq8t05a
+  text: |-
+    ### progress — review finding (2026-10-17 10:07) done
+    - New `framing::HeaderBlock` (`feed(line) -> Option<Result<usize, LspError>>`). It holds the one header-block parse rule: it parses each line, keeps the first error, and gives the result only at the blank line. `FrameBuffer::scan_headers` and `daemon::read_jsonrpc_message` both call it. `HeaderLine`, `parse_header_line` and `body_length` are now private to `framing`.
+    - On a bad header block, the daemon reader now reads the whole block and then gives the error. The next read starts at the next frame. The body of a bad block is not read, because its length is not known. FrameBuffer does the same.
+    - Tests: `daemon::tests::jsonrpc::test_daemon_and_client_skip_a_bad_header_block_the_same_way` failed first on the old code (the second daemon read gave "missing Content-Length header"), then passed. `framing::tests::a_header_block_gives_the_first_error_only_at_the_blank_line` was also added.
+    - Discovery: nextest shows a different set of "leaky" tests on each run (5 on this tree, 1 on the stashed baseline, each time on different in-memory client tests). This change touches only pure parse code, so the cause is the load on the machine (see the fseventsd note above). All tests pass.
+  timestamp: 2026-10-17T15:22:19.355193+00:00
+- actor: claude-code
+  id: 01m5579yqjj6mvg5s3b8f3xb81
+  text: |-
+    ### implement — changed
+    - evidence: 3 files — crates/swissarmyhammer-lsp/src/framing.rs, crates/swissarmyhammer-lsp/src/daemon.rs, crates/swissarmyhammer-lsp/src/daemon/tests/jsonrpc.rs. 2 new tests (RED then GREEN for the parity test). `cargo nextest run --no-fail-fast -p swissarmyhammer-lsp`: 269 passed, 0 failed, 0 skipped (5 leaky, environmental; the baseline also shows leaky tests). `cargo clippy -p swissarmyhammer-lsp --all-targets --all-features -- -D warnings`: clean. `cargo fmt --all -- --check`: clean. The 1 finding of section 2026-10-17 10:07 is checked.
+    - next: /review
+  timestamp: 2026-10-17T15:22:22.834338+00:00
+- actor: claude-code
+  id: 01m557nd9jnv6an14mapfatg3r
+  text: |-
+    ### test — green (iteration 3)
+    - evidence: `cargo nextest run --no-fail-fast -E 'rdeps(swissarmyhammer-lsp)'` ran 5308 tests: 5308 passed, 0 failed, 0 skipped, 0 LEAK (61 slow). The known machine failures did not occur in this run.
+    - evidence: `cargo clippy --workspace --all-targets -- -D warnings` is clean (exit 0). `cargo fmt --check` is clean (exit 0).
+    - evidence: `cargo nextest run -p swissarmyhammer-lsp --test-threads=1` ran 269 tests: 269 passed, 0 failed, 0 skipped, 0 LEAK.
+    - next: review.
+  timestamp: 2026-10-17T15:28:38.194701+00:00
 position_column: doing
 position_ordinal: '8480'
 title: Close LSP documents that sah opened only to index them
@@ -157,3 +198,15 @@ The LSP worker (`crates/swissarmyhammer-code-context/src/lsp_worker.rs`) never s
 - [x] `crates/swissarmyhammer-lsp/src/client.rs:621` `completeness/invariant-propagation` — The request deadline is checked only before each message starts. read_jsonrpc_response then reads the full frame with blocking reads. A server that sends a header, or a partial body, and then stalls blocks the read past the deadline. The timeout and the $/cancelRequest then never run. The doc comment says the whole read loop is bounded, which is not true for a partial frame. Bound the frame read as well, or narrow the doc comment to say that the deadline covers only the wait for the next message. Add a test in which the reader is ready, delivers a header without its body, and then stops. Check that the request still returns a timeout error.
 - [x] `crates/swissarmyhammer-lsp/src/client.rs:684` `reuse/reuse` — The new write_message reimplements the Content-Length framing and flush that daemon.rs already does. Two copies of the wire framing can drift apart. Check whether daemon.rs send_jsonrpc_message writes the same framing. If it does, make one function the shared writer and have both modules call it. Otherwise, note in a comment why the two framings differ.
 - [x] `crates/swissarmyhammer-lsp/src/session.rs:422` `completeness/invariant-propagation` — sync_open_for checks is_open(path) under one lock, releases it, then calls change_for, which takes the lock again. Eviction is new in this change. Another clone can open a document and evict this one between the two calls. change_for then returns LspError::JsonRpc 'change on document that is not open', so a sync that should open the document fails. The same check-then-act gap is not covered by the eviction path. Do the membership check and the change under one docs lock, for example by moving the is_open branch into a helper that takes the held OpenDocuments guard, the same way open_for and change_for already hold it. Add a test where the document is evicted between the check and the change, or where a second clone fills the set during the sync.
+
+## Review Findings (2026-10-17 10:07)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 11 file(s) reviewed, 5 not reviewed.
+
+> 4 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 4 file(s)
+
+> 1 file(s) not reviewed — no validator matched:
+> - `ARCHITECTURE.md` — no validator matches this file
+
+- [x] `crates/swissarmyhammer-lsp/src/daemon.rs:758` `completeness/invariant-propagation` — The sync client's FrameBuffer keeps a bad header line as a deferred error and still consumes the whole header block. The async daemon reader returns at the first bad header line with `?`, so the rest of the header block and the body stay in the stream. The next read then starts in the middle of a frame. The new shared-framing fix was applied to the sync side and not to this daemon site, so the two readers can still disagree on the same bad input. Make read_jsonrpc_message read the whole header block first, remember the first parse error, and return it only after the blank line is read, the same as scan_headers. Add a test that feeds a bad Content-Length header followed by a valid frame to both the daemon reader and FrameBuffer, and asserts that both return an error and then read the next frame.

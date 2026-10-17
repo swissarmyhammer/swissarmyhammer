@@ -459,6 +459,30 @@ async fn test_daemon_and_client_read_the_same_frame() {
     assert_eq!(Some(from_daemon), from_client);
 }
 
+/// The async daemon reader and the sync client frame buffer handle a bad
+/// header block the same way: each reads the whole block, gives the error, and
+/// then reads the next frame.
+#[tokio::test]
+async fn test_daemon_and_client_skip_a_bad_header_block_the_same_way() {
+    let next = json!({"jsonrpc": "2.0", "id": 4, "result": "next"});
+    let mut raw = b"Content-Length: abc\r\nContent-Type: text\r\n\r\n".to_vec();
+    crate::framing::write_frame(&mut raw, &next).unwrap();
+    let mut cursor = &raw[..];
+    let mut reader = BufReader::new(&mut cursor);
+    let mut frames = crate::framing::FrameBuffer::default();
+    frames.push(&raw);
+
+    let daemon_error = read_jsonrpc_message(&mut reader).await.unwrap_err();
+    let daemon_next = read_jsonrpc_message(&mut reader).await.unwrap();
+    let client_error = frames.take_message().unwrap_err();
+    let client_next = frames.take_message().unwrap();
+
+    assert!(daemon_error.to_string().contains("bad Content-Length"));
+    assert!(client_error.to_string().contains("bad Content-Length"));
+    assert_eq!(daemon_next, next);
+    assert_eq!(client_next, Some(next));
+}
+
 /// `read_jsonrpc_message` accepts any case and spacing variant of the
 /// `Content-Length:` header prefix, as long as the literal prefix
 /// `Content-Length:` is present. Verifies the `strip_prefix` path.
