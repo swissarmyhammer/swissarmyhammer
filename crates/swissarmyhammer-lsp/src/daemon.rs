@@ -20,6 +20,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::client::{LspJsonRpcClient, SharedLspClient};
 use crate::error::LspError;
+use crate::framing::{self, HeaderLine, WriteStep};
 use crate::session::{LspSession, PathFilter};
 use crate::types::{LspDaemonState, OwnedLspServerSpec};
 
@@ -717,37 +718,34 @@ impl LspDaemon {
 // -- JSON-RPC framing helpers ---------------------------------------------
 
 /// Encode and send a JSON-RPC message with `Content-Length` header.
+///
+/// The frame and the error words come from [`framing`](crate::framing), the
+/// same as the sync client's writer, so both put the same bytes on the wire.
 pub async fn send_jsonrpc_message<W: AsyncWriteExt + Unpin>(
     writer: &mut W,
     message: &serde_json::Value,
 ) -> Result<(), LspError> {
-    let body = serde_json::to_string(message)
-        .map_err(|e| LspError::JsonRpc(format!("json encode: {e}")))?;
-    let header = format!("Content-Length: {}\r\n\r\n", body.len());
-
+    let frame = framing::encode(message)?;
     writer
-        .write_all(header.as_bytes())
+        .write_all(frame.header.as_bytes())
         .await
-        .map_err(|e| LspError::JsonRpc(format!("write header: {e}")))?;
+        .map_err(|e| WriteStep::Header.error(e))?;
     writer
-        .write_all(body.as_bytes())
+        .write_all(frame.body.as_bytes())
         .await
-        .map_err(|e| LspError::JsonRpc(format!("write body: {e}")))?;
-    writer
-        .flush()
-        .await
-        .map_err(|e| LspError::JsonRpc(format!("flush: {e}")))?;
-
-    Ok(())
+        .map_err(|e| WriteStep::Body.error(e))?;
+    writer.flush().await.map_err(|e| WriteStep::Flush.error(e))
 }
 
 /// Read a single JSON-RPC message, parsing the `Content-Length` header.
+///
+/// Each header line, the body length and the body decode go through
+/// [`framing`](crate::framing), the same as the sync client's reader. Header
+/// fields other than Content-Length (e.g. Content-Type) are ignored.
 pub async fn read_jsonrpc_message<R: AsyncBufReadExt + Unpin>(
     reader: &mut R,
 ) -> Result<serde_json::Value, LspError> {
     let mut content_length: Option<usize> = None;
-
-    // Read headers until blank line
     loop {
         let mut line = String::new();
         let n = reader
@@ -755,35 +753,19 @@ pub async fn read_jsonrpc_message<R: AsyncBufReadExt + Unpin>(
             .await
             .map_err(|e| LspError::JsonRpc(format!("read header line: {e}")))?;
         if n == 0 {
-            return Err(LspError::JsonRpc("unexpected EOF reading headers".into()));
+            return Err(framing::eof_in_headers());
         }
-
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            // End of headers
+        if framing::parse_header_line(&line, &mut content_length)? == HeaderLine::End {
             break;
         }
-
-        if let Some(val) = trimmed.strip_prefix("Content-Length:") {
-            content_length = Some(
-                val.trim()
-                    .parse::<usize>()
-                    .map_err(|e| LspError::JsonRpc(format!("bad Content-Length: {e}")))?,
-            );
-        }
-        // Ignore other headers (e.g. Content-Type)
     }
 
-    let length =
-        content_length.ok_or_else(|| LspError::JsonRpc("missing Content-Length header".into()))?;
-
-    let mut body = vec![0u8; length];
+    let mut body = vec![0u8; framing::body_length(content_length)?];
     reader
         .read_exact(&mut body)
         .await
         .map_err(|e| LspError::JsonRpc(format!("read body: {e}")))?;
-
-    serde_json::from_slice(&body).map_err(|e| LspError::JsonRpc(format!("json decode: {e}")))
+    framing::decode_body(&body)
 }
 
 // -- tests ----------------------------------------------------------------

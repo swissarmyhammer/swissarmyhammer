@@ -1856,7 +1856,8 @@ mod tests {
 
     // -- didClose after indexing (fake LSP client that records the wire) --
 
-    use crate::test_fixtures::{recording_session, RecordingTransport, WireMessage};
+    use crate::test_fixtures::{recording_session, recording_transport};
+    use swissarmyhammer_lsp::test_support::{FakeTransport, WireMessage};
 
     const DID_OPEN: &str = "textDocument/didOpen";
     const DID_CLOSE: &str = "textDocument/didClose";
@@ -1905,7 +1906,7 @@ mod tests {
         let db = create_test_db();
         insert_test_file(&db, &relative_paths[0]);
         let shared_db: SharedDb = Arc::new(Mutex::new(db));
-        let (session, client) = recording_session(RecordingTransport::default());
+        let (session, client) = recording_session(recording_transport());
         let full_path = workspace.path().join(&relative_paths[0]);
 
         let result = index_single_file(&session, &shared_db, &full_path, &relative_paths[0]);
@@ -1925,9 +1926,9 @@ mod tests {
         let db = create_test_db();
         insert_test_file(&db, &relative_paths[0]);
         let shared_db: SharedDb = Arc::new(Mutex::new(db));
-        let (session, client) = recording_session(RecordingTransport {
+        let (session, client) = recording_session(FakeTransport {
             fail_requests: true,
-            ..RecordingTransport::default()
+            ..recording_transport()
         });
         let full_path = workspace.path().join(&relative_paths[0]);
 
@@ -1942,7 +1943,7 @@ mod tests {
         let (workspace, relative_paths) = workspace_with_files(1);
         // A database with no schema: the symbol persist step fails.
         let shared_db: SharedDb = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
-        let (session, client) = recording_session(RecordingTransport::default());
+        let (session, client) = recording_session(recording_transport());
         let full_path = workspace.path().join(&relative_paths[0]);
 
         let result = index_single_file(&session, &shared_db, &full_path, &relative_paths[0]);
@@ -1958,7 +1959,7 @@ mod tests {
         let db = create_test_db();
         insert_test_file(&db, &relative_paths[0]);
         let shared_db: SharedDb = Arc::new(Mutex::new(db));
-        let (session, client) = recording_session(RecordingTransport::default());
+        let (session, client) = recording_session(recording_transport());
         let full_path = workspace.path().join(&relative_paths[0]);
         session.sync_open(&full_path, "fn f() {}").unwrap();
 
@@ -1978,7 +1979,7 @@ mod tests {
             insert_test_file(&db, relative_path);
         }
         let shared_db: SharedDb = Arc::new(Mutex::new(db));
-        let (session, client) = recording_session(RecordingTransport::default());
+        let (session, client) = recording_session(recording_transport());
 
         let indexed = process_lsp_batch(&session, &shared_db, workspace.path(), &relative_paths);
 

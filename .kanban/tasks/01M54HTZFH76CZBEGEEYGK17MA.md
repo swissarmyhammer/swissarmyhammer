@@ -10,6 +10,14 @@ comments:
     - evidence: `cargo nextest run --no-fail-fast -E 'rdeps(swissarmyhammer-code-context) | rdeps(swissarmyhammer-diagnostics)'` — 4982 run, 4982 passed, 0 failed, 0 skipped. `watcher::tests::test_watcher_fires_callback_on_file_create` passes now (15.943s).
     - next: This task stays open. A person decides to close it.
   timestamp: 2026-10-17T09:33:18.945894+00:00
+- actor: claude-code
+  id: 01m556dwarqeeq7t93j1e8y404
+  text: |-
+    ### seen again — 2026-10-17
+    - `test_watcher_fires_callback_on_file_create` failed again in the full run and alone (30 s, no event). fseventsd was at about 108% CPU, with low disk activity.
+    - Probable cause: fseventsd is stuck or has a large backlog. `sudo killall fseventsd` or a reboot can clear it.
+    - The test does not tell a slow OS from a broken watcher. A fix to examine: a test that injects events through a fake source (the Swift port uses a fake event source and a manual clock), plus one smoke test with real FSEvents that is allowed to be slow.
+  timestamp: 2026-10-17T15:07:02.872388+00:00
 position_column: todo
 position_ordinal: ffff8280
 title: Fix test_watcher_fires_callback_on_file_create (swissarmyhammer-treesitter)

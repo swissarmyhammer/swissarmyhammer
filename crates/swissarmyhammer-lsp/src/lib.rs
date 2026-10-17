@@ -27,6 +27,7 @@ pub mod client;
 pub mod daemon;
 pub mod diagnostics;
 pub mod error;
+mod framing;
 pub mod registry;
 pub mod server_spec;
 pub mod session;
@@ -36,8 +37,10 @@ pub mod types;
 pub mod uri;
 pub mod yaml_loader;
 
-#[cfg(test)]
-pub(crate) mod test_support;
+/// In-memory test doubles for the LSP wire protocol. Compiled for this crate's
+/// own tests, and for other crates' tests through the `test-support` feature.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 pub use client::{
     count_recorded_method, parse_document_symbols, LspJsonRpcClient, LspTransport, SharedLspClient,

@@ -295,8 +295,24 @@ impl<C: LspTransport> LspSession<C> {
             docs.touch(&uri, owner);
             return Ok(DocumentSync::Synced);
         }
+        self.open_locked(&mut docs, uri, text, owner)
+    }
+
+    /// Send `textDocument/didOpen` for `uri`, which is not open, and record it
+    /// for `owner`.
+    ///
+    /// The caller holds the docs lock across the call, and has checked that
+    /// `uri` is not in the open set. At the open-document limit, the least
+    /// recently used document closes first.
+    fn open_locked(
+        &self,
+        docs: &mut OpenDocuments,
+        uri: String,
+        text: &str,
+        owner: DocumentOwner,
+    ) -> Result<DocumentSync, LspError> {
         if let Some(oldest) = docs.eviction_candidate() {
-            self.close_locked(&mut docs, &oldest)?;
+            self.close_locked(docs, &oldest)?;
         }
 
         self.notify(
@@ -340,8 +356,6 @@ impl<C: LspTransport> LspSession<C> {
     /// is unchanged.
     fn change_for(&self, path: &Path, text: &str, owner: DocumentOwner) -> Result<(), LspError> {
         let uri = file_uri(path);
-        let new_hash = hash_text(text);
-
         // Hold the docs lock across the send so the version computed under the
         // lock is the version actually sent and recorded — two concurrent
         // changes cannot both compute the same `next_version`. Lock order is
@@ -350,7 +364,24 @@ impl<C: LspTransport> LspSession<C> {
         let state = docs.state(&uri).ok_or_else(|| {
             LspError::JsonRpc(format!("change on document that is not open: {uri}"))
         })?;
-        docs.touch(&uri, owner);
+        self.change_locked(&mut docs, &uri, state, text, owner)
+    }
+
+    /// Send a full-text `textDocument/didChange` for `uri`, which is open with
+    /// `state`, and mark it as used by `owner`.
+    ///
+    /// The caller holds the docs lock across the call, and read `state` under
+    /// that same lock. A text that is identical to `state` sends nothing.
+    fn change_locked(
+        &self,
+        docs: &mut OpenDocuments,
+        uri: &str,
+        state: DocState,
+        text: &str,
+        owner: DocumentOwner,
+    ) -> Result<(), LspError> {
+        let new_hash = hash_text(text);
+        docs.touch(uri, owner);
         if state.text_hash == new_hash {
             // No textual change — nothing to send.
             return Ok(());
@@ -369,7 +400,7 @@ impl<C: LspTransport> LspSession<C> {
         )?;
 
         docs.set_state(
-            &uri,
+            uri,
             DocState {
                 version: next_version,
                 text_hash: new_hash,
@@ -409,6 +440,10 @@ impl<C: LspTransport> LspSession<C> {
     /// indexing worker uses [`DocumentOwner::Indexer`], and then calls
     /// [`release`](Self::release) when it is done with the document. A
     /// document that a tool op already uses stays with the tool ops.
+    ///
+    /// The membership check and the `didOpen` or `didChange` happen under one
+    /// docs lock. So another clone cannot close or evict the document between
+    /// the check and the send.
     pub fn sync_open_for(
         &self,
         path: &Path,
@@ -416,13 +451,16 @@ impl<C: LspTransport> LspSession<C> {
         owner: DocumentOwner,
     ) -> Result<DocumentSync, LspError> {
         if self.skips_path(path) {
-            Ok(DocumentSync::Skipped)
-        } else if self.is_open(path) {
+            return Ok(DocumentSync::Skipped);
+        }
+        let uri = file_uri(path);
+        let mut docs = self.lock_docs();
+        match docs.state(&uri) {
             // Already open — refresh the buffer (no-op when text is unchanged).
-            self.change_for(path, text, owner)
-                .map(|()| DocumentSync::Synced)
-        } else {
-            self.open_for(path, text, owner)
+            Some(state) => self
+                .change_locked(&mut docs, &uri, state, text, owner)
+                .map(|()| DocumentSync::Synced),
+            None => self.open_locked(&mut docs, uri, text, owner),
         }
     }
 
@@ -1461,5 +1499,33 @@ mod tests {
         assert!(matches!(err, LspError::JsonRpc(_)));
         assert_eq!(session.open_documents().len(), MAX_OPEN_DOCUMENTS);
         assert!(!session.is_open(&numbered_path(MAX_OPEN_DOCUMENTS)));
+    }
+
+    /// A sync races a second clone that closes the same document. The sync
+    /// must open the document again when the close wins, and never fail with
+    /// "change on document that is not open".
+    #[test]
+    fn a_sync_never_fails_when_another_clone_closes_the_document() {
+        const SYNC_ROUNDS: usize = 20_000;
+        const TEXTS: [&str; 2] = ["fn a() {}", "fn b() {}"];
+        let (session, _client) = session_with_fake();
+        let closer = session.clone();
+        let path = PathBuf::from("/tmp/raced.rs");
+        let syncing = AtomicBool::new(true);
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                while syncing.load(Ordering::Acquire) {
+                    closer.close(&path).expect("close");
+                }
+            });
+            let outcome = (0..SYNC_ROUNDS).try_for_each(|round| {
+                session
+                    .sync_open(&path, TEXTS[round % TEXTS.len()])
+                    .map(drop)
+            });
+            syncing.store(false, Ordering::Release);
+            outcome.expect("each sync succeeds while another clone closes the document");
+        });
     }
 }

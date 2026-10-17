@@ -31,5 +31,9 @@ tree-sitter = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+# The `test-support` feature gives the tests the shared in-memory LSP transport
+# (`swissarmyhammer_lsp::test_support::FakeTransport`), so this crate has no
+# copy of its own.
+swissarmyhammer-lsp = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }
 tree-sitter-rust = { workspace = true }

@@ -424,6 +424,41 @@ async fn test_send_jsonrpc_produces_exact_wire_format() {
     assert_eq!(buf, expected);
 }
 
+/// The async daemon writer and the sync client writer use one framing, so a
+/// message goes on the wire as the same bytes from both.
+#[tokio::test]
+async fn test_daemon_and_client_write_the_same_frame() {
+    let msg = json!({"jsonrpc": "2.0", "id": 7, "method": "initialize", "params": {"é": 1}});
+    let mut daemon_bytes: Vec<u8> = Vec::new();
+    let mut client_bytes: Vec<u8> = Vec::new();
+
+    send_jsonrpc_message(&mut daemon_bytes, &msg).await.unwrap();
+    crate::framing::write_frame(&mut client_bytes, &msg).unwrap();
+
+    assert_eq!(daemon_bytes, client_bytes);
+}
+
+/// The async daemon reader and the sync client frame buffer read one header
+/// format: a frame that the daemon reads, the client buffer reads the same.
+#[tokio::test]
+async fn test_daemon_and_client_read_the_same_frame() {
+    let body = r#"{"jsonrpc":"2.0","id":9,"result":true}"#;
+    let raw = format!(
+        "Content-Type: application/json\r\nContent-Length:{}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let mut cursor = raw.as_bytes();
+    let mut reader = BufReader::new(&mut cursor);
+    let mut frames = crate::framing::FrameBuffer::default();
+    frames.push(raw.as_bytes());
+
+    let from_daemon = read_jsonrpc_message(&mut reader).await.unwrap();
+    let from_client = frames.take_message().unwrap();
+
+    assert_eq!(Some(from_daemon), from_client);
+}
+
 /// `read_jsonrpc_message` accepts any case and spacing variant of the
 /// `Content-Length:` header prefix, as long as the literal prefix
 /// `Content-Length:` is present. Verifies the `strip_prefix` path.

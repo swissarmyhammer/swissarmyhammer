@@ -55,6 +55,74 @@ comments:
     - evidence: `cargo fmt --check` found no format differences. Exit code is 0.
     - next: review.
   timestamp: 2026-10-17T14:28:06.771192+00:00
+- actor: claude-code
+  id: 01m5550e7t1x2d6jxnn7zd82ch
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD (6dc41f359); 5 findings (5 confirmed, 3 refuted) — crates/swissarmyhammer-code-context/src/test_fixtures.rs:219, crates/swissarmyhammer-lsp/src/client.rs:227, crates/swissarmyhammer-lsp/src/client.rs:621, crates/swissarmyhammer-lsp/src/client.rs:684, crates/swissarmyhammer-lsp/src/session.rs:422
+    - next: implement the open items in the Review Findings (2026-10-17 09:28) section. The task stays in review.
+  timestamp: 2026-10-17T14:42:13.882646+00:00
+- actor: claude-code
+  id: 01m55513j8f1ams643j3s3sabk
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 8 files (open_documents.rs new, session.rs, client.rs, lsp_worker.rs, lsp_communication.rs, test_fixtures.rs, lib.rs, ARCHITECTURE.md), 17 tests
+    - test: green — nextest rdeps(lsp | code-context), 5288 passed, 0 LEAK
+    - commit: 6dc41f359
+    - review: findings — crates/swissarmyhammer-code-context/src/test_fixtures.rs:219, crates/swissarmyhammer-lsp/src/client.rs:227, crates/swissarmyhammer-lsp/src/client.rs:621, crates/swissarmyhammer-lsp/src/client.rs:684, crates/swissarmyhammer-lsp/src/session.rs:422
+  timestamp: 2026-10-17T14:42:35.720134+00:00
+- actor: claude-code
+  id: 01m5558nhxc7s3h9gzn9qv8mes
+  text: |-
+    ### research — review findings (2026-10-17 09:28)
+    - The public `read_message` has no production caller (only test fakes implement the trait). Plan: it answers each server request with METHOD_NOT_FOUND through `answer_server_request` and then reads the next message, so it never returns a server request.
+    - Partial frame: the client reads through `BufReader<ChildStdout>` with `read_line`/`read_exact`, so a half frame blocks past the deadline. A `read_line` error also loses the bytes it consumed, so a timeout in the middle of a frame would desync the stream. Plan: the client keeps its own byte buffer of incoming data (a frame buffer) and reads raw chunks from the pipe only after `poll` says data is ready before the deadline. A partial frame stays in the buffer for the next read.
+    - Framing copies: `write_message` (client), the inline copies in `initialize`, `send_did_open`, `send_did_close`, `shutdown`, and `daemon::send_jsonrpc_message` (async, tokio). The read side has the same copy (`read_jsonrpc_response` and `daemon::read_jsonrpc_message`). Plan: a new private module `framing.rs` holds the frame encode, the header-line parse, the Content-Length check and the body decode. The sync client and the async daemon both call it. Daemon tests assert the error words `write header`, `write body`, `flush`, `read header line`, `read body`, `missing Content-Length header`, `json decode`, `unexpected EOF reading headers`; these stay.
+    - Fake reuse: the lsp crate's `FakeTransport` is `pub(crate)` behind `#[cfg(test)]`. Plan (prevailing workspace pattern, for example kanban and mirdan): a `test-support` feature makes `swissarmyhammer_lsp::test_support` public; `FakeTransport` gets a wire-order log, `fail_requests`, and per-method answers; code-context drops its own `RecordingTransport` and uses `FakeTransport`.
+    - Session: `sync_open_for` calls `is_open` (one lock) and then `change_for` (a second lock). Plan: lock-held helpers `open_locked` and `change_locked`, and `sync_open_for` takes the docs lock one time.
+  timestamp: 2026-10-17T14:46:43.517482+00:00
+- actor: claude-code
+  id: 01m555xff8xt7gbqtp6dz4rcgj
+  text: |-
+    ### progress — review findings (2026-10-17 09:28) done
+    - Finding 1 (reuse, test_fixtures): `swissarmyhammer-lsp` has a new `test-support` feature (prevailing workspace pattern). `test_support::FakeTransport` is now `pub` and has a wire-order log (`wire: Vec<WireMessage>`), `fail_requests`, `with_method_response`, `with_fallback_response`. code-context dev-depends on the feature; its own `RecordingTransport`/`WireMessage` are gone, and `test_fixtures::recording_transport()` configures the shared fake. `notification_count` comes from the fake (which uses `count_recorded_method`).
+    - Finding 2 (read_message): `read_message` goes through `Wire::read_unsolicited`. A server request gets the same `answer_server_request` (METHOD_NOT_FOUND, same id) and the read continues; a server request is never returned. Test: `read_message_answers_a_server_request_and_gives_the_next_message`.
+    - Finding 3 (partial frame): the client has no `BufReader` now. `Wire` keeps a `framing::FrameBuffer` of unread bytes and reads raw chunks only after `poll` says data comes before the deadline. A stalled partial frame now times out and sends `$/cancelRequest`; the partial bytes stay in the buffer, so the stream stays in step. Tests: `a_partial_frame_still_times_out_and_cancels`, `a_partial_frame_completes_on_a_later_read`, `read_message_times_out_on_a_partial_frame`.
+    - Finding 4 (framing copies): new private module `crates/swissarmyhammer-lsp/src/framing.rs` (encode, `WriteStep` error words, `write_frame`, header-line parse, body length, body decode, `FrameBuffer`). The client writer and `daemon::send_jsonrpc_message` / `read_jsonrpc_message` both use it. `initialize`, `send_did_open`, `send_did_close` and `shutdown` now call `send_notification` (no inline framing left). Tests: 8 framing tests, `test_daemon_and_client_write_the_same_frame`, `test_daemon_and_client_read_the_same_frame`.
+    - Finding 5 (session race): new lock-held helpers `open_locked` and `change_locked`; `sync_open_for` checks membership and sends under one docs lock. Test: `a_sync_never_fails_when_another_clone_closes_the_document` (RED on the old code in the first run, GREEN after).
+    - Behavior notes: client write errors now read `write header: ...` / `write body: ...` / `flush: ...` (the daemon words). The `exit` notification now carries `"params": null`, the same as the daemon. A read error now reads `read: ...`; EOF in a partial body reads `read body: unexpected EOF`.
+    - One nextest run of the lsp lib reported `1 leaky` once; the full run after it had no leaky test. Not seen again.
+    - ARCHITECTURE.md: LSP paragraph names the `framing` module, the `test-support` feature, and the deadline over the whole frame.
+  timestamp: 2026-10-17T14:58:05.416923+00:00
+- actor: claude-code
+  id: 01m555xt3cratyysm9mn70k557
+  text: |-
+    ### implement — changed
+    - evidence: 13 files — crates/swissarmyhammer-lsp/src/framing.rs (new), crates/swissarmyhammer-lsp/src/client.rs, crates/swissarmyhammer-lsp/src/daemon.rs, crates/swissarmyhammer-lsp/src/daemon/tests/jsonrpc.rs, crates/swissarmyhammer-lsp/src/session.rs, crates/swissarmyhammer-lsp/src/test_support.rs, crates/swissarmyhammer-lsp/src/lib.rs, crates/swissarmyhammer-lsp/Cargo.toml, crates/swissarmyhammer-code-context/Cargo.toml, crates/swissarmyhammer-code-context/src/test_fixtures.rs, crates/swissarmyhammer-code-context/src/lsp_worker.rs, ARCHITECTURE.md. New tests: 1 session race, 3 fake transport, 4 client read loop, 8 framing, 2 daemon/client framing parity. `cargo nextest run --no-fail-fast -p swissarmyhammer-lsp -p swissarmyhammer-code-context -p swissarmyhammer-diagnostics`: 1120 passed, 0 failed, 0 skipped. `cargo clippy -p swissarmyhammer-lsp -p swissarmyhammer-code-context -p swissarmyhammer-diagnostics -p swissarmyhammer-tools --all-targets -- -D warnings`: clean. `cargo fmt --all -- --check`: clean. All 5 findings checked.
+    - next: /review
+  timestamp: 2026-10-17T14:58:16.300204+00:00
+- actor: claude-code
+  id: 01m556a50fmw6t6b3w45dmzqnq
+  text: |-
+    ### test — red (iteration 2)
+    - evidence: `cargo nextest run --no-fail-fast -E 'rdeps(swissarmyhammer-lsp) | rdeps(swissarmyhammer-code-context)'` gave 5306 tests run: 5305 passed, 1 failed, 0 skipped. No LEAK. No TIMEOUT.
+    - failure: `swissarmyhammer-treesitter watcher::tests::test_watcher_fires_callback_on_file_create` (crates/swissarmyhammer-treesitter/src/watcher.rs:490). The test waited 30 s. The on_files_changed callback did not fire after the test made a Rust file.
+    - The known flaky test `the_shipped_dart_missing_docs_tool_rule_reports_every_fail_fixture_line` passed. I did not run it alone, because it did not fail.
+    - `cargo clippy --workspace --all-targets -- -D warnings`: pass (exit 0).
+    - `cargo fmt --check`: pass (exit 0).
+    - `cargo check -p swissarmyhammer-lsp` with no features: pass (exit 0).
+    - next: Examine the watcher test. It uses the file system watcher of the OS and a timeout. This change did not touch the watcher code. Run the test alone one time to find if it is flaky. Then find the cause of the missed event.
+  timestamp: 2026-10-17T15:05:00.687648+00:00
+- actor: claude-code
+  id: 01m556dqmq0qbhafsda10abped
+  text: |-
+    ### test — red is caused by the machine (user accepted as known)
+    - The one failure is `swissarmyhammer-treesitter watcher::tests::test_watcher_fires_callback_on_file_create`. No file event arrived in 30 s. It also fails when it runs alone.
+    - fseventsd is at about 108% CPU, and the disk activity is low. The same test passed (15/15) at a time when fseventsd had no load.
+    - This task does not change the treesitter watcher or the code that it uses.
+    - The other 5305 tests pass. Clippy, fmt and `cargo check -p swissarmyhammer-lsp` (no features) are clean.
+    - The user accepted this failure as known. The loop continues to commit.
+  timestamp: 2026-10-17T15:06:58.071455+00:00
 position_column: doing
 position_ordinal: '8480'
 title: Close LSP documents that sah opened only to index them
@@ -73,3 +141,19 @@ The LSP worker (`crates/swissarmyhammer-code-context/src/lsp_worker.rs`) never s
 ## Tests
 - A unit test with a fake LSP client that records the requests. Check that `didClose` follows the indexing requests for each file.
 - A unit test for the timeout path that checks for `$/cancelRequest`. #lsp-fix #bug
+
+## Review Findings (2026-10-17 09:28)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 7 file(s) reviewed, 5 not reviewed.
+
+> 4 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 4 file(s)
+
+> 1 file(s) not reviewed — no validator matched:
+> - `ARCHITECTURE.md` — no validator matches this file
+
+- [x] `crates/swissarmyhammer-code-context/src/test_fixtures.rs:219` `reuse/reuse` — RecordingTransport::notification_count reimplements a counter that already exists in the swissarmyhammer-lsp test fake. It is a near-copy, so the two can drift apart. Reuse the existing FakeTransport helper if its test support can be reached from this crate. If it cannot, document why the copy is needed, or move one shared recording transport to a crate both can depend on.
+- [x] `crates/swissarmyhammer-lsp/src/client.rs:227` `completeness/inverse-operation-coverage` — read_reply now answers server requests with METHOD_NOT_FOUND, so the server does not wait for ever. The public read_message, which reads the next framed message, still returns a server request to the caller without an answer. A caller that drains messages with read_message leaves the server waiting for a reply to its request. The two read paths now handle the same message kinds differently. In read_message, answer a message that has both a method and an id with answer_server_request before returning it, or document in the doc comment that the caller must answer server requests itself. Add a test that feeds a server request to read_message and checks that a METHOD_NOT_FOUND reply with the same id is written.
+- [x] `crates/swissarmyhammer-lsp/src/client.rs:621` `completeness/invariant-propagation` — The request deadline is checked only before each message starts. read_jsonrpc_response then reads the full frame with blocking reads. A server that sends a header, or a partial body, and then stalls blocks the read past the deadline. The timeout and the $/cancelRequest then never run. The doc comment says the whole read loop is bounded, which is not true for a partial frame. Bound the frame read as well, or narrow the doc comment to say that the deadline covers only the wait for the next message. Add a test in which the reader is ready, delivers a header without its body, and then stops. Check that the request still returns a timeout error.
+- [x] `crates/swissarmyhammer-lsp/src/client.rs:684` `reuse/reuse` — The new write_message reimplements the Content-Length framing and flush that daemon.rs already does. Two copies of the wire framing can drift apart. Check whether daemon.rs send_jsonrpc_message writes the same framing. If it does, make one function the shared writer and have both modules call it. Otherwise, note in a comment why the two framings differ.
+- [x] `crates/swissarmyhammer-lsp/src/session.rs:422` `completeness/invariant-propagation` — sync_open_for checks is_open(path) under one lock, releases it, then calls change_for, which takes the lock again. Eviction is new in this change. Another clone can open a document and evict this one between the two calls. change_for then returns LspError::JsonRpc 'change on document that is not open', so a sync that should open the document fails. The same check-then-act gap is not covered by the eviction path. Do the membership check and the change under one docs lock, for example by moving the is_open branch into a helper that takes the held OpenDocuments guard, the same way open_for and change_for already hold it. Add a test where the document is evicted between the check and the change, or where a second clone fills the set during the sync.

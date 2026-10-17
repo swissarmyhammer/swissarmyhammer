@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 use serde_json::{json, Value};
-use swissarmyhammer_lsp::{LspError, LspSession, LspTransport};
+use swissarmyhammer_lsp::test_support::FakeTransport;
+use swissarmyhammer_lsp::LspSession;
 use tempfile::TempDir;
 
 use crate::db::{configure_connection, create_schema};
@@ -188,84 +189,38 @@ pub fn mock_session_and_file(
     (session, dir)
 }
 
-/// One message that a [`RecordingTransport`] got, in wire order.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WireMessage {
-    /// A request with this method.
-    Request(String),
-    /// A notification with this method.
-    Notification(String),
-}
-
-/// An in-memory [`LspTransport`] that records each message in wire order.
-///
-/// It answers `textDocument/documentSymbol` with [`RECORDED_FUNCTION_SYMBOL`]
-/// and every other request with a `null` result, so the indexing worker runs
-/// its symbol phase and its call-hierarchy phase with no language server.
-/// When `fail_requests` is `true`, each request is recorded and then fails.
-#[derive(Debug, Default)]
-pub struct RecordingTransport {
-    /// Each request and notification, in the order it was sent.
-    pub wire: Vec<WireMessage>,
-    /// When `true`, each `send_request` gives an error.
-    pub fail_requests: bool,
-}
-
-/// The name of the one function symbol that [`RecordingTransport`] gives for
+/// The name of the one function symbol that [`recording_transport`] gives for
 /// `textDocument/documentSymbol`.
 pub const RECORDED_FUNCTION_SYMBOL: &str = "recorded_function";
 
-impl RecordingTransport {
-    /// The count of notifications with `method`.
-    pub fn notification_count(&self, method: &str) -> usize {
-        let notification = WireMessage::Notification(method.to_string());
-        self.wire
-            .iter()
-            .filter(|message| **message == notification)
-            .count()
-    }
+/// A shared in-memory [`FakeTransport`] that lets the indexing worker run with
+/// no language server.
+///
+/// It answers `textDocument/documentSymbol` with [`RECORDED_FUNCTION_SYMBOL`]
+/// and every other request with a `null` result, so the worker runs its symbol
+/// phase and its call-hierarchy phase. The fake records each message in wire
+/// order. Set `fail_requests` to make each request fail.
+pub fn recording_transport() -> FakeTransport {
+    let symbols = json!([{
+        "name": RECORDED_FUNCTION_SYMBOL,
+        "kind": 12,
+        "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 9}},
+        "selectionRange": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 4}}
+    }]);
+    FakeTransport::default()
+        .with_method_response(
+            "textDocument/documentSymbol",
+            json!({"jsonrpc": "2.0", "id": 1, "result": symbols}),
+        )
+        .with_fallback_response(json!({"jsonrpc": "2.0", "id": 1, "result": Value::Null}))
 }
 
-impl LspTransport for RecordingTransport {
-    fn send_request(&mut self, method: &str, _params: Value) -> Result<Value, LspError> {
-        self.wire.push(WireMessage::Request(method.to_string()));
-        if self.fail_requests {
-            return Err(LspError::JsonRpc(format!(
-                "forced request failure for {method}"
-            )));
-        }
-        let result = if method == "textDocument/documentSymbol" {
-            json!([{
-                "name": RECORDED_FUNCTION_SYMBOL,
-                "kind": 12,
-                "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 9}},
-                "selectionRange": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 4}}
-            }])
-        } else {
-            Value::Null
-        };
-        Ok(json!({"jsonrpc": "2.0", "id": 1, "result": result}))
-    }
+/// The shared client handle of a session over a [`FakeTransport`].
+pub type RecordingClient = Arc<Mutex<Option<FakeTransport>>>;
 
-    fn send_notification(&mut self, method: &str, _params: Value) -> Result<(), LspError> {
-        self.wire
-            .push(WireMessage::Notification(method.to_string()));
-        Ok(())
-    }
-
-    fn read_message(&mut self) -> Result<Value, LspError> {
-        Err(LspError::JsonRpc("no scripted incoming message".into()))
-    }
-}
-
-/// The shared client handle of a session over a [`RecordingTransport`].
-pub type RecordingClient = Arc<Mutex<Option<RecordingTransport>>>;
-
-/// Build a session over a [`RecordingTransport`], and give the client handle
-/// so the test can read the recorded wire traffic.
-pub fn recording_session(
-    transport: RecordingTransport,
-) -> (LspSession<RecordingTransport>, RecordingClient) {
+/// Build a session over a [`FakeTransport`], and give the client handle so the
+/// test can read the recorded wire traffic.
+pub fn recording_session(transport: FakeTransport) -> (LspSession<FakeTransport>, RecordingClient) {
     let client = Arc::new(Mutex::new(Some(transport)));
     (LspSession::new(Arc::clone(&client), "rust"), client)
 }

@@ -11,7 +11,7 @@
 //! [`LspJsonRpcClient`] implements the trait over child-process stdio.
 
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
 use std::process::{ChildStdin, ChildStdout};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -21,6 +21,7 @@ use tracing::{debug, trace, warn};
 use lsp_types::{DocumentSymbol, DocumentSymbolResponse, SymbolInformation};
 
 use crate::error::LspError;
+use crate::framing::{self, FrameBuffer};
 
 /// Environment variable that overrides the LSP request timeout, in whole seconds.
 ///
@@ -107,11 +108,10 @@ pub fn count_recorded_method(records: &[(String, Value)], method: &str) -> usize
 /// Communicates with an LSP server process over stdin/stdout pipes using
 /// the JSON-RPC 2.0 protocol with Content-Length framing.
 pub struct LspJsonRpcClient {
-    /// Writable pipe to the LSP server's stdin.
-    stdin: ChildStdin,
-    /// Buffered reader over the LSP server's stdout. Its raw file descriptor
-    /// is polled for readability before blocking reads (see [`stdout_ready`]).
-    reader: BufReader<ChildStdout>,
+    /// The pipes to the LSP server: its stdin to write, and its stdout to
+    /// read. The raw file descriptor of stdout is polled for readability
+    /// before each read (see [`stdout_ready`]).
+    wire: Wire<ChildStdin, ChildStdout>,
     /// Current request ID (incremented for each request).
     request_id: u32,
 }
@@ -128,8 +128,7 @@ impl LspJsonRpcClient {
     /// * `stdout` - The child process's stdout pipe (obtained via `child.stdout.take()`)
     pub fn new(stdin: ChildStdin, stdout: ChildStdout) -> Self {
         Self {
-            stdin,
-            reader: BufReader::new(stdout),
+            wire: Wire::new(stdin, stdout),
             request_id: 1,
         }
     }
@@ -168,14 +167,15 @@ impl LspJsonRpcClient {
             "params": params,
             "id": id,
         });
-        write_message(&mut self.stdin, &request)
+        self.wire.send(&request)
     }
 
     /// Read JSON-RPC messages until the reply to request `expected_id` arrives.
     ///
-    /// See [`read_reply`] for how each other message is handled. The entire
-    /// read loop is bounded by [`lsp_request_timeout`]; on a timeout the
-    /// server gets a `$/cancelRequest` for the request.
+    /// See [`Wire::read_reply`] for how each other message is handled. The
+    /// whole read is bounded by [`lsp_request_timeout`], also the read of a
+    /// partial frame; on a timeout the server gets a `$/cancelRequest` for
+    /// the request.
     fn read_matching_response(
         &mut self,
         method: &str,
@@ -187,9 +187,8 @@ impl LspJsonRpcClient {
             timeout: lsp_request_timeout(),
         };
         let deadline = Instant::now() + pending.timeout;
-        read_reply(&mut self.stdin, &mut self.reader, &pending, |reader| {
-            stdout_ready(reader, deadline)
-        })
+        self.wire
+            .read_reply(&pending, |stdout| stdout_ready(stdout, deadline))
     }
 
     /// Send a JSON-RPC notification (fire-and-forget, no response expected).
@@ -204,7 +203,7 @@ impl LspJsonRpcClient {
             "params": params,
         });
 
-        write_message(&mut self.stdin, &notification)?;
+        self.wire.send(&notification)?;
         debug!("Sent LSP notification: {}", method);
         Ok(())
     }
@@ -212,19 +211,17 @@ impl LspJsonRpcClient {
     /// Read the next framed JSON-RPC message from the server's stdout.
     ///
     /// Unlike [`send_request`](Self::send_request), this does not filter by id —
-    /// it returns whatever the server sends next, which lets callers drain
-    /// server-initiated notifications. The read is bounded by
-    /// [`lsp_request_timeout`].
+    /// it returns the next notification or reply that the server sends, which
+    /// lets callers drain server-initiated notifications. A request from the
+    /// server is never returned: it gets a [`METHOD_NOT_FOUND`] error reply
+    /// with its own id, the same as in [`send_request`](Self::send_request),
+    /// and the read continues. The whole read, also of a partial frame, is
+    /// bounded by [`lsp_request_timeout`].
     pub fn read_message(&mut self) -> Result<Value, LspError> {
         let timeout = lsp_request_timeout();
         let deadline = Instant::now() + timeout;
-        if !stdout_ready(&self.reader, deadline) {
-            return Err(LspError::JsonRpc(format!(
-                "LSP read_message timed out after {}s",
-                timeout.as_secs()
-            )));
-        }
-        read_jsonrpc_response(&mut self.reader)
+        self.wire
+            .read_unsolicited(timeout, |stdout| stdout_ready(stdout, deadline))
     }
 
     /// Initialize the LSP server and wait for initialization response.
@@ -258,20 +255,7 @@ impl LspJsonRpcClient {
         }
 
         // Send initialized notification (no response expected)
-        let json_str = json!({
-            "jsonrpc": "2.0",
-            "method": "initialized",
-            "params": {}
-        })
-        .to_string();
-        let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
-
-        self.stdin
-            .write_all(msg.as_bytes())
-            .map_err(|e| LspError::JsonRpc(format!("write initialized failed: {}", e)))?;
-        self.stdin
-            .flush()
-            .map_err(|e| LspError::JsonRpc(format!("flush initialized failed: {}", e)))?;
+        self.send_notification("initialized", json!({}))?;
 
         debug!("LSP server initialized");
         Ok(())
@@ -293,30 +277,17 @@ impl LspJsonRpcClient {
         text: &str,
     ) -> Result<(), LspError> {
         let uri = format!("file://{}", file_path.to_string_lossy());
-
-        let notification = json!({
-            "jsonrpc": "2.0",
-            "method": "textDocument/didOpen",
-            "params": {
+        self.send_notification(
+            "textDocument/didOpen",
+            json!({
                 "textDocument": {
                     "uri": uri,
                     "languageId": language_id,
                     "version": 1,
                     "text": text
                 }
-            }
-        });
-
-        let json_str = notification.to_string();
-        let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
-
-        self.stdin
-            .write_all(msg.as_bytes())
-            .map_err(|e| LspError::JsonRpc(format!("write didOpen failed: {}", e)))?;
-        self.stdin
-            .flush()
-            .map_err(|e| LspError::JsonRpc(format!("flush didOpen failed: {}", e)))?;
-
+            }),
+        )?;
         debug!("Sent textDocument/didOpen for {}", file_path.display());
         Ok(())
     }
@@ -328,27 +299,14 @@ impl LspJsonRpcClient {
     /// didOpen" warnings on re-indexing.
     pub fn send_did_close(&mut self, file_path: &Path) -> Result<(), LspError> {
         let uri = format!("file://{}", file_path.to_string_lossy());
-
-        let notification = json!({
-            "jsonrpc": "2.0",
-            "method": "textDocument/didClose",
-            "params": {
+        self.send_notification(
+            "textDocument/didClose",
+            json!({
                 "textDocument": {
                     "uri": uri
                 }
-            }
-        });
-
-        let json_str = notification.to_string();
-        let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
-
-        self.stdin
-            .write_all(msg.as_bytes())
-            .map_err(|e| LspError::JsonRpc(format!("write didClose failed: {}", e)))?;
-        self.stdin
-            .flush()
-            .map_err(|e| LspError::JsonRpc(format!("flush didClose failed: {}", e)))?;
-
+            }),
+        )?;
         debug!("Sent textDocument/didClose for {}", file_path.display());
         Ok(())
     }
@@ -361,16 +319,11 @@ impl LspJsonRpcClient {
         // Send shutdown request (expects a response)
         let _response = self.send_request("shutdown", json!(null))?;
 
-        // Send exit notification (no response expected)
-        let notification = json!({
-            "jsonrpc": "2.0",
-            "method": "exit"
-        });
-        let json_str = notification.to_string();
-        let msg = format!("Content-Length: {}\r\n\r\n{}", json_str.len(), json_str);
-
-        let _ = self.stdin.write_all(msg.as_bytes());
-        let _ = self.stdin.flush();
+        // Send exit notification (no response expected). A failure is not an
+        // error: the server may already be gone.
+        if let Err(e) = self.send_notification("exit", Value::Null) {
+            debug!("LSP exit notification not sent: {}", e);
+        }
 
         debug!("LSP server shut down");
         Ok(())
@@ -503,17 +456,15 @@ const MAX_POLL_MS: u128 = 1_000;
 /// Tell if the server's stdout has data to read before `deadline`.
 ///
 /// Uses `poll(2)` on Unix to check readability without consuming any bytes
-/// from the pipe. Bytes already in the `BufReader` buffer count as data, as
-/// `poll` on the raw fd does not see them. A `poll` error counts as no data,
-/// so the caller times out instead of looping for ever.
+/// from the pipe. The client keeps no unread bytes of its own outside the
+/// [`FrameBuffer`], and [`Wire::read_frame`] reads that buffer before it asks
+/// here. A `poll` error counts as no data, so the caller times out instead of
+/// looping for ever.
 #[cfg(unix)]
-fn stdout_ready(reader: &BufReader<ChildStdout>, deadline: Instant) -> bool {
+fn stdout_ready(stdout: &ChildStdout, deadline: Instant) -> bool {
     use std::os::unix::io::AsRawFd;
 
-    if !reader.buffer().is_empty() {
-        return true;
-    }
-    let fd = reader.get_ref().as_raw_fd();
+    let fd = stdout.as_raw_fd();
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -531,7 +482,7 @@ fn stdout_ready(reader: &BufReader<ChildStdout>, deadline: Instant) -> bool {
 
 /// Non-Unix fallback: no timeout support, data always counts as ready.
 #[cfg(not(unix))]
-fn stdout_ready(_reader: &BufReader<ChildStdout>, _deadline: Instant) -> bool {
+fn stdout_ready(_stdout: &ChildStdout, _deadline: Instant) -> bool {
     true
 }
 
@@ -564,18 +515,203 @@ enum ResponseMatch {
     Stale,
 }
 
+/// The most bytes that one read from the server's stdout takes.
+const READ_CHUNK_BYTES: usize = 8 * 1024;
+
+/// Tell if `message` is a request from the server: it has a `method` and an
+/// `id`.
+fn is_server_request(message: &Value) -> bool {
+    message.get("method").is_some() && message.get("id").is_some()
+}
+
 /// Classify one incoming message relative to the pending request `expected_id`.
 fn classify_response(message: &Value, expected_id: u32) -> ResponseMatch {
-    let id = message.get("id");
-    if message.get("method").is_some() {
-        return match id {
-            Some(_) => ResponseMatch::ServerRequest,
-            None => ResponseMatch::Notification,
-        };
+    if is_server_request(message) {
+        return ResponseMatch::ServerRequest;
     }
-    match id {
+    if message.get("method").is_some() {
+        return ResponseMatch::Notification;
+    }
+    match message.get("id") {
         Some(id) if id_matches(id, expected_id) => ResponseMatch::Match,
         _ => ResponseMatch::Stale,
+    }
+}
+
+/// Why a frame read stopped with no message.
+enum ReadStop {
+    /// No data came before the deadline.
+    TimedOut,
+    /// The read failed, or the stream ended.
+    Failed(LspError),
+}
+
+/// The I/O of one connection to a language server.
+///
+/// The client writes each framed message to `writer`. It reads raw bytes from
+/// `reader` into `incoming`, and takes each complete frame from there, so a
+/// read never blocks on a partial frame. The type is generic over the two
+/// ends, so the read loops are unit-tested over in-memory bytes.
+struct Wire<W, R> {
+    /// The server's stdin.
+    writer: W,
+    /// The server's stdout.
+    reader: R,
+    /// The bytes read from `reader` that are not a message yet.
+    incoming: FrameBuffer,
+}
+
+impl<W: Write, R: Read> Wire<W, R> {
+    /// A wire with no unread byte.
+    fn new(writer: W, reader: R) -> Self {
+        Self {
+            writer,
+            reader,
+            incoming: FrameBuffer::default(),
+        }
+    }
+
+    /// Write `message` as one frame, and flush it.
+    fn send(&mut self, message: &Value) -> Result<(), LspError> {
+        framing::write_frame(&mut self.writer, message)
+    }
+
+    /// Read the next complete message.
+    ///
+    /// A complete frame in `incoming` comes first. Otherwise the read takes
+    /// more bytes from `reader`, but only after `ready` tells that data comes
+    /// before the deadline. So a stalled server, also one that stops in the
+    /// middle of a frame, stops the read at the deadline. A partial frame
+    /// stays in `incoming` for the next read, so the stream stays in step.
+    fn read_frame(&mut self, ready: &mut impl FnMut(&R) -> bool) -> Result<Value, ReadStop> {
+        let mut chunk = [0u8; READ_CHUNK_BYTES];
+        loop {
+            if let Some(message) = self.incoming.take_message().map_err(ReadStop::Failed)? {
+                return Ok(message);
+            }
+            if !ready(&self.reader) {
+                return Err(ReadStop::TimedOut);
+            }
+            match self.reader.read(&mut chunk) {
+                Ok(0) => return Err(ReadStop::Failed(self.incoming.eof_error())),
+                Ok(count) => self.incoming.push(&chunk[..count]),
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(e) => return Err(ReadStop::Failed(LspError::JsonRpc(format!("read: {e}")))),
+            }
+        }
+    }
+
+    /// Read messages until the reply to `pending` arrives.
+    ///
+    /// `ready` tells if the reader has data before the deadline of the
+    /// request. Each other message is handled here and then dropped, so no
+    /// message stays in a buffer:
+    ///
+    /// - A notification is skipped.
+    /// - A request from the server gets a [`METHOD_NOT_FOUND`] error reply
+    ///   with its own id (a number or a string), so the server does not wait
+    ///   for ever.
+    /// - A reply to an earlier request (one that timed out) is discarded.
+    ///
+    /// When no data comes before the deadline, also in the middle of a frame,
+    /// the server gets a `$/cancelRequest` for the request, and the result is
+    /// a timeout error.
+    fn read_reply(
+        &mut self,
+        pending: &PendingRequest<'_>,
+        mut ready: impl FnMut(&R) -> bool,
+    ) -> Result<Value, LspError> {
+        loop {
+            let message = match self.read_frame(&mut ready) {
+                Ok(message) => message,
+                Err(ReadStop::Failed(e)) => return Err(e),
+                Err(ReadStop::TimedOut) => {
+                    self.send_cancel_request(pending.id);
+                    return Err(LspError::JsonRpc(format!(
+                        "LSP request '{}' (id={}) timed out after {}s",
+                        pending.method,
+                        pending.id,
+                        pending.timeout.as_secs()
+                    )));
+                }
+            };
+            match classify_response(&message, pending.id) {
+                ResponseMatch::Match => return Ok(message),
+                ResponseMatch::Notification => {
+                    trace!("Skipping LSP notification: {}", message_method(&message))
+                }
+                ResponseMatch::ServerRequest => self.answer_server_request(&message),
+                ResponseMatch::Stale => debug!(
+                    "Discarded a late LSP reply (id={}) while waiting for id={}",
+                    message["id"], pending.id
+                ),
+            }
+        }
+    }
+
+    /// Read the next message that is not a request from the server.
+    ///
+    /// Each request from the server gets a [`METHOD_NOT_FOUND`] error reply
+    /// with its own id, the same as in [`read_reply`](Self::read_reply), and
+    /// the read continues. When no data comes before the deadline, also in the
+    /// middle of a frame, the result is a timeout error.
+    fn read_unsolicited(
+        &mut self,
+        timeout: Duration,
+        mut ready: impl FnMut(&R) -> bool,
+    ) -> Result<Value, LspError> {
+        loop {
+            match self.read_frame(&mut ready) {
+                Ok(message) if is_server_request(&message) => self.answer_server_request(&message),
+                Ok(message) => return Ok(message),
+                Err(ReadStop::Failed(e)) => return Err(e),
+                Err(ReadStop::TimedOut) => {
+                    return Err(LspError::JsonRpc(format!(
+                        "LSP read_message timed out after {}s",
+                        timeout.as_secs()
+                    )))
+                }
+            }
+        }
+    }
+
+    /// Tell the server to stop work on request `id`, which timed out.
+    ///
+    /// A write failure is logged and not returned: the caller already reports
+    /// the timeout, which is the error that matters.
+    fn send_cancel_request(&mut self, id: u32) {
+        let cancel = json!({
+            "jsonrpc": "2.0",
+            "method": CANCEL_REQUEST_METHOD,
+            "params": { "id": id },
+        });
+        match self.send(&cancel) {
+            Ok(()) => debug!("Sent {} for LSP request id={}", CANCEL_REQUEST_METHOD, id),
+            Err(e) => warn!(
+                "Failed to send {} for id={}: {}",
+                CANCEL_REQUEST_METHOD, id, e
+            ),
+        }
+    }
+
+    /// Answer a request from the server with a [`METHOD_NOT_FOUND`] error.
+    ///
+    /// The reply carries the id of the request without change, so a string id
+    /// stays a string. A write failure is logged and not returned, so the read
+    /// continues.
+    fn answer_server_request(&mut self, request: &Value) {
+        let method = message_method(request);
+        let reply = json!({
+            "jsonrpc": "2.0",
+            "id": request["id"],
+            "error": {
+                "code": METHOD_NOT_FOUND,
+                "message": format!("method not supported by the client: {method}"),
+            },
+        });
+        if let Err(e) = self.send(&reply) {
+            warn!("Failed to answer the LSP server request {}: {}", method, e);
+        }
     }
 }
 
@@ -589,50 +725,6 @@ fn id_matches(id: &Value, expected_id: u32) -> bool {
         || id.as_str().and_then(|text| text.parse::<u64>().ok()) == Some(expected)
 }
 
-/// Read messages until the reply to `pending` arrives.
-///
-/// `ready` tells if the reader has data before the deadline of the request.
-/// Each other message is handled here and then dropped, so no message stays in
-/// a buffer:
-///
-/// - A notification is skipped.
-/// - A request from the server gets a [`METHOD_NOT_FOUND`] error reply with
-///   its own id (a number or a string), so the server does not wait for ever.
-/// - A reply to an earlier request (one that timed out) is discarded.
-///
-/// When no data comes before the deadline, the server gets a
-/// `$/cancelRequest` for the request, and the result is a timeout error.
-fn read_reply<W: Write, R: BufRead>(
-    writer: &mut W,
-    reader: &mut R,
-    pending: &PendingRequest<'_>,
-    mut ready: impl FnMut(&R) -> bool,
-) -> Result<Value, LspError> {
-    loop {
-        if !ready(reader) {
-            send_cancel_request(writer, pending.id);
-            return Err(LspError::JsonRpc(format!(
-                "LSP request '{}' (id={}) timed out after {}s",
-                pending.method,
-                pending.id,
-                pending.timeout.as_secs()
-            )));
-        }
-        let message = read_jsonrpc_response(reader)?;
-        match classify_response(&message, pending.id) {
-            ResponseMatch::Match => return Ok(message),
-            ResponseMatch::Notification => {
-                trace!("Skipping LSP notification: {}", message_method(&message))
-            }
-            ResponseMatch::ServerRequest => answer_server_request(writer, &message),
-            ResponseMatch::Stale => debug!(
-                "Discarded a late LSP reply (id={}) while waiting for id={}",
-                message["id"], pending.id
-            ),
-        }
-    }
-}
-
 /// The `method` of a message, or `"unknown"` when it has none.
 fn message_method(message: &Value) -> &str {
     message
@@ -641,100 +733,11 @@ fn message_method(message: &Value) -> &str {
         .unwrap_or("unknown")
 }
 
-/// Tell the server to stop work on request `id`, which timed out.
-///
-/// A write failure is logged and not returned: the caller already reports the
-/// timeout, which is the error that matters.
-fn send_cancel_request<W: Write>(writer: &mut W, id: u32) {
-    let cancel = json!({
-        "jsonrpc": "2.0",
-        "method": CANCEL_REQUEST_METHOD,
-        "params": { "id": id },
-    });
-    match write_message(writer, &cancel) {
-        Ok(()) => debug!("Sent {} for LSP request id={}", CANCEL_REQUEST_METHOD, id),
-        Err(e) => warn!(
-            "Failed to send {} for id={}: {}",
-            CANCEL_REQUEST_METHOD, id, e
-        ),
-    }
-}
-
-/// Answer a request from the server with a [`METHOD_NOT_FOUND`] error.
-///
-/// The reply carries the id of the request without change, so a string id
-/// stays a string. A write failure is logged and not returned, so the wait for
-/// the pending reply continues.
-fn answer_server_request<W: Write>(writer: &mut W, request: &Value) {
-    let method = message_method(request);
-    let reply = json!({
-        "jsonrpc": "2.0",
-        "id": request["id"],
-        "error": {
-            "code": METHOD_NOT_FOUND,
-            "message": format!("method not supported by the client: {method}"),
-        },
-    });
-    if let Err(e) = write_message(writer, &reply) {
-        warn!("Failed to answer the LSP server request {}: {}", method, e);
-    }
-}
-
-/// Write one JSON-RPC message with Content-Length framing, and flush it.
-fn write_message<W: Write>(writer: &mut W, message: &Value) -> Result<(), LspError> {
-    let body = message.to_string();
-    let framed = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
-    writer
-        .write_all(framed.as_bytes())
-        .map_err(|e| LspError::JsonRpc(format!("write failed: {}", e)))?;
-    writer
-        .flush()
-        .map_err(|e| LspError::JsonRpc(format!("flush failed: {}", e)))
-}
-
-/// Read a single JSON-RPC message from a reader using Content-Length framing.
-fn read_jsonrpc_response<R: BufRead>(reader: &mut R) -> Result<Value, LspError> {
-    let mut content_length: Option<usize> = None;
-
-    // Read headers until blank line
-    loop {
-        let mut line = String::new();
-        let n = reader
-            .read_line(&mut line)
-            .map_err(|e| LspError::JsonRpc(format!("read header: {}", e)))?;
-        if n == 0 {
-            return Err(LspError::JsonRpc("unexpected EOF reading headers".into()));
-        }
-
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            break;
-        }
-
-        if let Some(val) = trimmed.strip_prefix("Content-Length:") {
-            content_length = Some(
-                val.trim()
-                    .parse::<usize>()
-                    .map_err(|e| LspError::JsonRpc(format!("bad Content-Length: {}", e)))?,
-            );
-        }
-    }
-
-    let length =
-        content_length.ok_or_else(|| LspError::JsonRpc("missing Content-Length header".into()))?;
-
-    let mut body = vec![0u8; length];
-    reader
-        .read_exact(&mut body)
-        .map_err(|e| LspError::JsonRpc(format!("read body: {}", e)))?;
-
-    serde_json::from_slice(&body).map_err(|e| LspError::JsonRpc(format!("json decode: {}", e)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::FakeTransport;
+    use crate::test_support::{FakeTransport, WireMessage};
+    use std::io::Cursor;
 
     #[test]
     fn fake_transport_records_request_and_replays_response() {
@@ -790,6 +793,64 @@ mod tests {
 
         assert_eq!(message, diagnostics);
         assert_eq!(message["method"], "textDocument/publishDiagnostics");
+    }
+
+    #[test]
+    fn fake_transport_records_requests_and_notifications_in_wire_order() {
+        let mut transport =
+            FakeTransport::default().with_fallback_response(json!({"result": null}));
+
+        transport
+            .send_notification("textDocument/didOpen", json!({}))
+            .expect("notification");
+        transport
+            .send_request("textDocument/hover", json!({}))
+            .expect("request");
+        transport
+            .send_notification("textDocument/didClose", json!({}))
+            .expect("notification");
+
+        assert_eq!(
+            transport.wire,
+            vec![
+                WireMessage::Notification("textDocument/didOpen".into()),
+                WireMessage::Request("textDocument/hover".into()),
+                WireMessage::Notification("textDocument/didClose".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn fake_transport_answers_by_method_then_with_the_fallback() {
+        let symbols = json!({"result": ["symbol"]});
+        let fallback = json!({"result": null});
+        let mut transport = FakeTransport::default()
+            .with_method_response("textDocument/documentSymbol", symbols.clone())
+            .with_fallback_response(fallback.clone());
+
+        let by_method = transport.send_request("textDocument/documentSymbol", json!({}));
+        let other = transport.send_request("textDocument/prepareCallHierarchy", json!({}));
+
+        assert_eq!(by_method.expect("the method answer"), symbols);
+        assert_eq!(other.expect("the fallback answer"), fallback);
+    }
+
+    #[test]
+    fn fake_transport_fail_requests_records_the_request_and_fails() {
+        let mut transport = FakeTransport {
+            fail_requests: true,
+            ..FakeTransport::default().with_fallback_response(json!({"result": null}))
+        };
+
+        let err = transport
+            .send_request("textDocument/documentSymbol", json!({}))
+            .expect_err("a forced request failure");
+
+        assert!(matches!(err, LspError::JsonRpc(_)));
+        assert_eq!(
+            transport.wire,
+            vec![WireMessage::Request("textDocument/documentSymbol".into())]
+        );
     }
 
     #[test]
@@ -852,42 +913,132 @@ mod tests {
         );
     }
 
-    /// The request timeout that the read-loop tests give to [`read_reply`].
+    /// The request timeout that the read-loop tests give to [`Wire::read_reply`]
+    /// and [`Wire::read_unsolicited`].
     const TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
+    /// A [`Wire`] over in-memory bytes: the client writes into a `Vec`, and
+    /// reads the server's bytes from a `Cursor`.
+    type TestWire = Wire<Vec<u8>, Cursor<Vec<u8>>>;
+
+    /// A wire whose server has sent `bytes`.
+    fn wire_over(bytes: Vec<u8>) -> TestWire {
+        Wire::new(Vec::new(), Cursor::new(bytes))
+    }
+
+    /// The reader is ready while it holds bytes that the client did not read.
+    /// After the last byte, the deadline passes with no data.
+    fn ready_while_data(reader: &Cursor<Vec<u8>>) -> bool {
+        (reader.position() as usize) < reader.get_ref().len()
+    }
+
     /// Frame each message with Content-Length headers, as a server writes it.
-    fn framed(messages: &[Value]) -> std::io::Cursor<Vec<u8>> {
+    fn framed(messages: &[Value]) -> Vec<u8> {
         let mut bytes = Vec::new();
         for message in messages {
-            write_message(&mut bytes, message).expect("frame a message");
+            framing::write_frame(&mut bytes, message).expect("frame a message");
         }
-        std::io::Cursor::new(bytes)
+        bytes
     }
 
     /// Read back each framed message that the client wrote.
     fn written_messages(bytes: &[u8]) -> Vec<Value> {
-        let mut reader = std::io::Cursor::new(bytes);
+        let mut frames = FrameBuffer::default();
+        frames.push(bytes);
         let mut messages = Vec::new();
-        while (reader.position() as usize) < bytes.len() {
-            messages.push(read_jsonrpc_response(&mut reader).expect("a framed message"));
+        while let Some(message) = frames.take_message().expect("a framed message") {
+            messages.push(message);
         }
         messages
     }
 
-    /// Run [`read_reply`] for request `id` over `incoming`, with a reader that
-    /// is ready while it holds data. Give the result and the written bytes.
-    fn reply_for(id: u32, incoming: &[Value]) -> (Result<Value, LspError>, Vec<u8>) {
-        let mut reader = framed(incoming);
-        let mut writer = Vec::new();
-        let pending = PendingRequest {
+    /// The pending request `id`, with the test timeout.
+    fn pending(id: u32) -> PendingRequest<'static> {
+        PendingRequest {
             method: "textDocument/hover",
             id,
             timeout: TEST_TIMEOUT,
-        };
-        let result = read_reply(&mut writer, &mut reader, &pending, |reader| {
-            (reader.position() as usize) < reader.get_ref().len()
+        }
+    }
+
+    /// Run [`Wire::read_reply`] for request `id` over `incoming`, with a reader
+    /// that is ready while it holds data. Give the result and the written bytes.
+    fn reply_for(id: u32, incoming: &[Value]) -> (Result<Value, LspError>, Vec<u8>) {
+        let mut wire = wire_over(framed(incoming));
+        let result = wire.read_reply(&pending(id), ready_while_data);
+        (result, wire.writer)
+    }
+
+    /// The first `cut` bytes of the frame of `message`, as a server writes
+    /// them before it stalls.
+    fn half_frame(message: &Value, cut: usize) -> Vec<u8> {
+        let mut bytes = framed(std::slice::from_ref(message));
+        bytes.truncate(cut);
+        bytes
+    }
+
+    #[test]
+    fn a_partial_frame_still_times_out_and_cancels() {
+        const STALLED_ID: u32 = 8;
+        let reply = json!({"jsonrpc": "2.0", "id": STALLED_ID, "result": "late"});
+        let header_and_part_of_the_body = framing::encode(&reply).unwrap().header.len() + 4;
+        let mut wire = wire_over(half_frame(&reply, header_and_part_of_the_body));
+
+        let result = wire.read_reply(&pending(STALLED_ID), ready_while_data);
+
+        assert!(matches!(result, Err(LspError::JsonRpc(_))));
+        let messages = written_messages(&wire.writer);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["method"], "$/cancelRequest");
+        assert_eq!(messages[0]["params"]["id"], STALLED_ID);
+    }
+
+    #[test]
+    fn a_partial_frame_completes_on_a_later_read() {
+        const HEADER_ONLY_BYTES: usize = 10;
+        let first = json!({"jsonrpc": "2.0", "id": 1, "result": "first"});
+        let second = json!({"jsonrpc": "2.0", "id": 2, "result": "second"});
+        let whole = framed(&[first, second.clone()]);
+        let mut wire = wire_over(whole[..HEADER_ONLY_BYTES].to_vec());
+        let timed_out = wire.read_reply(&pending(1), ready_while_data);
+        wire.reader
+            .get_mut()
+            .extend_from_slice(&whole[HEADER_ONLY_BYTES..]);
+
+        let result = wire.read_reply(&pending(2), ready_while_data);
+
+        assert!(timed_out.is_err());
+        assert_eq!(result.expect("the second reply"), second);
+    }
+
+    #[test]
+    fn read_message_answers_a_server_request_and_gives_the_next_message() {
+        let server_request = json!({
+            "jsonrpc": "2.0", "id": "config-1", "method": "workspace/configuration", "params": {}
         });
-        (result, writer)
+        let diagnostics = json!({
+            "jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {}
+        });
+        let mut wire = wire_over(framed(&[server_request, diagnostics.clone()]));
+
+        let message = wire.read_unsolicited(TEST_TIMEOUT, ready_while_data);
+
+        assert_eq!(message.expect("the notification"), diagnostics);
+        let answers = written_messages(&wire.writer);
+        assert_eq!(answers.len(), 1);
+        assert_eq!(answers[0]["id"], "config-1");
+        assert_eq!(answers[0]["error"]["code"], METHOD_NOT_FOUND);
+    }
+
+    #[test]
+    fn read_message_times_out_on_a_partial_frame() {
+        const HEADER_ONLY_BYTES: usize = 10;
+        let notification = json!({"jsonrpc": "2.0", "method": "window/logMessage"});
+        let mut wire = wire_over(half_frame(&notification, HEADER_ONLY_BYTES));
+
+        let result = wire.read_unsolicited(TEST_TIMEOUT, ready_while_data);
+
+        assert!(matches!(result, Err(LspError::JsonRpc(_))));
     }
 
     #[test]
