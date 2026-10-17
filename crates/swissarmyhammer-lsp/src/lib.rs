@@ -50,7 +50,7 @@ pub use server_spec::{
     builtin_lsp_yaml_sources, detect_rust_analyzer, find_executable, load_lsp_servers,
     start_lsp_server, LspServerConfig, LspServerHandle, LSP_REGISTRY,
 };
-pub use session::{DocumentSync, LspSession, PathFilter};
+pub use session::{DocumentOwner, DocumentSync, LspSession, PathFilter, MAX_OPEN_DOCUMENTS};
 pub use severity::DiagnosticSeverity;
 pub use supervisor::{LspSupervisorManager, SupervisorStartOutcome};
 pub use types::{DaemonStatus, LspDaemonState, LspServerSpec, OwnedLspServerSpec};

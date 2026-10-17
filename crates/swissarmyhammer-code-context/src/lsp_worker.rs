@@ -6,8 +6,10 @@
 //! `lsp_indexed = 1`.
 //!
 //! The worker is a pure *consumer* of the daemon-owned [`LspSession`]: it never
-//! spawns a client, and it never sends `didClose` — the session owns the shared
-//! open-document set and keeps documents open across requests. When the session
+//! spawns a client. It syncs each document as [`DocumentOwner::Indexer`] and
+//! releases it after indexing, so the session sends `didClose` for each file
+//! the worker opened only to index it, and keeps a file that a tool op uses
+//! open. When the session
 //! has no live client (the daemon is not yet started or is restarting), the
 //! worker sleeps and retries, leaving files unindexed until the client returns.
 
@@ -21,7 +23,7 @@ use rusqlite::types::Value;
 use rusqlite::Connection;
 use tracing::{debug, info, warn};
 
-use swissarmyhammer_lsp::{DocumentSync, LspJsonRpcClient};
+use swissarmyhammer_lsp::{DocumentOwner, DocumentSync, LspError, LspSession, LspTransport};
 // Re-exported so existing `crate::lsp_worker::SharedLspClient` paths in this
 // crate keep resolving after the alias moved into `swissarmyhammer-lsp`.
 pub use swissarmyhammer_lsp::SharedLspClient;
@@ -208,8 +210,8 @@ fn session_available(
 /// A file skipped because the client vanished mid-batch is left unindexed so a
 /// later pass retries it once the client returns. A file that the session's
 /// path filter skips is marked indexed and is not counted.
-fn process_lsp_batch(
-    session: &SharedLspSession,
+fn process_lsp_batch<C: LspTransport>(
+    session: &LspSession<C>,
     db: &SharedDb,
     workspace_root: &Path,
     dirty_files: &[String],
@@ -302,9 +304,12 @@ enum FileIndexOutcome {
 /// Index a single file via the shared session: open, documentSymbol, call
 /// hierarchy, persist, mark indexed.
 ///
-/// The document is opened through the session, which owns the shared
-/// open-document set and keeps documents open across requests — there is no
-/// `didClose` here. Both LSP-collection phases run inside a single
+/// The document is synced through the session as [`DocumentOwner::Indexer`].
+/// After the collection phases, the worker releases the document, also when a
+/// phase failed: the session sends `didClose` when the worker still owns the
+/// document, and keeps it open when a tool op (hover, definition, diagnostics)
+/// synced it. So a server does not keep work for each file sah only indexed.
+/// Both LSP-collection phases run inside a single
 /// [`LspSession::with_client`] closure, so the client lock is held across the
 /// whole symbol+edge exchange and no other consumer can interleave a request
 /// and steal a response off the shared pipe. The DB mutex is locked only for
@@ -339,8 +344,8 @@ enum FileIndexOutcome {
 ///
 /// Edge-collection failures are logged but do not fail the whole index pass — a
 /// file without edges is still useful, and the next pass will try again.
-fn index_single_file(
-    session: &SharedLspSession,
+fn index_single_file<C: LspTransport>(
+    session: &LspSession<C>,
     db: &SharedDb,
     full_path: &Path,
     relative_path: &str,
@@ -354,24 +359,55 @@ fn index_single_file(
     // Read file content
     let content = std::fs::read_to_string(full_path)?;
 
-    // Sync the document to the session (no DB lock needed). The session owns the
-    // open-document lifecycle; no didClose is sent here. `sync_open` opens a
-    // never-seen file and, crucially, refreshes the buffer with `didChange` for
-    // a file that was edited and re-enqueued (cleanup flips `lsp_indexed = 0` on
-    // a content-hash change) — otherwise `documentSymbol`/call-hierarchy would
-    // run against the stale buffer the server still holds from the first open. A
+    // Sync the document to the session (no DB lock needed). `sync_open_for`
+    // opens a never-seen file and, crucially, refreshes the buffer with
+    // `didChange` for a file that was edited and re-enqueued (cleanup flips
+    // `lsp_indexed = 0` on a content-hash change) — otherwise
+    // `documentSymbol`/call-hierarchy would run against a stale buffer. A
     // client that vanished after the availability check surfaces as NotRunning —
     // treat that as "skip, leave unindexed", not a hard error. A path that the
     // session's filter skips gets no request at all.
-    match session.sync_open(full_path, &content) {
+    match session.sync_open_for(full_path, &content, DocumentOwner::Indexer) {
         Ok(DocumentSync::Synced) => {}
         Ok(DocumentSync::Skipped) => return Ok(FileIndexOutcome::Skipped),
-        Err(swissarmyhammer_lsp::LspError::NotRunning) => {
-            return Ok(FileIndexOutcome::ClientUnavailable)
+        Err(LspError::NotRunning) => return Ok(FileIndexOutcome::ClientUnavailable),
+        Err(e) => {
+            release_indexed_document(session, full_path);
+            return Err(e.into());
         }
-        Err(e) => return Err(e.into()),
     }
 
+    // Release the document on every exit path after the sync, also when a
+    // collection phase failed.
+    let outcome = collect_from_synced_document(session, db, full_path, relative_path);
+    release_indexed_document(session, full_path);
+    outcome
+}
+
+/// Close the document that the worker synced for indexing.
+///
+/// The session closes the document only when the worker still owns it (see
+/// [`LspSession::release`]). A missing client is not an error: the daemon
+/// forgets every open document when the server goes away. Any other failure is
+/// logged and never propagated, so the batch loop continues.
+fn release_indexed_document<C: LspTransport>(session: &LspSession<C>, full_path: &Path) {
+    match session.release(full_path, DocumentOwner::Indexer) {
+        Ok(()) | Err(LspError::NotRunning) => {}
+        Err(e) => warn!("LSP didClose failed for {}: {}", full_path.display(), e),
+    }
+}
+
+/// Run the collection phases for a document that the worker already synced,
+/// and apply the invalidation actions they give.
+///
+/// Factored out of [`index_single_file`] so that function can release the
+/// document on every exit path of this one.
+fn collect_from_synced_document<C: LspTransport>(
+    session: &LspSession<C>,
+    db: &SharedDb,
+    full_path: &Path,
+    relative_path: &str,
+) -> Result<FileIndexOutcome, CodeContextError> {
     // Run both collection phases inside a single client-lock hold. The closure
     // returns `Result<_, CodeContextError>`; we wrap it in `Ok(..)` so the
     // transport-level `with_client` cannot conflate a closure failure with a
@@ -400,8 +436,8 @@ fn index_single_file(
 /// inside one [`LspSession::with_client`] hold. The DB mutex is locked only for
 /// each persist write. Returns the symbol-phase result (symbol count + pending
 /// invalidation actions); edge-collection failures are logged, not propagated.
-fn run_collection_phases(
-    client: &mut LspJsonRpcClient,
+fn run_collection_phases<C: LspTransport>(
+    client: &mut C,
     db: &SharedDb,
     full_path: &Path,
     relative_path: &str,
@@ -630,7 +666,7 @@ mod tests {
     use crate::test_fixtures::none_session;
     use rusqlite::Connection;
     use std::sync::Mutex;
-    use swissarmyhammer_lsp::LspSession;
+    use swissarmyhammer_lsp::LspJsonRpcClient;
 
     /// Batch size used by the worker-loop tests (small so a single pass drains
     /// the fixture's dirty files).
@@ -1816,6 +1852,143 @@ mod tests {
         let result = index_single_file(&session, &shared_db, &full_path, relative_path);
 
         assert_eq!(result.unwrap(), FileIndexOutcome::Skipped);
+    }
+
+    // -- didClose after indexing (fake LSP client that records the wire) --
+
+    use crate::test_fixtures::{recording_session, RecordingTransport, WireMessage};
+
+    const DID_OPEN: &str = "textDocument/didOpen";
+    const DID_CLOSE: &str = "textDocument/didClose";
+
+    /// Write `count` Rust files under a new workspace, and give the workspace
+    /// and the relative path of each file.
+    fn workspace_with_files(count: usize) -> (tempfile::TempDir, Vec<String>) {
+        let workspace = tempfile::tempdir().unwrap();
+        let relative_paths: Vec<String> = (0..count).map(|i| format!("src/f{i}.rs")).collect();
+        std::fs::create_dir_all(workspace.path().join("src")).unwrap();
+        for relative_path in &relative_paths {
+            std::fs::write(workspace.path().join(relative_path), "fn f() {}").unwrap();
+        }
+        (workspace, relative_paths)
+    }
+
+    /// The recorded wire traffic of the client.
+    fn recorded_wire(client: &crate::test_fixtures::RecordingClient) -> Vec<WireMessage> {
+        client.lock().unwrap().as_ref().unwrap().wire.clone()
+    }
+
+    /// Assert that the wire traffic is one `didOpen`, one or more requests,
+    /// then one `didClose`, and nothing after the `didClose`.
+    fn assert_close_follows_the_requests(wire: &[WireMessage]) {
+        assert_eq!(
+            wire.first(),
+            Some(&WireMessage::Notification(DID_OPEN.into()))
+        );
+        assert_eq!(
+            wire.last(),
+            Some(&WireMessage::Notification(DID_CLOSE.into()))
+        );
+        let requests = &wire[1..wire.len() - 1];
+        assert!(!requests.is_empty(), "the indexing must send requests");
+        assert!(
+            requests
+                .iter()
+                .all(|message| matches!(message, WireMessage::Request(_))),
+            "only requests may come between didOpen and didClose: {wire:?}"
+        );
+    }
+
+    #[test]
+    fn test_index_single_file_sends_did_close_after_the_indexing_requests() {
+        let (workspace, relative_paths) = workspace_with_files(1);
+        let db = create_test_db();
+        insert_test_file(&db, &relative_paths[0]);
+        let shared_db: SharedDb = Arc::new(Mutex::new(db));
+        let (session, client) = recording_session(RecordingTransport::default());
+        let full_path = workspace.path().join(&relative_paths[0]);
+
+        let result = index_single_file(&session, &shared_db, &full_path, &relative_paths[0]);
+
+        assert_eq!(result.unwrap(), FileIndexOutcome::Indexed(1));
+        let wire = recorded_wire(&client);
+        assert_close_follows_the_requests(&wire);
+        assert!(wire.contains(&WireMessage::Request(
+            "textDocument/prepareCallHierarchy".into()
+        )));
+        assert!(session.open_documents().is_empty());
+    }
+
+    #[test]
+    fn test_index_single_file_sends_did_close_when_the_requests_fail() {
+        let (workspace, relative_paths) = workspace_with_files(1);
+        let db = create_test_db();
+        insert_test_file(&db, &relative_paths[0]);
+        let shared_db: SharedDb = Arc::new(Mutex::new(db));
+        let (session, client) = recording_session(RecordingTransport {
+            fail_requests: true,
+            ..RecordingTransport::default()
+        });
+        let full_path = workspace.path().join(&relative_paths[0]);
+
+        let _ = index_single_file(&session, &shared_db, &full_path, &relative_paths[0]);
+
+        assert_close_follows_the_requests(&recorded_wire(&client));
+        assert!(session.open_documents().is_empty());
+    }
+
+    #[test]
+    fn test_index_single_file_sends_did_close_when_the_persist_fails() {
+        let (workspace, relative_paths) = workspace_with_files(1);
+        // A database with no schema: the symbol persist step fails.
+        let shared_db: SharedDb = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        let (session, client) = recording_session(RecordingTransport::default());
+        let full_path = workspace.path().join(&relative_paths[0]);
+
+        let result = index_single_file(&session, &shared_db, &full_path, &relative_paths[0]);
+
+        assert!(result.is_err(), "the persist must fail: {result:?}");
+        assert_close_follows_the_requests(&recorded_wire(&client));
+        assert!(session.open_documents().is_empty());
+    }
+
+    #[test]
+    fn test_index_single_file_keeps_a_document_that_a_tool_op_uses() {
+        let (workspace, relative_paths) = workspace_with_files(1);
+        let db = create_test_db();
+        insert_test_file(&db, &relative_paths[0]);
+        let shared_db: SharedDb = Arc::new(Mutex::new(db));
+        let (session, client) = recording_session(RecordingTransport::default());
+        let full_path = workspace.path().join(&relative_paths[0]);
+        session.sync_open(&full_path, "fn f() {}").unwrap();
+
+        index_single_file(&session, &shared_db, &full_path, &relative_paths[0]).unwrap();
+
+        let transport = client.lock().unwrap();
+        assert_eq!(transport.as_ref().unwrap().notification_count(DID_CLOSE), 0);
+        assert!(session.is_open(&full_path));
+    }
+
+    #[test]
+    fn test_process_lsp_batch_leaves_no_indexed_document_open() {
+        const FILE_COUNT: usize = swissarmyhammer_lsp::MAX_OPEN_DOCUMENTS + 5;
+        let (workspace, relative_paths) = workspace_with_files(FILE_COUNT);
+        let db = create_test_db();
+        for relative_path in &relative_paths {
+            insert_test_file(&db, relative_path);
+        }
+        let shared_db: SharedDb = Arc::new(Mutex::new(db));
+        let (session, client) = recording_session(RecordingTransport::default());
+
+        let indexed = process_lsp_batch(&session, &shared_db, workspace.path(), &relative_paths);
+
+        assert_eq!(indexed, FILE_COUNT as u64);
+        assert!(session.open_documents().is_empty());
+        let transport = client.lock().unwrap();
+        assert_eq!(
+            transport.as_ref().unwrap().notification_count(DID_CLOSE),
+            FILE_COUNT
+        );
     }
 
     // -- Poison recovery tests --

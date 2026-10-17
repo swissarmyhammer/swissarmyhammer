@@ -11,6 +11,13 @@
 //! code-context indexer and query ops, diagnostics) cannot drift into a second
 //! view of what is open. [`LspDaemon`](crate::daemon::LspDaemon) owns exactly
 //! one session per server; no other type spawns a client.
+//!
+//! The open set is bounded. It keeps at most [`MAX_OPEN_DOCUMENTS`] documents
+//! open, and it records the [`DocumentOwner`] of each document, so the indexing
+//! worker can close the documents it opened only to index them. The
+//! `open_documents` submodule holds that policy in one place.
+
+mod open_documents;
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -27,6 +34,8 @@ use crate::diagnostics::{
     parse_diagnostics_from_result, parse_publish_diagnostics, DiagnosticUpdate,
 };
 use crate::error::LspError;
+use open_documents::OpenDocuments;
+pub use open_documents::MAX_OPEN_DOCUMENTS;
 
 /// Capacity of the per-session diagnostics broadcast channel.
 ///
@@ -56,6 +65,19 @@ pub enum DocumentSync {
     /// The [`PathFilter`] skips the path. The session sent nothing, and the
     /// caller must send no request for the document.
     Skipped,
+}
+
+/// Who uses an open document. The session closes a document for an owner
+/// only when that owner still owns it (see [`LspSession::release`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DocumentOwner {
+    /// A tool op (hover, definition, diagnostics and the like). A tool use is
+    /// sticky: a document that a tool op synced belongs to the tool ops, and
+    /// only the open-document limit closes it.
+    Tool,
+    /// The indexing worker, which opens a document only to index it and then
+    /// releases it.
+    Indexer,
 }
 
 /// What the server is believed to know about one open document.
@@ -117,8 +139,9 @@ struct SessionInner<C: LspTransport> {
     /// restarting). Operations against a `None` client return
     /// [`LspError::NotRunning`].
     client: Arc<Mutex<Option<C>>>,
-    /// What the server believes is open: `uri -> `[`DocState`].
-    docs: Mutex<HashMap<String, DocState>>,
+    /// What the server believes is open: `uri -> `[`DocState`], with the owner
+    /// and the last use of each document.
+    docs: Mutex<OpenDocuments>,
     /// Latest-per-uri diagnostics cache: `uri -> `latest full diagnostic set.
     ///
     /// This is **derived state** — a live mirror of what the server has most
@@ -177,7 +200,7 @@ impl<C: LspTransport> LspSession<C> {
         Self {
             inner: Arc::new(SessionInner {
                 client,
-                docs: Mutex::new(HashMap::new()),
+                docs: Mutex::new(OpenDocuments::default()),
                 diagnostics: Mutex::new(HashMap::new()),
                 diagnostics_tx,
                 ready: AtomicBool::new(true),
@@ -224,25 +247,40 @@ impl<C: LspTransport> LspSession<C> {
     /// Used by tests and observability; the returned map is a copy, not a live
     /// view.
     pub fn open_documents(&self) -> HashMap<String, DocState> {
-        self.lock_docs().clone()
+        self.lock_docs().snapshot()
     }
 
     /// Whether the given path is currently believed open by the server.
     pub fn is_open(&self, path: &Path) -> bool {
-        self.lock_docs().contains_key(&file_uri(path))
+        self.lock_docs().contains(&file_uri(path))
     }
 
-    /// Open a document, idempotently.
+    /// Open a document for a tool op, idempotently.
     ///
     /// The first `open` for a uri sends `textDocument/didOpen` at version 1 and
     /// records it in the open set. A subsequent `open` for an already-open uri
-    /// is a no-op: no duplicate `didOpen` is emitted and the recorded state is
-    /// unchanged. The document then stays open across requests.
+    /// sends no duplicate `didOpen` and keeps the recorded state; it only marks
+    /// the document as used. The document then stays open across requests,
+    /// until the open-document limit closes it (see [`MAX_OPEN_DOCUMENTS`]).
     ///
     /// A path that the [`PathFilter`] skips gets no `didOpen`, and the result
     /// is [`DocumentSync::Skipped`]. Otherwise the result is
     /// [`DocumentSync::Synced`].
     pub fn open(&self, path: &Path, text: &str) -> Result<DocumentSync, LspError> {
+        self.open_for(path, text, DocumentOwner::Tool)
+    }
+
+    /// Open a document for `owner`, idempotently. See [`open`](Self::open).
+    ///
+    /// At the open-document limit, the least recently used document closes
+    /// before the new `didOpen`. When that `didClose` fails, the open fails and
+    /// the open set is not changed.
+    fn open_for(
+        &self,
+        path: &Path,
+        text: &str,
+        owner: DocumentOwner,
+    ) -> Result<DocumentSync, LspError> {
         if self.skips_path(path) {
             return Ok(DocumentSync::Skipped);
         }
@@ -252,9 +290,13 @@ impl<C: LspTransport> LspSession<C> {
         // fire a didOpen. Lock order is always docs -> client (notify locks the
         // separate client mutex), never the reverse, so this cannot deadlock.
         let mut docs = self.lock_docs();
-        if docs.contains_key(&uri) {
+        if docs.contains(&uri) {
             // Already open — suppress the duplicate didOpen.
+            docs.touch(&uri, owner);
             return Ok(DocumentSync::Synced);
+        }
+        if let Some(oldest) = docs.eviction_candidate() {
+            self.close_locked(&mut docs, &oldest)?;
         }
 
         self.notify(
@@ -275,11 +317,12 @@ impl<C: LspTransport> LspSession<C> {
                 version: 1,
                 text_hash: hash_text(text),
             },
+            owner,
         );
         Ok(DocumentSync::Synced)
     }
 
-    /// Apply a full-text change to an open document.
+    /// Apply a full-text change to an open document, as a tool op.
     ///
     /// Bumps the document version and sends a full-content
     /// `textDocument/didChange`. A change whose text is identical to what the
@@ -288,6 +331,14 @@ impl<C: LspTransport> LspSession<C> {
     /// sibling [`LspError::JsonRpc`] describing the contract violation — callers
     /// must `open` first.
     pub fn change(&self, path: &Path, text: &str) -> Result<(), LspError> {
+        self.change_for(path, text, DocumentOwner::Tool)
+    }
+
+    /// Apply a full-text change for `owner`. See [`change`](Self::change).
+    ///
+    /// The change marks the document as used by `owner`, also when the text
+    /// is unchanged.
+    fn change_for(&self, path: &Path, text: &str, owner: DocumentOwner) -> Result<(), LspError> {
         let uri = file_uri(path);
         let new_hash = hash_text(text);
 
@@ -296,9 +347,10 @@ impl<C: LspTransport> LspSession<C> {
         // changes cannot both compute the same `next_version`. Lock order is
         // docs -> client, matching `open`.
         let mut docs = self.lock_docs();
-        let state = docs.get(&uri).ok_or_else(|| {
+        let state = docs.state(&uri).ok_or_else(|| {
             LspError::JsonRpc(format!("change on document that is not open: {uri}"))
         })?;
+        docs.touch(&uri, owner);
         if state.text_hash == new_hash {
             // No textual change — nothing to send.
             return Ok(());
@@ -316,10 +368,13 @@ impl<C: LspTransport> LspSession<C> {
             }),
         )?;
 
-        if let Some(state) = docs.get_mut(&uri) {
-            state.version = next_version;
-            state.text_hash = new_hash;
-        }
+        docs.set_state(
+            &uri,
+            DocState {
+                version: next_version,
+                text_hash: new_hash,
+            },
+        );
         Ok(())
     }
 
@@ -341,14 +396,33 @@ impl<C: LspTransport> LspSession<C> {
     /// result is [`DocumentSync::Skipped`]. The caller must then send no
     /// request for the document. This is not an error: a skipped path is a
     /// normal outcome, also when the session has no live client.
+    ///
+    /// This is the sync of a tool op: the document belongs to the tool ops
+    /// from then on (see [`DocumentOwner::Tool`]).
     pub fn sync_open(&self, path: &Path, text: &str) -> Result<DocumentSync, LspError> {
+        self.sync_open_for(path, text, DocumentOwner::Tool)
+    }
+
+    /// Make the server's buffer for `path` match `text` for `owner`.
+    ///
+    /// This is [`sync_open`](Self::sync_open) with an explicit owner. The
+    /// indexing worker uses [`DocumentOwner::Indexer`], and then calls
+    /// [`release`](Self::release) when it is done with the document. A
+    /// document that a tool op already uses stays with the tool ops.
+    pub fn sync_open_for(
+        &self,
+        path: &Path,
+        text: &str,
+        owner: DocumentOwner,
+    ) -> Result<DocumentSync, LspError> {
         if self.skips_path(path) {
             Ok(DocumentSync::Skipped)
         } else if self.is_open(path) {
             // Already open — refresh the buffer (no-op when text is unchanged).
-            self.change(path, text).map(|()| DocumentSync::Synced)
+            self.change_for(path, text, owner)
+                .map(|()| DocumentSync::Synced)
         } else {
-            self.open(path, text)
+            self.open_for(path, text, owner)
         }
     }
 
@@ -361,7 +435,7 @@ impl<C: LspTransport> LspSession<C> {
         // Hold the docs lock across the send so a concurrent `close` cannot
         // remove the document between the membership check and the didSave.
         let docs = self.lock_docs();
-        if !docs.contains_key(&uri) {
+        if !docs.contains(&uri) {
             return Ok(());
         }
 
@@ -379,14 +453,36 @@ impl<C: LspTransport> LspSession<C> {
     /// Closing a document that is not open is a no-op (no notification).
     pub fn close(&self, path: &Path) -> Result<(), LspError> {
         let uri = file_uri(path);
-        // Hold the docs lock across the send and only remove the uri once the
-        // didClose has gone out: on a notify failure the open set still
-        // reflects what the server knows, matching `open`/`change`.
+        // Hold the docs lock across the send: see `close_locked`.
         let mut docs = self.lock_docs();
-        if !docs.contains_key(&uri) {
+        if !docs.contains(&uri) {
             return Ok(());
         }
+        self.close_locked(&mut docs, &uri)
+    }
 
+    /// Close an open document for `owner`, when `owner` still owns it.
+    ///
+    /// The indexing worker calls this with [`DocumentOwner::Indexer`] after it
+    /// indexed a document, also when the indexing failed. The document closes
+    /// only when no tool op synced it, so a document that a hover, definition
+    /// or diagnostics op uses stays open. A document that is not open, or that
+    /// another owner owns, gets no notification.
+    pub fn release(&self, path: &Path, owner: DocumentOwner) -> Result<(), LspError> {
+        let uri = file_uri(path);
+        let mut docs = self.lock_docs();
+        if docs.owner(&uri) != Some(owner) {
+            return Ok(());
+        }
+        self.close_locked(&mut docs, &uri)
+    }
+
+    /// Send `textDocument/didClose` for `uri` and remove it from the open set.
+    ///
+    /// The caller holds the docs lock across the send. The uri is removed only
+    /// once the didClose has gone out: on a notify failure the open set still
+    /// reflects what the server knows, matching `open`/`change`.
+    fn close_locked(&self, docs: &mut OpenDocuments, uri: &str) -> Result<(), LspError> {
         self.notify(
             "textDocument/didClose",
             json!({
@@ -394,7 +490,7 @@ impl<C: LspTransport> LspSession<C> {
             }),
         )?;
 
-        docs.remove(&uri);
+        docs.remove(uri);
         Ok(())
     }
 
@@ -602,7 +698,7 @@ impl<C: LspTransport> LspSession<C> {
     }
 
     /// Lock the open-document map, recovering from a poisoned mutex.
-    fn lock_docs(&self) -> std::sync::MutexGuard<'_, HashMap<String, DocState>> {
+    fn lock_docs(&self) -> std::sync::MutexGuard<'_, OpenDocuments> {
         self.inner
             .docs
             .lock()
@@ -1240,5 +1336,130 @@ mod tests {
             session.is_open(&path),
             "a failed didClose must leave the document in the open set"
         );
+    }
+
+    #[test]
+    fn release_closes_a_document_that_the_indexer_opened() {
+        let (session, client) = session_with_fake();
+        let path = PathBuf::from("/tmp/indexed.rs");
+
+        session
+            .sync_open_for(&path, "fn i() {}", DocumentOwner::Indexer)
+            .expect("indexer open");
+        session
+            .release(&path, DocumentOwner::Indexer)
+            .expect("indexer release");
+
+        assert_eq!(notification_count(&client, "textDocument/didClose"), 1);
+        assert!(!session.is_open(&path));
+    }
+
+    #[test]
+    fn release_keeps_a_document_that_a_tool_op_synced_after_the_indexer() {
+        let (session, client) = session_with_fake();
+        let path = PathBuf::from("/tmp/hovered.rs");
+
+        session
+            .sync_open_for(&path, "fn h() {}", DocumentOwner::Indexer)
+            .expect("indexer open");
+        session.sync_open(&path, "fn h() {}").expect("tool sync");
+        session
+            .release(&path, DocumentOwner::Indexer)
+            .expect("indexer release");
+
+        assert_eq!(notification_count(&client, "textDocument/didClose"), 0);
+        assert!(session.is_open(&path));
+    }
+
+    #[test]
+    fn release_keeps_a_document_that_a_tool_op_opened_first() {
+        let (session, client) = session_with_fake();
+        let path = PathBuf::from("/tmp/defined.rs");
+
+        session.sync_open(&path, "fn d() {}").expect("tool open");
+        session
+            .sync_open_for(&path, "fn d() {}", DocumentOwner::Indexer)
+            .expect("indexer sync");
+        session
+            .release(&path, DocumentOwner::Indexer)
+            .expect("indexer release");
+
+        assert_eq!(notification_count(&client, "textDocument/didClose"), 0);
+        assert!(session.is_open(&path));
+    }
+
+    #[test]
+    fn release_of_a_document_that_is_not_open_sends_nothing() {
+        let (session, client) = session_with_fake();
+
+        session
+            .release(Path::new("/tmp/never.rs"), DocumentOwner::Indexer)
+            .expect("release of an unknown document");
+
+        assert_eq!(notification_count(&client, "textDocument/didClose"), 0);
+    }
+
+    /// The path of the numbered test document `index`.
+    fn numbered_path(index: usize) -> PathBuf {
+        PathBuf::from(format!("/tmp/limit/doc{index}.rs"))
+    }
+
+    #[test]
+    fn open_documents_never_exceed_the_limit() {
+        const EXTRA_DOCUMENTS: usize = 10;
+        let (session, client) = session_with_fake();
+
+        for index in 0..MAX_OPEN_DOCUMENTS + EXTRA_DOCUMENTS {
+            session
+                .sync_open(&numbered_path(index), "fn x() {}")
+                .expect("open");
+        }
+
+        assert_eq!(session.open_documents().len(), MAX_OPEN_DOCUMENTS);
+        assert_eq!(
+            notification_count(&client, "textDocument/didClose"),
+            EXTRA_DOCUMENTS
+        );
+    }
+
+    #[test]
+    fn the_limit_closes_the_least_recently_used_document() {
+        let (session, _client) = session_with_fake();
+        for index in 0..MAX_OPEN_DOCUMENTS {
+            session
+                .sync_open(&numbered_path(index), "fn x() {}")
+                .expect("open");
+        }
+
+        // A tool op uses document 0 again, so document 1 is now the oldest.
+        session
+            .sync_open(&numbered_path(0), "fn x() {}")
+            .expect("re-sync");
+        session
+            .sync_open(&numbered_path(MAX_OPEN_DOCUMENTS), "fn x() {}")
+            .expect("open one more");
+
+        assert!(session.is_open(&numbered_path(0)));
+        assert!(!session.is_open(&numbered_path(1)));
+        assert!(session.is_open(&numbered_path(MAX_OPEN_DOCUMENTS)));
+    }
+
+    #[test]
+    fn a_failed_eviction_close_fails_the_open_and_keeps_the_limit() {
+        let (session, client) = session_with_fake();
+        for index in 0..MAX_OPEN_DOCUMENTS {
+            session
+                .sync_open(&numbered_path(index), "fn x() {}")
+                .expect("open");
+        }
+        client.lock().unwrap().as_mut().unwrap().fail_notifications = true;
+
+        let err = session
+            .sync_open(&numbered_path(MAX_OPEN_DOCUMENTS), "fn x() {}")
+            .expect_err("the eviction didClose fails");
+
+        assert!(matches!(err, LspError::JsonRpc(_)));
+        assert_eq!(session.open_documents().len(), MAX_OPEN_DOCUMENTS);
+        assert!(!session.is_open(&numbered_path(MAX_OPEN_DOCUMENTS)));
     }
 }

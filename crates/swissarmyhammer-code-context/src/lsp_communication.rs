@@ -4,9 +4,9 @@
 //! [`parse_document_symbols`] helper now live in `swissarmyhammer-lsp`; this
 //! module owns the code-context-specific layer on top of that transport:
 //! collecting document symbols and call-hierarchy edges from a language server
-//! and persisting them into the index database. These are free functions over a
-//! `&mut LspJsonRpcClient` so they can be unit-tested against the in-memory
-//! fake transport in `swissarmyhammer-lsp`.
+//! and persisting them into the index database. These are free functions over
+//! any [`LspTransport`] so they can be unit-tested against an in-memory fake
+//! transport.
 
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -14,7 +14,7 @@ use std::path::Path;
 use tracing::debug;
 
 use lsp_types::{CallHierarchyItem, CallHierarchyOutgoingCall, DocumentSymbol};
-use swissarmyhammer_lsp::parse_document_symbols;
+use swissarmyhammer_lsp::{parse_document_symbols, LspTransport};
 // Re-exported so existing `crate::lsp_communication::LspJsonRpcClient` paths in
 // this crate keep resolving after the client moved into `swissarmyhammer-lsp`.
 pub use swissarmyhammer_lsp::LspJsonRpcClient;
@@ -89,10 +89,10 @@ pub fn collect_and_persist_symbols(
 /// Collect symbols from the LSP server for a given file.
 ///
 /// Sends `textDocument/documentSymbol` through the transport and parses the
-/// response. Operates on a `&mut LspJsonRpcClient` so it can be exercised with
-/// either a real language server or the in-memory fake transport.
-pub fn collect_file_symbols(
-    client: &mut LspJsonRpcClient,
+/// response. Operates on any [`LspTransport`] so it can be exercised with
+/// either a real language server or an in-memory fake transport.
+pub fn collect_file_symbols<C: LspTransport>(
+    client: &mut C,
     file_path: &Path,
 ) -> Result<LspCollectionResult, CodeContextError> {
     let file_path_str = file_path.to_string_lossy().to_string();
@@ -142,8 +142,8 @@ pub fn collect_file_symbols(
 /// [`LspCollectionResult::pending_actions`] lists files that had edges
 /// to symbols that no longer exist in `relative_path` and therefore need
 /// their outgoing edges refreshed.
-pub fn collect_and_persist_file_symbols(
-    client: &mut LspJsonRpcClient,
+pub fn collect_and_persist_file_symbols<C: LspTransport>(
+    client: &mut C,
     conn: &Connection,
     file_path: &Path,
     relative_path: &str,
@@ -189,8 +189,8 @@ pub fn collect_and_persist_file_symbols(
 ///
 /// For each function/method symbol, prepares a call hierarchy item,
 /// then queries outgoing calls. Returns edges suitable for `write_edges`.
-pub fn collect_call_edges(
-    client: &mut LspJsonRpcClient,
+pub fn collect_call_edges<C: LspTransport>(
+    client: &mut C,
     file_path: &Path,
     relative_path: &str,
 ) -> Result<Vec<CallEdge>, CodeContextError> {
@@ -226,8 +226,8 @@ pub fn collect_call_edges(
 }
 
 /// Collect call edges and persist them to the database.
-pub fn collect_and_persist_call_edges(
-    client: &mut LspJsonRpcClient,
+pub fn collect_and_persist_call_edges<C: LspTransport>(
+    client: &mut C,
     conn: &Connection,
     file_path: &Path,
     relative_path: &str,
@@ -240,8 +240,8 @@ pub fn collect_and_persist_call_edges(
 }
 
 /// Collect outgoing call edges for a single callable symbol.
-fn collect_edges_for_symbol(
-    client: &mut LspJsonRpcClient,
+fn collect_edges_for_symbol<C: LspTransport>(
+    client: &mut C,
     uri: &str,
     sym: &FlatSymbol,
     file_path: &Path,
