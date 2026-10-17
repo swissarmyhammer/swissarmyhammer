@@ -114,8 +114,11 @@ impl McpServer {
 
         // Single gate: only the leader gets a supervisor handle; a follower gets
         // `None` and spawns no LSP server at all.
-        match Self::spawn_lsp_supervisor_if_leader(leader_shutdown, &workspace_root) {
+        match Self::spawn_lsp_supervisor_if_leader(leader_shutdown.clone(), &workspace_root) {
             Some(lsp_handle) => {
+                // Each worker of this tenure gets the flag that startup read,
+                // so it stops with this tenure.
+                let shutdown = leader_shutdown.expect("leader has a shutdown flag");
                 // Prove which build elected itself leader: this is the
                 // process actually indexing the workspace, so record its
                 // baked-in git SHA in its own log.
@@ -126,7 +129,7 @@ impl McpServer {
                 );
                 // Leader: supervisor spawned. Start TS indexing + file watcher
                 // and run the LSP health/indexing loop.
-                Self::start_workers_if_leader(&ws, &workspace_root);
+                Self::start_workers_if_leader(&ws, &workspace_root, Arc::clone(&shutdown));
                 // The leader runs no follower diagnostics subscriber, so there is
                 // nothing to cancel on (a no-op) re-election.
                 Self::spawn_reelection_loop(Arc::clone(&ws), workspace_root.clone(), None);
@@ -135,7 +138,7 @@ impl McpServer {
                 // polling for re-promotion — preserving the single-writer
                 // invariant (no two indexers).
                 Self::spawn_leader_heartbeat_loop(Arc::clone(&ws), workspace_root.clone());
-                Self::spawn_lsp_health_loop(lsp_handle, ws, workspace_root);
+                Self::spawn_lsp_health_loop(lsp_handle, ws, workspace_root, shutdown);
             }
             None => {
                 // Follower: spawned NOTHING (no rust-analyzer, no indexing).
@@ -203,15 +206,16 @@ impl McpServer {
     }
 
     /// If the workspace is already leader, start TS indexing + watcher workers.
+    ///
+    /// `shutdown` is the shutdown flag of the leader tenure that startup read.
+    /// The workers get this flag, so they stop with that tenure.
     fn start_workers_if_leader(
         ws: &Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
         workspace_root: &std::path::Path,
+        shutdown: ShutdownFlag,
     ) {
-        let ws_lock = ws.lock().expect("workspace mutex poisoned");
-        if let Some(shared_db) = ws_lock.shared_db() {
-            let shutdown = ws_lock
-                .leader_shutdown_flag()
-                .expect("leader has a shutdown flag");
+        let shared_db = ws.lock().expect("workspace mutex poisoned").shared_db();
+        if let Some(shared_db) = shared_db {
             Self::start_indexing_workers(workspace_root.to_path_buf(), shared_db, shutdown);
         }
     }
@@ -378,22 +382,32 @@ impl McpServer {
     }
 
     /// Waits for the LSP supervisor to finish, starts LSP indexing workers if
-    /// we're the leader, then runs the 60s LSP health-check loop forever.
+    /// we're the leader, then runs the 60s LSP health-check loop until the
+    /// leader tenure ends.
+    ///
+    /// `shutdown` is the shutdown flag of the tenure that started the
+    /// supervisor. The LSP workers get this same flag, not the flag that the
+    /// workspace holds when they start: a step-down and a new promotion can
+    /// come first, and the workers of the old tenure must stop with it.
     fn spawn_lsp_health_loop(
         lsp_handle: tokio::task::JoinHandle<LspStartup>,
         ws: Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
         workspace_root: std::path::PathBuf,
+        shutdown: ShutdownFlag,
     ) {
-        let shutdown = ws
-            .lock()
-            .expect("workspace mutex poisoned")
-            .leader_shutdown_flag()
-            .expect("leader has a shutdown flag");
+        let worker_shutdown = Arc::clone(&shutdown);
         Self::spawn_drain_supervisor_and_health_loop(
             lsp_handle,
             shutdown,
             move |supervisor, clients| {
-                start_lsp_workers_if_leader(&ws, &workspace_root, supervisor, clients, "");
+                start_lsp_workers_if_leader(
+                    &ws,
+                    &workspace_root,
+                    supervisor,
+                    clients,
+                    "",
+                    worker_shutdown,
+                );
             },
         );
     }
@@ -1146,16 +1160,30 @@ fn handle_promotion_result(
     }
 }
 
-/// If the workspace is currently leader, spawn LSP indexing workers for the
-/// supplied sessions. No-op if the workspace has no shared DB.
+/// Spawn the LSP workers of one leader tenure for the supplied sessions.
+///
+/// `shutdown` is the shutdown flag of the tenure that started `supervisor`.
+/// The workers get this flag, so they stop with that tenure, together with
+/// the TS, watcher and reconcile workers of the same tenure. When the flag is
+/// set (a step-down came first), no worker starts. This reads the flag under
+/// the workspace lock. A step-down needs that lock, so the tenure cannot end
+/// while this reads the shared DB of the workspace. No-op if the workspace
+/// has no shared DB.
 fn start_lsp_workers_if_leader(
     ws: &Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
     workspace_root: &std::path::Path,
     supervisor: &SharedLspSupervisor,
     clients: &[(String, SharedLspSession)],
     log_suffix: &str,
+    shutdown: ShutdownFlag,
 ) {
     let ws_lock = ws.lock().expect("workspace mutex poisoned");
+    if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+        tracing::info!(
+            "code-context: the leader tenure ended before the LSP workers started; starting no LSP worker"
+        );
+        return;
+    }
     let Some(shared_db) = ws_lock.shared_db() else {
         return;
     };
@@ -1163,11 +1191,6 @@ fn start_lsp_workers_if_leader(
     let bus_frontend = ws_lock.bus_addresses().map(|a| a.frontend);
     // The election request socket the leader binds so followers can route to it.
     let socket_path = ws_lock.socket_path().to_path_buf();
-    // The same shutdown flag the workspace owns for this tenure, so these LSP
-    // workers stop on step-down alongside the TS/watcher/reconcile workers.
-    let shutdown = ws_lock
-        .leader_shutdown_flag()
-        .expect("leader has a shutdown flag");
     drop(ws_lock);
     let setup = LspWorkerSetup {
         workspace_root,
@@ -1335,6 +1358,41 @@ mod tests {
             "the slot of a stepped-down process must be empty"
         );
         assert!(startup.clients.is_empty(), "no LSP server may start");
+    }
+
+    /// A session that has no LSP process behind it.
+    fn session_without_a_server() -> SharedLspSession {
+        SharedLspSession::new(Arc::new(std::sync::Mutex::new(None)), "rust")
+    }
+
+    /// A step-down and a new promotion can come between the start of a
+    /// supervisor and the start of its LSP workers. The workers get the
+    /// shutdown flag of the old tenure, which the step-down set, so no worker
+    /// starts. The request server is one of the workers, and it binds the
+    /// election socket when it starts, so the socket must not be on disk.
+    #[tokio::test]
+    async fn the_lsp_workers_of_an_old_tenure_do_not_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Arc::new(std::sync::Mutex::new(
+            swissarmyhammer_code_context::CodeContextWorkspace::open(dir.path()).unwrap(),
+        ));
+        let old_tenure = tenure_shutdown_flag(&ws);
+        step_down_and_stop_lsp(&ws).await;
+        let promoted = ws.lock().unwrap().try_promote().unwrap();
+        assert!(promoted.is_some(), "the stepped-down process must promote");
+        let socket_path = ws.lock().unwrap().socket_path().to_path_buf();
+        assert!(!socket_path.exists(), "no worker bound the socket yet");
+        let supervisor: SharedLspSupervisor = Arc::new(tokio::sync::Mutex::new(
+            swissarmyhammer_lsp::LspSupervisorManager::new(dir.path().to_path_buf()),
+        ));
+        let clients = vec![("rust-analyzer".to_string(), session_without_a_server())];
+
+        start_lsp_workers_if_leader(&ws, dir.path(), &supervisor, &clients, "", old_tenure);
+
+        assert!(
+            !socket_path.exists(),
+            "the workers of an old tenure must not start"
+        );
     }
 
     /// Server start must leave `.reviewignore` on disk before any review runs,

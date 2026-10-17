@@ -200,8 +200,24 @@ comments:
 
     These markers agree with the harness problem in task ^ts2s5jt. They do not come from the daemon change.
   timestamp: 2026-10-17T13:48:48.274541+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01m552cx6b5x6ee9x5g9a4pns7
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (commit 6c90ba82f). 4 files reviewed. 0 findings, 0 confirmed, 2 refuted, 0 failed. All 30 items in the 2 prior Review Findings sections are checked (3 in 07:13, 27 in 07:47).
+    - next: none. The task is in done.
+  timestamp: 2026-10-17T13:56:36.683395+00:00
+- actor: claude-code
+  id: 01m552dyfg6ghtxzxpfb0kyrex
+  text: |-
+    ### finish iteration 3 — clean
+    - implement: changed — 27 findings fixed in daemon/tests; then changed — each test child reaped, daemon.rs reaps the child on the stop timeout path and before a second start
+    - test: red (1 LEAK from the change), then green — nextest rdeps(lsp) 5270 passed; -p swissarmyhammer-lsp --test-threads=1 237 passed, 0 LEAK; 3 parallel LEAK markers on child-free tests in other crates (harness problem, task ^ts2s5jt)
+    - commit: 6c90ba82f
+    - review: clean — task in done
+  timestamp: 2026-10-17T13:57:10.768606+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffbf80
 title: Stop the LSP on leader step-down and limit crash restarts
 ---
 ## Problem
