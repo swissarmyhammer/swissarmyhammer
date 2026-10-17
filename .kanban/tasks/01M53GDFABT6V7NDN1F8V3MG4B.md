@@ -47,6 +47,44 @@ comments:
     - The other 5225 tests pass. Clippy and fmt are clean.
     - The flaky test is recorded in its own `#test-failure` task. The loop continues to commit.
   timestamp: 2026-10-17T10:10:55.322567+00:00
+- actor: claude-code
+  id: 01m54p3vfdvkcne4aygga7y0kt
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD (commit 0df7c1581); 3 findings (3 confirmed, 1 refuted) — crates/swissarmyhammer-code-context/src/layered_context.rs:632, crates/swissarmyhammer-code-context/src/lsp_worker.rs:276 (duplication/duplication), crates/swissarmyhammer-code-context/src/lsp_worker.rs:276 (reuse/reuse)
+    - next: implement the 3 open findings in the dated Review Findings section. Then run test, commit and review again. The two lsp_worker.rs findings name the same cause. The duplication finding says not to change `mark_failed_file_indexed` in this change. The reuse finding says that both functions can call the shared helper.
+  timestamp: 2026-10-17T10:21:57.101623+00:00
+- actor: claude-code
+  id: 01m54p4sfqbyes78rmfmgt3ad0
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 15 files (LspSession path filter seam, DocumentSync::Skipped, worker, diagnostics, leader route)
+    - test: red — 5225 of 5226; the 1 failure is a flaky Dart validator test that passes alone (own #test-failure task)
+    - commit: 0df7c1581
+    - review: findings — crates/swissarmyhammer-code-context/src/layered_context.rs:632, crates/swissarmyhammer-code-context/src/lsp_worker.rs:276, crates/swissarmyhammer-code-context/src/lsp_worker.rs:276
+  timestamp: 2026-10-17T10:22:27.831968+00:00
+- actor: claude-code
+  id: 01m54p8tqg2hm0qtgx8j2m1rdd
+  text: |-
+    Review findings fixed (TDD, 3 new tests seen RED first, then GREEN).
+    - layered_context.rs `sync_document`: after the `is_running` check, it calls the existing `LspSession::skips_path` (the same filter that `sync_open` uses, one rule set) and returns Ok(None) before the file read. New tests: a filtered missing path and a filtered non-UTF-8 path both give Ok(None). Before the fix they gave Io NotFound and Io InvalidData.
+    - lsp_worker.rs `index_single_file` had the same cause (read before the filter). It now checks `skips_path` before the read and returns Ok(Skipped). New test: a filtered missing file gives Ok(Skipped) (before: Io NotFound).
+    - lsp_worker.rs: new `mark_file_indexed_or_warn(db, relative_path, context)`. Both `mark_failed_file_indexed` and `mark_skipped_file_indexed` call it. The `debug!` line stays in the skipped function. The duplication finding says not to change `mark_failed_file_indexed`; the reuse finding and the dispatcher order say to have both call the helper. The dispatcher order was followed. Only the warning text changed ("as lsp_indexed after error" / "as lsp_indexed after skip").
+  timestamp: 2026-10-17T10:24:40.176313+00:00
+- actor: claude-code
+  id: 01m54p8xtk76zs32a1tfhzy2v4
+  text: |-
+    ### implement — changed
+    - evidence: 2 files — crates/swissarmyhammer-code-context/src/layered_context.rs, crates/swissarmyhammer-code-context/src/lsp_worker.rs. `cargo nextest run -p swissarmyhammer-code-context`: 735 passed, 0 failed. `cargo clippy -p swissarmyhammer-code-context --all-targets -- -D warnings`: clean. `cargo fmt --all --check`: clean.
+    - next: /test, then /review
+  timestamp: 2026-10-17T10:24:43.347373+00:00
+- actor: claude-code
+  id: 01m54pjycdgpa5ybfv1ggfa89g
+  text: |-
+    ### test — green (iteration 2)
+    - evidence: `cargo nextest run --no-fail-fast -E 'rdeps(swissarmyhammer-code-context)'` ran 4996 tests. 4996 passed, 0 failed, 0 skipped (62 slow). `cargo clippy --workspace --all-targets -- -D warnings` shows no warnings (exit 0). `cargo fmt --check` shows no differences (exit 0).
+    - next: Do the review step.
+  timestamp: 2026-10-17T10:30:11.597748+00:00
 depends_on:
 - 01M53GC28P974P34HEP7XN651M
 position_column: doing
@@ -66,3 +104,17 @@ The LSP worker (`crates/swissarmyhammer-code-context/src/lsp_worker.rs`) reads r
 
 ## Tests
 - A unit test with a fake LSP client that records the requests. Give it one ignored path and one normal path. Only the normal path gets requests. #lsp-fix #bug
+
+## Review Findings (2026-10-17 05:11)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 14 file(s) reviewed, 7 not reviewed.
+
+> 6 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 6 file(s)
+
+> 1 file(s) not reviewed — no validator matched:
+> - `ARCHITECTURE.md` — no validator matches this file
+
+- [x] `crates/swissarmyhammer-code-context/src/layered_context.rs:632` `completeness/invariant-propagation` — The path filter is checked only inside session.sync_open, after sync_document has already read the file. For a filtered path that cannot be read as UTF-8, or that was deleted, read_to_string fails first and the error propagates. The doc comment says a skipped path gives Ok(None) with no request sent, so this contradicts the contract. Ignored build output such as .build/ or target/ can hold binary files, so this is reachable in practice. Check the path filter before reading the file, the same way the is_running check short-circuits. Either expose a session method that asks the filter, or return Ok(None) early when the path is filtered. Add a test where a filtered path holds non-UTF-8 bytes or does not exist, and assert Ok(None).
+- [x] `crates/swissarmyhammer-code-context/src/lsp_worker.rs:276` `duplication/duplication` — The new `mark_skipped_file_indexed` repeats the body of the existing `mark_failed_file_indexed`. Both lock the DB with the same poison recovery, call `mark_lsp_indexed` with the same arguments, and log a warning when the mark fails. Only the log wording differs. The mark-and-warn logic can now drift between the two copies, for example if the poison handling or the mark step changes in one function only. Extract one shared helper that takes the message as a parameter, for example `fn mark_indexed_or_warn(db: &SharedDb, relative_path: &str, context: &str)`, and call it from `mark_skipped_file_indexed` in the changed code. Keep the `debug!` line in the new function. Because `mark_failed_file_indexed` is outside this change, switching it to the helper is a separate follow-up task and should not be done in this change.
+- [x] `crates/swissarmyhammer-code-context/src/lsp_worker.rs:276` `reuse/reuse` — `mark_skipped_file_indexed` repeats the body of `mark_failed_file_indexed` (lock the DB, call `mark_lsp_indexed`, log a warning on failure) and differs only in its log messages. Two parallel copies of the same mark-and-log step will drift apart, so a fix to one path will be missed in the other. Extract one helper, for example `mark_file_indexed(db, relative_path, context: &str)`, that takes the log context. Have both `mark_failed_file_indexed` and `mark_skipped_file_indexed` call it, or fold the skipped case into the failure helper with a parameter for the message.

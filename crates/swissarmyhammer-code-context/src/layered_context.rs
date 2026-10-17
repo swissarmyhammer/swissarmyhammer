@@ -615,10 +615,13 @@ impl<'a> LayeredContext<'a> {
     /// LSP-unavailability is checked *first*, before touching the filesystem: if
     /// the session has no live client the document can never be synced, so this
     /// short-circuits to `Ok(None)` (fall back to the index layers) without
-    /// reading the file. When a live client *is* present, a failure to read the
-    /// file (deleted, inaccessible, non-UTF-8) is a *real* error and propagates —
-    /// syncing empty content on a read failure would feed stale/empty text into
-    /// LSP state and silently corrupt later requests.
+    /// reading the file. The path filter is checked next, also before the read
+    /// ([`LspSession::skips_path`], the same rule set that `sync_open` uses), so
+    /// a filtered path that is missing or not UTF-8 also gives `Ok(None)`. When a
+    /// live client *is* present and the path is not filtered, a failure to read
+    /// the file (deleted, inaccessible, non-UTF-8) is a *real* error and
+    /// propagates — syncing empty content on a read failure would feed
+    /// stale/empty text into LSP state and silently corrupt later requests.
     fn sync_document(
         &self,
         session: &SharedLspSession,
@@ -628,6 +631,9 @@ impl<'a> LayeredContext<'a> {
             return Ok(None);
         }
         let path = std::path::Path::new(file_path);
+        if session.skips_path(path) {
+            return Ok(None);
+        }
         let text = std::fs::read_to_string(file_path)?;
         match not_running_is_none(session.sync_open(path, &text))? {
             Some(DocumentSync::Synced) => Ok(Some(())),
@@ -2967,6 +2973,49 @@ mod tests {
             ctx.lsp_multi_request_with_document(file_path.to_str().unwrap(), |_rpc| {
                 panic!("closure must not run for a filtered path");
             });
+
+        assert!(result.unwrap().is_none());
+    }
+
+    /// Run `lsp_multi_request_with_document` on `file_path` with a live mock
+    /// session whose path filter skips exactly that path.
+    fn multi_request_on_a_filtered_path(
+        file_path: &std::path::Path,
+    ) -> Result<Option<Value>, CodeContextError> {
+        let mut child = spawn_mock_lsp(&[]);
+        let session = mock_lsp_session(&mut child);
+        let skipped = file_path.to_path_buf();
+        session.set_path_filter(std::sync::Arc::new(move |path: &std::path::Path| {
+            path == skipped
+        }));
+        let conn = test_db();
+        let ctx = LayeredContext::new(&conn, Some(session));
+        ctx.lsp_multi_request_with_document(file_path.to_str().unwrap(), |_rpc| {
+            panic!("closure must not run for a filtered path");
+        })
+    }
+
+    #[test]
+    fn test_lsp_multi_request_with_document_returns_none_for_a_filtered_missing_path() {
+        // A filtered path is checked before the file read, so a missing file
+        // gives Ok(None) and not an I/O error.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("does_not_exist.rs");
+
+        let result = multi_request_on_a_filtered_path(&file_path);
+
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_lsp_multi_request_with_document_returns_none_for_a_filtered_non_utf8_path() {
+        // Ignored build output can hold binary files. The filter check comes
+        // before the UTF-8 read, so such a file gives Ok(None).
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("binary.rs");
+        std::fs::write(&file_path, [0xFF_u8, 0xFE, 0x00, 0xC3]).unwrap();
+
+        let result = multi_request_on_a_filtered_path(&file_path);
 
         assert!(result.unwrap().is_none());
     }

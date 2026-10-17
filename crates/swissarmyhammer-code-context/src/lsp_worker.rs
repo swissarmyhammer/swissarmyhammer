@@ -258,13 +258,7 @@ fn process_lsp_batch(
 /// the batch loop continues regardless.
 fn mark_failed_file_indexed(db: &SharedDb, relative_path: &str, error: &CodeContextError) {
     warn!("LSP indexing failed for {}: {}", relative_path, error);
-    let conn = db.lock().unwrap_or_else(|p| p.into_inner());
-    if let Err(mark_err) = mark_lsp_indexed(&conn, relative_path) {
-        warn!(
-            "Failed to mark {} as lsp_indexed after error: {}",
-            relative_path, mark_err
-        );
-    }
+    mark_file_indexed_or_warn(db, relative_path, "after error");
 }
 
 /// Mark a file as `lsp_indexed = 1` after the session's path filter skipped it.
@@ -275,11 +269,21 @@ fn mark_failed_file_indexed(db: &SharedDb, relative_path: &str, error: &CodeCont
 /// step is logged, never propagated.
 fn mark_skipped_file_indexed(db: &SharedDb, relative_path: &str) {
     debug!("LSP indexing skipped filtered path {}", relative_path);
+    mark_file_indexed_or_warn(db, relative_path, "after skip");
+}
+
+/// Mark a file as `lsp_indexed = 1`, and log a warning if the mark fails.
+///
+/// The one mark step for [`mark_failed_file_indexed`] and
+/// [`mark_skipped_file_indexed`]. It recovers a poisoned DB lock and never
+/// propagates a mark failure, so the batch loop continues. `context` tells
+/// in the warning why the file was marked (for example `"after error"`).
+fn mark_file_indexed_or_warn(db: &SharedDb, relative_path: &str, context: &str) {
     let conn = db.lock().unwrap_or_else(|p| p.into_inner());
     if let Err(mark_err) = mark_lsp_indexed(&conn, relative_path) {
         warn!(
-            "Failed to mark skipped {} as lsp_indexed: {}",
-            relative_path, mark_err
+            "Failed to mark {} as lsp_indexed {}: {}",
+            relative_path, context, mark_err
         );
     }
 }
@@ -341,6 +345,12 @@ fn index_single_file(
     full_path: &Path,
     relative_path: &str,
 ) -> Result<FileIndexOutcome, CodeContextError> {
+    // Check the path filter before the read, so a filtered file that is
+    // missing or not UTF-8 is skipped and does not give an I/O error.
+    if session.skips_path(full_path) {
+        return Ok(FileIndexOutcome::Skipped);
+    }
+
     // Read file content
     let content = std::fs::read_to_string(full_path)?;
 
@@ -1782,6 +1792,24 @@ mod tests {
         let conn = shared_db.lock().unwrap();
         let dirty = query_lsp_dirty_files(&conn, TEST_BATCH_SIZE, &["rs"]).unwrap();
         assert!(dirty.is_empty(), "a skipped row must not be read again");
+    }
+
+    #[test]
+    fn test_index_single_file_skips_a_filtered_missing_file_before_the_read() {
+        // The filter check comes before the file read, so a filtered file that
+        // does not exist is skipped and does not give an I/O error.
+        let workspace = tempfile::tempdir().unwrap();
+        let relative_path = ".build/checkouts/pkg/Sources/missing.rs";
+        let full_path = workspace.path().join(relative_path);
+        let db = create_test_db();
+        insert_test_file(&db, relative_path);
+        let shared_db: SharedDb = Arc::new(Mutex::new(db));
+        let session = none_session();
+        session.set_path_filter(crate::IgnoreFilter::new(workspace.path()).into_path_filter());
+
+        let result = index_single_file(&session, &shared_db, &full_path, relative_path);
+
+        assert_eq!(result.unwrap(), FileIndexOutcome::Skipped);
     }
 
     // -- Poison recovery tests --
