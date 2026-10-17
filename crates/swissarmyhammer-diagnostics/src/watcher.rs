@@ -282,11 +282,26 @@ async fn run_diagnostics_watcher<C: LspTransport>(
 /// A path that `filter` ignores is dropped. Thus the watcher never sends a
 /// `didOpen` for build output (for example `.build/checkouts/`), and it obeys
 /// the same ignore rules as the code-context index walk.
+///
+/// Each kept path has the form of the watch root
+/// ([`IgnoreFilter::to_root_form`]), also when the backend sends the canonical
+/// form. Thus the session opens one document for each file, with the same
+/// root form as the diagnose scope. A path outside the root and outside the
+/// canonical root is dropped with a debug log.
 fn changed_paths(events: &[async_watcher::DebouncedEvent], filter: &IgnoreFilter) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = events
         .iter()
-        .filter(|e| !filter.is_ignored(&e.path))
-        .map(|e| e.path.clone())
+        .filter_map(|e| {
+            let path = filter.to_root_form(&e.path);
+            if path.is_none() {
+                tracing::debug!(
+                    "diagnostics watcher: dropped event outside the workspace root: {}",
+                    e.path.display()
+                );
+            }
+            path
+        })
+        .filter(|path| !filter.is_ignored(path))
         .collect();
     paths.sort();
     paths.dedup();
@@ -298,6 +313,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    use swissarmyhammer_code_context::testing::symlinked_root;
     use swissarmyhammer_lsp::LspSession;
 
     use crate::test_support::{NullTransport, RecordingTransport};
@@ -518,6 +534,37 @@ mod tests {
         let guard = client.lock().unwrap();
         let t = guard.as_ref().unwrap();
         assert_eq!(t.notification_count("textDocument/didOpen"), 1);
+    }
+
+    /// With a symlinked root, an event for `<canonical root>/src/a.rs` gives
+    /// `<root>/src/a.rs`. Thus the session opens one document for the file,
+    /// with the same root form as the other callers.
+    #[test]
+    fn changed_paths_gives_each_path_in_the_root_form() {
+        let outer = tempfile::tempdir().unwrap();
+        let (root, canonical) = symlinked_root(outer.path());
+        let file = canonical.join("src/a.rs");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "fn a() {}\n").unwrap();
+        let filter = IgnoreFilter::new(&root);
+
+        let paths = changed_paths(&[debounced(file)], &filter);
+
+        assert_eq!(paths, vec![root.join("src/a.rs")]);
+    }
+
+    /// An event for a path outside the root and outside the canonical root
+    /// gives no path.
+    #[test]
+    fn changed_paths_drops_a_path_outside_both_roots() {
+        let outer = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let (root, _canonical) = symlinked_root(outer.path());
+        let filter = IgnoreFilter::new(&root);
+
+        let paths = changed_paths(&[debounced(other.path().join("a.rs"))], &filter);
+
+        assert!(paths.is_empty());
     }
 
     #[test]

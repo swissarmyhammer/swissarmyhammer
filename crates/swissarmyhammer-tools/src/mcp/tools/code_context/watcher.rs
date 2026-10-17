@@ -45,32 +45,42 @@ pub(crate) fn is_source_file(path: &Path) -> bool {
 }
 
 /// Convert a `notify` event kind into our `FileEvent`, if relevant.
+///
+/// The row key is the path relative to the workspace root, from
+/// [`IgnoreFilter::relative`]. It strips the root, then the canonical root, so
+/// the key is the same as the key of the startup walk and the reconcile walk,
+/// also when the backend sends the canonical form of the path. A path outside
+/// both roots gives no event and a debug log: its absolute path is never a row
+/// key.
 pub(crate) fn to_file_event(
     kind: &async_watcher::notify::EventKind,
-    path: PathBuf,
-    workspace_root: &Path,
+    path: &Path,
+    filter: &IgnoreFilter,
 ) -> Option<FileEvent> {
     use async_watcher::notify::event::{CreateKind, ModifyKind, RemoveKind};
     use async_watcher::notify::EventKind;
 
-    // Make path relative to workspace root for DB consistency
-    let rel = path
-        .strip_prefix(workspace_root)
-        .unwrap_or(&path)
-        .to_path_buf();
-
-    match kind {
+    let make_event: fn(PathBuf) -> FileEvent = match kind {
         EventKind::Create(CreateKind::File) | EventKind::Create(CreateKind::Any) => {
-            Some(FileEvent::Created(rel))
+            FileEvent::Created
         }
         EventKind::Modify(ModifyKind::Data(_))
         | EventKind::Modify(ModifyKind::Any)
-        | EventKind::Modify(ModifyKind::Name(_)) => Some(FileEvent::Modified(rel)),
+        | EventKind::Modify(ModifyKind::Name(_)) => FileEvent::Modified,
         EventKind::Remove(RemoveKind::File) | EventKind::Remove(RemoveKind::Any) => {
-            Some(FileEvent::Deleted(rel))
+            FileEvent::Deleted
         }
-        _ => None,
-    }
+        _ => return None,
+    };
+
+    let Some(rel) = filter.relative(path) else {
+        tracing::debug!(
+            "code-context watcher: dropped event outside the workspace root: {}",
+            path.display()
+        );
+        return None;
+    };
+    Some(make_event(rel.to_path_buf()))
 }
 
 /// Result of processing a batch of file events.
@@ -205,21 +215,24 @@ async fn run_watcher(
 
 /// Convert one debounced batch into the [`FileEvent`]s the index must see.
 ///
-/// A path is kept only when it is a source file and `filter` does not ignore
-/// it. Thus the watcher obeys the same ignore rules as the startup walk and
-/// the reconcile walk.
+/// A path is kept only when it is a source file under the workspace root and
+/// `filter` does not ignore it. Thus the watcher obeys the same ignore rules
+/// as the startup walk and the reconcile walk. Each event path is relative to
+/// the root, the same key as the walks make (see [`to_file_event`]).
 pub(crate) fn collect_file_events(
     debounced_events: &[async_watcher::DebouncedEvent],
-    ws_root: &Path,
     filter: &IgnoreFilter,
 ) -> Vec<FileEvent> {
     let mut file_events = Vec::new();
     for debounced in debounced_events {
         for path in &debounced.event.paths {
-            if !is_source_file(path) || filter.is_ignored(path) {
+            if !is_source_file(path) {
                 continue;
             }
-            if let Some(event) = to_file_event(&debounced.event.kind, path.clone(), ws_root) {
+            let Some(event) = to_file_event(&debounced.event.kind, path, filter) else {
+                continue;
+            };
+            if !filter.is_ignored(event.path()) {
                 file_events.push(event);
             }
         }
@@ -241,7 +254,7 @@ async fn process_ok_events(
     debounced_events: &[async_watcher::DebouncedEvent],
     shutdown: &swissarmyhammer_code_context::ShutdownFlag,
 ) {
-    let file_events = collect_file_events(debounced_events, ws_root, filter);
+    let file_events = collect_file_events(debounced_events, filter);
     if file_events.is_empty() {
         return;
     }
@@ -399,6 +412,7 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
     use swissarmyhammer_code_context::db::{configure_connection, create_schema};
+    use swissarmyhammer_code_context::testing::symlinked_root;
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -497,7 +511,11 @@ mod tests {
 
         let root = PathBuf::from("/workspace");
         let path = PathBuf::from("/workspace/src/main.rs");
-        let event = to_file_event(&EventKind::Create(CreateKind::File), path, &root);
+        let event = to_file_event(
+            &EventKind::Create(CreateKind::File),
+            &path,
+            &IgnoreFilter::new(&root),
+        );
 
         match event.unwrap() {
             FileEvent::Created(p) => assert_eq!(p, PathBuf::from("src/main.rs")),
@@ -514,8 +532,8 @@ mod tests {
         let path = PathBuf::from("/workspace/src/lib.rs");
         let event = to_file_event(
             &EventKind::Modify(ModifyKind::Data(DataChange::Content)),
-            path,
-            &root,
+            &path,
+            &IgnoreFilter::new(&root),
         );
 
         match event.unwrap() {
@@ -531,7 +549,11 @@ mod tests {
 
         let root = PathBuf::from("/workspace");
         let path = PathBuf::from("/workspace/src/old.rs");
-        let event = to_file_event(&EventKind::Remove(RemoveKind::File), path, &root);
+        let event = to_file_event(
+            &EventKind::Remove(RemoveKind::File),
+            &path,
+            &IgnoreFilter::new(&root),
+        );
 
         match event.unwrap() {
             FileEvent::Deleted(p) => assert_eq!(p, PathBuf::from("src/old.rs")),
@@ -546,7 +568,11 @@ mod tests {
 
         let root = PathBuf::from("/workspace");
         let path = PathBuf::from("/workspace/src/main.rs");
-        let event = to_file_event(&EventKind::Access(AccessKind::Read), path, &root);
+        let event = to_file_event(
+            &EventKind::Access(AccessKind::Read),
+            &path,
+            &IgnoreFilter::new(&root),
+        );
         assert!(event.is_none());
     }
 
@@ -557,7 +583,11 @@ mod tests {
 
         let root = PathBuf::from("/deep/nested/workspace");
         let path = PathBuf::from("/deep/nested/workspace/src/handlers/auth.rs");
-        let event = to_file_event(&EventKind::Create(CreateKind::File), path, &root);
+        let event = to_file_event(
+            &EventKind::Create(CreateKind::File),
+            &path,
+            &IgnoreFilter::new(&root),
+        );
 
         match event.unwrap() {
             FileEvent::Created(p) => assert_eq!(p, PathBuf::from("src/handlers/auth.rs")),
@@ -589,7 +619,7 @@ mod tests {
             debounced_create(root.join("Sources/a.swift")),
         ];
 
-        let events = collect_file_events(&batch, root, &filter);
+        let events = collect_file_events(&batch, &filter);
 
         let conn = test_db();
         let result = process_file_events(&conn, &FanoutWatcher::new(), &events);
@@ -613,10 +643,65 @@ mod tests {
             debounced_create(root.join("src/main.rs")),
         ];
 
-        let events = collect_file_events(&batch, root, &filter);
+        let events = collect_file_events(&batch, &filter);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].path(), Path::new("src/main.rs"));
+    }
+
+    /// With a symlinked root, an event for `<canonical root>/src/a.rs` adds
+    /// the row `src/a.rs`, the same key as the startup walk and the reconcile.
+    #[test]
+    fn collect_file_events_keys_a_canonical_path_from_the_root() {
+        let outer = tempfile::tempdir().unwrap();
+        let (root, canonical) = symlinked_root(outer.path());
+        let filter = IgnoreFilter::new(&root);
+        let batch = vec![debounced_create(canonical.join("src/a.rs"))];
+
+        let events = collect_file_events(&batch, &filter);
+
+        let conn = test_db();
+        process_file_events(&conn, &FanoutWatcher::new(), &events);
+        assert_eq!(count_rows(&conn, "indexed_files"), 1);
+        assert_eq!(get_ts_indexed(&conn, "src/a.rs"), Some(0));
+    }
+
+    /// An event for a path outside the root and outside the canonical root
+    /// adds no row.
+    #[test]
+    fn collect_file_events_adds_no_row_for_a_path_outside_both_roots() {
+        let outer = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let (root, _canonical) = symlinked_root(outer.path());
+        let filter = IgnoreFilter::new(&root);
+        let batch = vec![debounced_create(other.path().join("src/a.rs"))];
+
+        let events = collect_file_events(&batch, &filter);
+
+        let conn = test_db();
+        process_file_events(&conn, &FanoutWatcher::new(), &events);
+        assert_eq!(count_rows(&conn, "indexed_files"), 0);
+    }
+
+    /// `to_file_event` gives no event for a path outside both roots. It does
+    /// not use the absolute path as a row key.
+    #[test]
+    fn to_file_event_drops_a_path_outside_both_roots() {
+        use async_watcher::notify::event::CreateKind;
+        use async_watcher::notify::EventKind;
+
+        let outer = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let (root, _canonical) = symlinked_root(outer.path());
+        let path = other.path().join("src/a.rs");
+
+        let event = to_file_event(
+            &EventKind::Create(CreateKind::File),
+            &path,
+            &IgnoreFilter::new(&root),
+        );
+
+        assert!(event.is_none());
     }
 
     // -----------------------------------------------------------------------

@@ -190,7 +190,14 @@ impl IgnoreFilter {
 
     /// Give `path` relative to the workspace root, or `None` when it is not
     /// under the root.
-    fn relative<'a>(&self, path: &'a Path) -> Option<&'a Path> {
+    ///
+    /// An absolute path is stripped of the root as the caller gave it, and
+    /// then of the canonical root. A relative path is already relative to the
+    /// root, so it is given back with no change. This is the one function that
+    /// makes a workspace-relative path from a watcher path. Thus the watchers,
+    /// the walk and the language server all get the same key for one file,
+    /// also when a watcher backend sends the canonical form.
+    pub fn relative<'a>(&self, path: &'a Path) -> Option<&'a Path> {
         if path.is_relative() {
             return Some(path);
         }
@@ -199,6 +206,17 @@ impl IgnoreFilter {
                 .as_deref()
                 .and_then(|root| path.strip_prefix(root).ok())
         })
+    }
+
+    /// Give `path` as an absolute path under the root as the caller gave it,
+    /// or `None` when it is not under the root.
+    ///
+    /// This joins the root to [`relative`](Self::relative). A watcher path
+    /// under the canonical root thus gets the form of the root. A caller that
+    /// keys documents by absolute path (for example the URI of a language
+    /// server document) then gets one key for each file.
+    pub fn to_root_form(&self, path: &Path) -> Option<PathBuf> {
+        self.relative(path).map(|rel| self.root.join(rel))
     }
 
     /// Tell if the ignore files ignore one entry.
@@ -262,6 +280,7 @@ fn load_dir_matcher(workspace_root: &Path, dir: &Path) -> Option<Gitignore> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::symlinked_root;
     use std::fs;
 
     /// Make a file and its parent directories under `root`.
@@ -354,27 +373,6 @@ mod tests {
         assert!(filter.is_ignored(&other.path().join("a.rs")));
     }
 
-    /// Make a workspace root that is a symlink to a real directory in `outer`.
-    ///
-    /// The canonical form of the returned root is different from the root, the
-    /// same as `/var/...` and `/private/var/...` on macOS. The function returns
-    /// the root and its canonical form.
-    fn symlinked_root(outer: &Path) -> (PathBuf, PathBuf) {
-        let real = outer.join("real");
-        fs::create_dir_all(&real).unwrap();
-        let link = outer.join("link");
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        #[cfg(not(unix))]
-        std::os::windows::fs::symlink_dir(&real, &link).unwrap();
-        let canonical = link.canonicalize().unwrap();
-        assert_ne!(
-            canonical, link,
-            "precondition: the root must not be canonical"
-        );
-        (link, canonical)
-    }
-
     #[test]
     fn path_under_the_canonical_root_is_not_ignored() {
         let outer = tempfile::tempdir().unwrap();
@@ -391,6 +389,39 @@ mod tests {
         let path = touch(&canonical, ".build/checkouts/X/Sources/a.swift");
         let filter = IgnoreFilter::new(&root);
         assert!(filter.is_ignored(&path));
+    }
+
+    #[test]
+    fn relative_strips_the_root_and_the_canonical_root() {
+        let outer = tempfile::tempdir().unwrap();
+        let (root, canonical) = symlinked_root(outer.path());
+        let filter = IgnoreFilter::new(&root);
+        let expected = Some(Path::new("src/a.rs"));
+        assert_eq!(filter.relative(&root.join("src/a.rs")), expected);
+        assert_eq!(filter.relative(&canonical.join("src/a.rs")), expected);
+        assert_eq!(filter.relative(Path::new("src/a.rs")), expected);
+    }
+
+    #[test]
+    fn relative_gives_none_for_a_path_outside_both_roots() {
+        let outer = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let (root, _canonical) = symlinked_root(outer.path());
+        let filter = IgnoreFilter::new(&root);
+        assert_eq!(filter.relative(&other.path().join("a.rs")), None);
+    }
+
+    #[test]
+    fn to_root_form_gives_a_canonical_path_the_form_of_the_root() {
+        let outer = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let (root, canonical) = symlinked_root(outer.path());
+        let filter = IgnoreFilter::new(&root);
+        assert_eq!(
+            filter.to_root_form(&canonical.join("src/a.rs")),
+            Some(root.join("src/a.rs"))
+        );
+        assert_eq!(filter.to_root_form(&other.path().join("a.rs")), None);
     }
 
     #[test]
