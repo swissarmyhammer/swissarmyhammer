@@ -10,7 +10,8 @@ use super::McpServer;
 use std::sync::Arc;
 
 use crate::mcp::tools::code_context::{
-    install_lsp_supervisor, shutdown_lsp_supervisor, track_lsp_task, SharedLspSupervisor,
+    install_lsp_supervisor, remove_lsp_supervisor, shutdown_lsp_supervisor, track_lsp_task,
+    SharedLspSupervisor,
 };
 use swissarmyhammer_code_context::{SharedDb, SharedLspSession, ShutdownFlag};
 use swissarmyhammer_common::utils::find_git_repository_root_from;
@@ -105,11 +106,15 @@ impl McpServer {
             return;
         };
 
-        let is_leader = ws.lock().expect("workspace mutex poisoned").is_leader();
+        // Only a leader has the shutdown flag of a leader tenure.
+        let leader_shutdown = ws
+            .lock()
+            .expect("workspace mutex poisoned")
+            .leader_shutdown_flag();
 
         // Single gate: only the leader gets a supervisor handle; a follower gets
         // `None` and spawns no LSP server at all.
-        match Self::spawn_lsp_supervisor_if_leader(is_leader, &workspace_root) {
+        match Self::spawn_lsp_supervisor_if_leader(leader_shutdown, &workspace_root) {
             Some(lsp_handle) => {
                 // Prove which build elected itself leader: this is the
                 // process actually indexing the workspace, so record its
@@ -183,16 +188,18 @@ impl McpServer {
     /// Leader-gated LSP supervisor spawn — the single decision point that keys
     /// LSP-session ownership on the code-context leadership election.
     ///
-    /// Returns the supervisor task handle when `is_leader` is `true` (the leader
-    /// spawns the one stdio LSP child for the workspace), and `None` when
-    /// `is_leader` is `false` (a follower spawns nothing). Keeping this the only
-    /// place the startup path spawns the supervisor ensures a follower can never
-    /// launch its own rust-analyzer over the shared tree.
+    /// `leader_shutdown` is the shutdown flag of the leader tenure, and only a
+    /// leader has one. Returns the supervisor task handle when it is `Some`
+    /// (the leader spawns the one stdio LSP child for the workspace), and
+    /// `None` when it is `None` (a follower spawns nothing). Keeping this the
+    /// only place the startup path spawns the supervisor ensures a follower can
+    /// never launch its own rust-analyzer over the shared tree.
     fn spawn_lsp_supervisor_if_leader(
-        is_leader: bool,
+        leader_shutdown: Option<ShutdownFlag>,
         workspace_root: &std::path::Path,
     ) -> Option<tokio::task::JoinHandle<LspStartup>> {
-        is_leader.then(|| Self::spawn_lsp_supervisor(workspace_root.to_path_buf()))
+        leader_shutdown
+            .map(|shutdown| Self::spawn_lsp_supervisor(workspace_root.to_path_buf(), shutdown))
     }
 
     /// If the workspace is already leader, start TS indexing + watcher workers.
@@ -220,8 +227,13 @@ impl McpServer {
     /// the lock until the start ends. Thus a step-down that takes the
     /// supervisor from the slot during the start waits for the start, and
     /// then shuts down each server that the start spawned.
+    ///
+    /// `shutdown` is the shutdown flag of the leader tenure. A step-down that
+    /// ends before the install finds an empty slot, so the task reads the flag
+    /// after the install (see [`start_unless_stepped_down`]).
     fn spawn_lsp_supervisor(
         workspace_root: std::path::PathBuf,
+        shutdown: ShutdownFlag,
     ) -> tokio::task::JoinHandle<LspStartup> {
         tokio::spawn(async move {
             let supervisor: SharedLspSupervisor = Arc::new(tokio::sync::Mutex::new(
@@ -229,8 +241,7 @@ impl McpServer {
             ));
             let mut start_guard = Arc::clone(&supervisor).lock_owned().await;
             install_lsp_supervisor(Arc::clone(&supervisor)).await;
-            log_lsp_start_results(&start_guard.start().await);
-            let clients = collect_running_lsp_clients(&start_guard);
+            let clients = start_unless_stepped_down(&supervisor, &mut start_guard, &shutdown).await;
             drop(start_guard);
             tracing::info!(
                 "code-context: {} LSP clients available for indexing: {:?}",
@@ -538,7 +549,8 @@ impl McpServer {
         // health loop. Leadership is already established by the time we reach
         // here, so workers start directly (no further is_leader gate).
         let lsp_db = std::sync::Arc::clone(&shared_db);
-        let lsp_handle = Self::spawn_lsp_supervisor(workspace_root.clone());
+        let lsp_handle =
+            Self::spawn_lsp_supervisor(workspace_root.clone(), std::sync::Arc::clone(&shutdown));
         let worker_shutdown = std::sync::Arc::clone(&shutdown);
         Self::spawn_drain_supervisor_and_health_loop(
             lsp_handle,
@@ -646,6 +658,33 @@ async fn build_lsp_supervisor(
         }
         Err(_) => supervisor,
     }
+}
+
+/// Start the LSP servers of `supervisor`, unless the leader tenure ended.
+///
+/// The caller has put `supervisor` in the process slot, and holds its lock as
+/// `start_guard`. A step-down that ended before the install found an empty
+/// slot, so it could not stop `supervisor`. Thus this reads `shutdown` after
+/// the install. When the flag is set, `supervisor` leaves the slot, it is shut
+/// down, and no LSP server starts. A step-down after this read waits for
+/// `start_guard`, and then stops each server that the start spawned.
+///
+/// Returns the `(server_name, session)` pairs of the running servers.
+async fn start_unless_stepped_down(
+    supervisor: &SharedLspSupervisor,
+    start_guard: &mut swissarmyhammer_lsp::LspSupervisorManager,
+    shutdown: &ShutdownFlag,
+) -> LspClients {
+    if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+        tracing::info!(
+            "code-context: the leader stepped down before the LSP start; starting no LSP server"
+        );
+        remove_lsp_supervisor(supervisor);
+        start_guard.shutdown().await;
+        return LspClients::new();
+    }
+    log_lsp_start_results(&start_guard.start().await);
+    collect_running_lsp_clients(start_guard)
 }
 
 /// Log the outcome of one supervisor start: the counts, and each error.
@@ -1162,6 +1201,7 @@ async fn run_lsp_health_check_loop(supervisor: &SharedLspSupervisor, shutdown: &
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::tools::code_context::supervisor_slot::slot_holds;
 
     /// Make the [`tokio::task::JoinError`] of a task that the runtime
     /// cancelled, the same error a failed [`IgnoreFilter::load`] gives.
@@ -1208,26 +1248,22 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         // Follower: no handle, spawns nothing.
-        let follower_handle = McpServer::spawn_lsp_supervisor_if_leader(false, tmp.path());
+        let follower_handle = McpServer::spawn_lsp_supervisor_if_leader(None, tmp.path());
         assert!(
             follower_handle.is_none(),
             "a follower must not spawn the LSP supervisor"
         );
 
         // Leader: a supervisor task handle is returned.
-        let leader_handle = McpServer::spawn_lsp_supervisor_if_leader(true, tmp.path());
+        let leader_shutdown = ShutdownFlag::default();
+        let leader_handle =
+            McpServer::spawn_lsp_supervisor_if_leader(Some(leader_shutdown), tmp.path());
         assert!(
             leader_handle.is_some(),
             "the leader must spawn the LSP supervisor"
         );
         // Drive the spawned task to completion so it does not outlive the test.
         let _ = leader_handle.unwrap().await;
-    }
-
-    /// Whether the process slot holds exactly `supervisor`.
-    fn slot_holds(supervisor: &SharedLspSupervisor) -> bool {
-        crate::mcp::tools::code_context::lsp_supervisor()
-            .is_some_and(|current| Arc::ptr_eq(&current, supervisor))
     }
 
     /// A step-down stops the supervisor of the old tenure and empties the
@@ -1242,7 +1278,9 @@ mod tests {
             swissarmyhammer_code_context::CodeContextWorkspace::open(&root).unwrap(),
         ));
         assert!(ws.lock().unwrap().is_leader());
-        let first = McpServer::spawn_lsp_supervisor(root.clone()).await.unwrap();
+        let first = McpServer::spawn_lsp_supervisor(root.clone(), tenure_shutdown_flag(&ws))
+            .await
+            .unwrap();
         assert!(slot_holds(&first.supervisor));
 
         step_down_and_stop_lsp(&ws).await;
@@ -1251,11 +1289,52 @@ mod tests {
         assert!(first.supervisor.lock().await.is_shut_down());
         let promoted = ws.lock().unwrap().try_promote().unwrap();
         assert!(promoted.is_some(), "the stepped-down process must promote");
-        let second = McpServer::spawn_lsp_supervisor(root).await.unwrap();
+        let second = McpServer::spawn_lsp_supervisor(root, tenure_shutdown_flag(&ws))
+            .await
+            .unwrap();
         assert!(!Arc::ptr_eq(&first.supervisor, &second.supervisor));
         assert!(slot_holds(&second.supervisor));
         assert!(!second.supervisor.lock().await.is_shut_down());
         shutdown_lsp_supervisor().await;
+    }
+
+    /// The shutdown flag of the current leader tenure of `ws`.
+    fn tenure_shutdown_flag(
+        ws: &Arc<std::sync::Mutex<swissarmyhammer_code_context::CodeContextWorkspace>>,
+    ) -> ShutdownFlag {
+        ws.lock()
+            .unwrap()
+            .leader_shutdown_flag()
+            .expect("the workspace is the leader")
+    }
+
+    /// A step-down that ends before the start task installs its supervisor
+    /// finds an empty slot, so it cannot stop that supervisor. The start task
+    /// must see the shutdown flag of the tenure after the install, shut the
+    /// supervisor down, and start no LSP server. The slot is empty after the
+    /// start, as after each step-down.
+    #[tokio::test]
+    async fn a_step_down_before_the_install_starts_no_lsp_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Arc::new(std::sync::Mutex::new(
+            swissarmyhammer_code_context::CodeContextWorkspace::open(dir.path()).unwrap(),
+        ));
+        let shutdown = tenure_shutdown_flag(&ws);
+        step_down_and_stop_lsp(&ws).await;
+
+        let startup = McpServer::spawn_lsp_supervisor(dir.path().to_path_buf(), shutdown)
+            .await
+            .unwrap();
+
+        assert!(
+            startup.supervisor.lock().await.is_shut_down(),
+            "the supervisor of a stepped-down tenure must be shut down"
+        );
+        assert!(
+            crate::mcp::tools::code_context::lsp_supervisor().is_none(),
+            "the slot of a stepped-down process must be empty"
+        );
+        assert!(startup.clients.is_empty(), "no LSP server may start");
     }
 
     /// Server start must leave `.reviewignore` on disk before any review runs,

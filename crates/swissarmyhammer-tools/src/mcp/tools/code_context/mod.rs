@@ -55,7 +55,8 @@ pub use indexing::index_discovered_files_async;
 pub use ops::*;
 pub use supervisor_slot::shutdown_lsp_supervisor;
 pub(crate) use supervisor_slot::{
-    install_lsp_supervisor, lsp_supervisor, track_lsp_task, SharedLspSupervisor,
+    install_lsp_supervisor, lsp_supervisor, remove_lsp_supervisor, track_lsp_task,
+    SharedLspSupervisor,
 };
 pub(crate) use support::{any_lsp_session, lsp_session_for_file, open_workspace};
 

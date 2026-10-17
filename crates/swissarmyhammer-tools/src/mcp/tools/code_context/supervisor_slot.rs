@@ -32,6 +32,15 @@ struct SlotState {
     tasks: Vec<AbortHandle>,
 }
 
+impl SlotState {
+    /// Whether the slot holds exactly `owner`.
+    fn holds(&self, owner: &SharedLspSupervisor) -> bool {
+        self.supervisor
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, owner))
+    }
+}
+
 /// A supervisor that left the slot, with the tasks that must stop with it.
 struct Retired {
     /// The supervisor to shut down.
@@ -63,14 +72,19 @@ fn take_retired(state: &mut SlotState) -> Option<Retired> {
     })
 }
 
+/// Abort each task in `tasks`.
+fn abort_tasks(tasks: &[AbortHandle]) {
+    for task in tasks {
+        task.abort();
+    }
+}
+
 /// Abort the tasks of a retired supervisor, then shut the supervisor down.
 ///
 /// The lock waits for a start in progress, so no server that the start
 /// spawns stays alive after this returns.
 async fn stop(retired: Retired) {
-    for task in &retired.tasks {
-        task.abort();
-    }
+    abort_tasks(&retired.tasks);
     retired.supervisor.lock().await.shutdown().await;
 }
 
@@ -102,14 +116,29 @@ pub(crate) async fn install_lsp_supervisor(supervisor: SharedLspSupervisor) {
 /// alive.
 pub(crate) fn track_lsp_task(owner: &SharedLspSupervisor, task: AbortHandle) {
     let mut state = slot();
-    let owner_in_slot = state
-        .supervisor
-        .as_ref()
-        .is_some_and(|current| Arc::ptr_eq(current, owner));
-    if owner_in_slot {
+    if state.holds(owner) {
         state.tasks.push(task);
     } else {
         task.abort();
+    }
+}
+
+/// Take `owner` out of the slot when the slot holds it, and abort its tasks.
+///
+/// This does not shut `owner` down: the caller holds the lock of `owner` (a
+/// start in progress), so the caller shuts it down. When the slot holds
+/// another supervisor, or none, this does nothing.
+pub(crate) fn remove_lsp_supervisor(owner: &SharedLspSupervisor) {
+    let retired = {
+        let mut state = slot();
+        if state.holds(owner) {
+            take_retired(&mut state)
+        } else {
+            None
+        }
+    };
+    if let Some(retired) = retired {
+        abort_tasks(&retired.tasks);
     }
 }
 
@@ -128,6 +157,12 @@ pub async fn shutdown_lsp_supervisor() {
     }
 }
 
+/// Whether the slot holds exactly `supervisor`.
+#[cfg(test)]
+pub(crate) fn slot_holds(supervisor: &SharedLspSupervisor) -> bool {
+    slot().holds(supervisor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,11 +177,6 @@ mod tests {
         Arc::new(tokio::sync::Mutex::new(LspSupervisorManager::new(
             root.to_path_buf(),
         )))
-    }
-
-    /// Whether the slot holds exactly `supervisor`.
-    fn slot_holds(supervisor: &SharedLspSupervisor) -> bool {
-        lsp_supervisor().is_some_and(|current| Arc::ptr_eq(&current, supervisor))
     }
 
     /// The time a test waits for an aborted task to end.
@@ -231,6 +261,29 @@ mod tests {
         track_lsp_task(&supervisor, task.abort_handle());
 
         assert!(was_aborted(task).await, "the task must be aborted");
+    }
+
+    /// A remove takes only the given supervisor out of the slot, aborts its
+    /// tasks, and does not shut it down (its caller holds the lock).
+    #[tokio::test]
+    async fn remove_takes_only_the_given_supervisor_out_of_the_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let installed = new_supervisor(dir.path());
+        let other = new_supervisor(dir.path());
+        install_lsp_supervisor(Arc::clone(&installed)).await;
+        let task = pending_task();
+        track_lsp_task(&installed, task.abort_handle());
+
+        remove_lsp_supervisor(&other);
+        assert!(
+            slot_holds(&installed),
+            "another supervisor stays in the slot"
+        );
+
+        remove_lsp_supervisor(&installed);
+        assert!(lsp_supervisor().is_none(), "the slot must be empty");
+        assert!(was_aborted(task).await, "the task must be aborted");
+        assert!(!installed.lock().await.is_shut_down());
     }
 
     /// A shutdown waits for a start in progress. The start holds the lock of
