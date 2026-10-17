@@ -38,9 +38,10 @@ pub struct CleanupStats {
     /// Files whose content hash is unchanged.
     pub files_unchanged: usize,
     /// Walk entries that could not be read (for example, a directory with no
-    /// read permission, or a file that is deleted during the walk). The walk
-    /// skips each one and continues, and the rows at or under their paths
-    /// stay.
+    /// read permission, or a file that is deleted during the walk), and files
+    /// that the hash could not read for a reason other than `NotFound` (for
+    /// example, a file with no read permission). The cleanup skips each one
+    /// and continues, and the rows at or under their paths stay.
     pub entries_skipped: usize,
 }
 
@@ -66,9 +67,11 @@ struct HashedFile {
 ///    - Files on disk not in DB -> INSERT with dirty flags.
 /// 4. Returns [`CleanupStats`] summarising what changed.
 ///
-/// A walk entry that cannot be read does not stop the walk. The walk skips it,
-/// the rows at or under its path stay, and the count is in
-/// [`CleanupStats::entries_skipped`].
+/// A walk entry that cannot be read does not stop the walk, and a file that
+/// the hash cannot read does not stop the hash. The cleanup skips it, the rows
+/// at or under its path stay, and the count is in
+/// [`CleanupStats::entries_skipped`]. A file that the hash finds gone
+/// (`NotFound`) is not counted, and its row is deleted.
 ///
 /// # Errors
 ///
@@ -319,8 +322,10 @@ fn mark_non_lsp_capable_files(conn: &Connection) -> Result<usize, CodeContextErr
 /// The walk gives an error entry for a directory it cannot read (permission
 /// denied), for a file that is deleted between the list and the stat, and for
 /// a symlink loop. The walk records each such path here and continues. The
-/// reconcile keeps each row at or under one of these paths, because the walk
-/// does not know if the file of the row is still there.
+/// hash also records here each file that it cannot read for a reason other
+/// than `NotFound` (see [`record_read_error`]). The reconcile keeps each row
+/// at or under one of these paths, because the cleanup does not know if the
+/// file of the row is still there or what it holds.
 #[derive(Debug, Default)]
 struct UnreadablePaths {
     /// Paths relative to the workspace root. An empty path is the root
@@ -404,14 +409,12 @@ struct WalkedWorkspace {
 /// Uses [`workspace_walk_builder`], which obeys the same ignore rules as the
 /// file watchers ([`crate::IgnoreFilter`]), and `rayon` for parallel hashing.
 /// Only includes files with extensions that tree-sitter can parse. An error
-/// entry does not stop the walk: its path goes into
-/// [`WalkedWorkspace::unreadable`].
+/// entry does not stop the walk, and a file that the hash cannot read does
+/// not stop the hash: their paths go into [`WalkedWorkspace::unreadable`].
 fn walk_and_hash(workspace_root: &Path) -> WalkedWorkspace {
-    let (paths, unreadable) = collect_parseable_paths(workspace_root);
-    WalkedWorkspace {
-        files: hash_files(workspace_root, &paths),
-        unreadable,
-    }
+    let (paths, mut unreadable) = collect_parseable_paths(workspace_root);
+    let files = hash_files(workspace_root, &paths, &mut unreadable);
+    WalkedWorkspace { files, unreadable }
 }
 
 /// Walk the workspace and collect the paths of the parseable files.
@@ -440,41 +443,74 @@ fn collect_parseable_paths(workspace_root: &Path) -> (Vec<PathBuf>, UnreadablePa
 /// Hash `paths` in parallel.
 ///
 /// Returns one [`HashedFile`] with a relative path and a truncated SHA-256
-/// hash for each file that can be read.
-fn hash_files(workspace_root: &Path, paths: &[PathBuf]) -> Vec<HashedFile> {
-    let workspace_root_owned = workspace_root.to_path_buf();
-    let results: Vec<Option<HashedFile>> = paths
+/// hash for each file that can be read. Each file that cannot be read goes to
+/// [`record_read_error`], so that a temporary read error does not delete the
+/// row of the file.
+fn hash_files(
+    workspace_root: &Path,
+    paths: &[PathBuf],
+    unreadable: &mut UnreadablePaths,
+) -> Vec<HashedFile> {
+    let results: Vec<Result<HashedFile, ignore::Error>> = paths
         .par_iter()
-        .map(|path| {
-            let contents = match fs::read(path) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!("Failed to read {}: {}", path.display(), e);
-                    return None;
-                }
-            };
-            let size = contents.len() as u64;
-
-            let mut hasher = Sha256::new();
-            hasher.update(&contents);
-            let digest = hasher.finalize();
-            // Store first 16 bytes of SHA-256
-            let hash = digest[..16].to_vec();
-
-            let rel_path = match path.strip_prefix(&workspace_root_owned) {
-                Ok(rel) => rel.to_string_lossy().to_string(),
-                Err(_) => path.to_string_lossy().to_string(),
-            };
-
-            Some(HashedFile {
-                rel_path,
-                hash,
-                size,
-            })
-        })
+        .map(|path| hash_file(workspace_root, path))
         .collect();
 
-    results.into_iter().flatten().collect()
+    let mut files = Vec::with_capacity(results.len());
+    for result in results {
+        match result {
+            Ok(file) => files.push(file),
+            Err(err) => record_read_error(unreadable, workspace_root, &err),
+        }
+    }
+    files
+}
+
+/// Read and hash one file.
+///
+/// A read error is logged, and it comes back as an [`ignore::Error::WithPath`]
+/// for `path`, the same shape as an error entry of the walk.
+fn hash_file(workspace_root: &Path, path: &Path) -> Result<HashedFile, ignore::Error> {
+    let contents = fs::read(path).map_err(|e| {
+        tracing::warn!("Failed to read {}: {}", path.display(), e);
+        ignore::Error::WithPath {
+            path: path.to_path_buf(),
+            err: Box::new(ignore::Error::Io(e)),
+        }
+    })?;
+    let size = contents.len() as u64;
+
+    let mut hasher = Sha256::new();
+    hasher.update(&contents);
+    let digest = hasher.finalize();
+    // Store first 16 bytes of SHA-256
+    let hash = digest[..16].to_vec();
+
+    let rel_path = match path.strip_prefix(workspace_root) {
+        Ok(rel) => rel.to_string_lossy().to_string(),
+        Err(_) => path.to_string_lossy().to_string(),
+    };
+
+    Ok(HashedFile {
+        rel_path,
+        hash,
+        size,
+    })
+}
+
+/// Record one file that the hash could not read.
+///
+/// A `NotFound` error is a file that is deleted after the walk. It records
+/// nothing, so that the reconcile deletes the row. Each other error (for
+/// example, permission denied) records the path in `unreadable` and counts
+/// it, so that the reconcile keeps the row.
+fn record_read_error(unreadable: &mut UnreadablePaths, workspace_root: &Path, err: &ignore::Error) {
+    let gone = err
+        .io_error()
+        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound);
+    if !gone {
+        unreadable.record(workspace_root, err);
+    }
 }
 
 #[cfg(test)]
@@ -694,6 +730,17 @@ mod tests {
         .unwrap();
     }
 
+    /// Insert one `indexed_files` row for each `(rel, contents)` pair, and
+    /// give the same rows in the shape that [`reconcile_db_entries`] takes.
+    fn seed_rows(conn: &Connection, rows: &[(&str, &str)]) -> Vec<(String, Vec<u8>)> {
+        rows.iter()
+            .map(|(rel, contents)| {
+                seed_row(conn, rel, contents);
+                (rel.to_string(), hash_bytes(contents.as_bytes()))
+            })
+            .collect()
+    }
+
     /// Tell if `indexed_files` has a row for `rel`.
     fn has_row(conn: &Connection, rel: &str) -> bool {
         conn.query_row(
@@ -751,19 +798,21 @@ mod tests {
         assert_eq!(stats.files_added, 1);
     }
 
-    /// The mode that makes a directory unreadable for a user that is not root.
+    /// The mode that makes a directory or a file unreadable for a user that
+    /// is not root.
     #[cfg(unix)]
     const UNREADABLE_DIR_MODE: u32 = 0o000;
 
-    /// The mode that makes a directory readable again, so the temp dir can be
-    /// removed.
+    /// The mode that makes a directory or a file readable again, so the temp
+    /// dir can be removed.
     #[cfg(unix)]
     const READABLE_DIR_MODE: u32 = 0o755;
 
-    /// Gives the mode [`READABLE_DIR_MODE`] back to a directory when it drops.
+    /// Gives the mode [`READABLE_DIR_MODE`] back to a directory or a file when
+    /// it drops.
     #[cfg(unix)]
     struct RestoreDirMode {
-        /// The directory to make readable again.
+        /// The directory or file to make readable again.
         path: std::path::PathBuf,
     }
 
@@ -778,14 +827,15 @@ mod tests {
         }
     }
 
-    /// A directory with the mode [`UNREADABLE_DIR_MODE`], and what that mode
-    /// does to the process.
+    /// A directory or a file with the mode [`UNREADABLE_DIR_MODE`], and what
+    /// that mode does to the process.
     #[cfg(unix)]
     struct LockedDir {
         /// Gives the readable mode back when the test ends.
         _restore: RestoreDirMode,
         /// `true` when the mode stops the read. It is `false` when the process
-        /// runs as root, because root reads a directory with any mode.
+        /// runs as root, because root reads a directory or a file with any
+        /// mode.
         denied: bool,
     }
 
@@ -795,18 +845,35 @@ mod tests {
     /// the correct result for a process that is root and for one that is not.
     #[cfg(unix)]
     fn make_unreadable_dir(root: &Path, rel: &str) -> LockedDir {
+        lock_path(root, rel, |path| fs::read_dir(path).is_ok())
+    }
+
+    /// Give the file `rel` under `root` the mode [`UNREADABLE_DIR_MODE`].
+    ///
+    /// The result tells if the mode stops the read, so that a test asserts
+    /// the correct result for a process that is root and for one that is not.
+    #[cfg(unix)]
+    fn make_unreadable_file(root: &Path, rel: &str) -> LockedDir {
+        lock_path(root, rel, |path| fs::read(path).is_ok())
+    }
+
+    /// Give the directory or file `rel` under `root` the mode
+    /// [`UNREADABLE_DIR_MODE`], and use `can_read` to tell if the mode stops
+    /// the read.
+    #[cfg(unix)]
+    fn lock_path(root: &Path, rel: &str, can_read: fn(&Path) -> bool) -> LockedDir {
         use std::os::unix::fs::PermissionsExt;
         let path = root.join(rel);
         fs::set_permissions(&path, fs::Permissions::from_mode(UNREADABLE_DIR_MODE)).unwrap();
-        let denied = fs::read_dir(&path).is_err();
+        let denied = !can_read(&path);
         LockedDir {
             _restore: RestoreDirMode { path },
             denied,
         }
     }
 
-    /// The count of walk entries that a directory with the mode
-    /// [`UNREADABLE_DIR_MODE`] makes the walk skip: one when the mode stops
+    /// The count of entries that a directory or a file with the mode
+    /// [`UNREADABLE_DIR_MODE`] makes the cleanup skip: one when the mode stops
     /// the read, else zero.
     #[cfg(unix)]
     fn expected_skipped_entries(locked: &LockedDir) -> usize {
@@ -884,13 +951,7 @@ mod tests {
             ("gone.rs", "fn gone() {}"),
         ];
         let conn = open_memory_db();
-        for (rel, contents) in rows {
-            seed_row(&conn, rel, contents);
-        }
-        let db_entries: Vec<(String, Vec<u8>)> = rows
-            .iter()
-            .map(|(rel, contents)| (rel.to_string(), hash_bytes(contents.as_bytes())))
-            .collect();
+        let db_entries = seed_rows(&conn, &rows);
         let readable_hash = hash_bytes(b"fn a() {}");
         let disk_map = HashMap::from([(readable, (readable_hash.as_slice(), 0))]);
         let mut unreadable = UnreadablePaths::default();
@@ -941,6 +1002,65 @@ mod tests {
         assert_eq!(unreadable.entries_skipped(), 1);
     }
 
+    /// A read error of the hash that is not `NotFound` records the file and
+    /// counts it, so that the reconcile keeps its row. A row for a file that
+    /// is gone is still deleted. The read error is made in the test, so the
+    /// assertions run for each user, also for root.
+    #[test]
+    fn test_reconcile_keeps_row_of_file_with_denied_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let locked = "src/locked.rs";
+        let rows = [(locked, "fn locked() {}"), ("gone.rs", "fn gone() {}")];
+        let conn = open_memory_db();
+        let db_entries = seed_rows(&conn, &rows);
+        let mut unreadable = UnreadablePaths::default();
+        let denied = walk_error(
+            dir.path().join(locked),
+            std::io::ErrorKind::PermissionDenied,
+        );
+        record_read_error(&mut unreadable, dir.path(), &denied);
+        let mut stats = CleanupStats::default();
+
+        reconcile_db_entries(
+            &conn,
+            dir.path(),
+            &db_entries,
+            &HashMap::new(),
+            &unreadable,
+            0,
+            &mut stats,
+        )
+        .unwrap();
+
+        assert!(
+            has_row(&conn, locked),
+            "the row of the file that the hash could not read must stay"
+        );
+        assert!(
+            !has_row(&conn, "gone.rs"),
+            "the row for the gone file is deleted"
+        );
+        assert_eq!(unreadable.entries_skipped(), 1);
+        assert_eq!(stats.files_removed, 1);
+    }
+
+    /// A `NotFound` read error of the hash is a file that is gone. It records
+    /// no path and counts no entry, so that the reconcile deletes the row.
+    #[test]
+    fn test_not_found_read_error_records_nothing() {
+        let root = Path::new("/workspace");
+        let mut unreadable = UnreadablePaths::default();
+
+        record_read_error(
+            &mut unreadable,
+            root,
+            &vanished_file_error(root.join("src/gone.rs")),
+        );
+
+        assert!(!unreadable.covers("src/gone.rs"));
+        assert_eq!(unreadable.entries_skipped(), 0);
+    }
+
     /// The same path two times is one recorded path, but two skipped entries.
     #[test]
     fn test_walk_error_for_same_path_is_new_only_once() {
@@ -985,12 +1105,27 @@ mod tests {
 
         let stats = startup_cleanup(&conn, dir.path()).unwrap();
 
+        assert_locked_row_kept(&conn, &stats, locked_file, &locked);
+    }
+
+    /// Assert the result of a cleanup that had a seeded row for `locked_row`,
+    /// whose path has the mode [`UNREADABLE_DIR_MODE`], and a seeded row for
+    /// the gone file `gone.rs`. The locked row stays, the gone row is
+    /// deleted, and the locked row is compared with its file only when the
+    /// mode does not stop the read.
+    #[cfg(unix)]
+    fn assert_locked_row_kept(
+        conn: &Connection,
+        stats: &CleanupStats,
+        locked_row: &str,
+        locked: &LockedDir,
+    ) {
         assert!(
-            has_row(&conn, locked_file),
-            "the row under the unreadable directory must stay"
+            has_row(conn, locked_row),
+            "the row of the unreadable path must stay"
         );
         assert!(
-            !has_row(&conn, "gone.rs"),
+            !has_row(conn, "gone.rs"),
             "the row for the gone file is deleted"
         );
         assert_eq!(stats.files_removed, 1);
@@ -998,9 +1133,30 @@ mod tests {
         assert_eq!(
             stats.files_unchanged,
             usize::from(!locked.denied),
-            "the row is compared with its file only when the walk can read it"
+            "the row is compared with its file only when the cleanup can read it"
         );
-        assert_eq!(stats.entries_skipped, expected_skipped_entries(&locked));
+        assert_eq!(stats.entries_skipped, expected_skipped_entries(locked));
+    }
+
+    /// The row of a file with the mode [`UNREADABLE_DIR_MODE`] stays, but a
+    /// row for a file that is gone is still deleted. When the mode stops the
+    /// read, the hash records the file and counts it. When the process runs
+    /// as root, the hash reads the file, and the row stays because its file
+    /// is unchanged.
+    #[cfg(unix)]
+    #[test]
+    fn test_cleanup_keeps_row_of_unreadable_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let locked_file = "src/locked.rs";
+        write_file(dir.path(), locked_file, "fn locked() {}");
+        let conn = open_memory_db();
+        seed_row(&conn, locked_file, "fn locked() {}");
+        seed_row(&conn, "gone.rs", "fn gone() {}");
+        let locked = make_unreadable_file(dir.path(), locked_file);
+
+        let stats = startup_cleanup(&conn, dir.path()).unwrap();
+
+        assert_locked_row_kept(&conn, &stats, locked_file, &locked);
     }
 
     #[test]
