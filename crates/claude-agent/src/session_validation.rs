@@ -115,7 +115,7 @@ fn validate_directory_permissions(path: &Path) -> SessionSetupResult<()> {
         source: std::sync::Arc::new(source),
     };
 
-    fs::read_dir(path).map_err(&denied)?;
+    fs::read_dir(path).map_err(denied)?;
     probe_directory_traversal(path).map_err(denied)
 }
 

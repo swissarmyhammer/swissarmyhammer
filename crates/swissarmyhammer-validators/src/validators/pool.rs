@@ -1308,7 +1308,7 @@ mod tests {
         ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
             let should_error = self
                 .remaining_errors
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                     if n > 0 {
                         Some(n - 1)
                     } else {
@@ -1427,7 +1427,7 @@ mod tests {
         ) -> BoxFuture<'a, agent_client_protocol::Result<PromptResponse>> {
             let should_stall = self
                 .remaining_stalls
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                 .is_ok();
             Box::pin(async move {
                 if should_stall {
