@@ -812,9 +812,70 @@ pub fn shell_escape_path(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
 }
 
+/// Report whether `command` gives its child a null stdin.
+///
+/// `sah serve` speaks MCP on its stdin. A child that inherits that stdin can
+/// read MCP frames, so a command that can run in `sah serve` must set its
+/// stdin to null. A test calls this on the command that a builder returns.
+/// The child does not start.
+///
+/// This helper is for unix only. It reads the alternate `Debug` form of the
+/// command, because a std `Command` has no getter for its stdio streams.
+#[cfg(unix)]
+pub fn stdin_is_null(command: &std::process::Command) -> bool {
+    stream_is_null(command, "stdin")
+}
+
+/// Report whether `command` gives its child a null stdout.
+///
+/// `sah serve` writes MCP frames to its stdout. A child that inherits that
+/// stdout can write text into the MCP channel. Refer to [`stdin_is_null`]
+/// for how this helper reads the command.
+#[cfg(unix)]
+pub fn stdout_is_null(command: &std::process::Command) -> bool {
+    stream_is_null(command, "stdout")
+}
+
+/// Report whether the alternate `Debug` form of `command` shows `stream` set
+/// to null.
+///
+/// That form writes a stream that the caller set as `stdin: Some(Null)`, on
+/// more than one line. This helper removes all whitespace before it compares.
+#[cfg(unix)]
+fn stream_is_null(command: &std::process::Command, stream: &str) -> bool {
+    let compact: String = format!("{command:#?}").split_whitespace().collect();
+    compact.contains(&format!("{stream}:Some(Null"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn stdin_is_null_only_when_the_command_sets_a_null_stdin() {
+        let mut null = std::process::Command::new("true");
+        null.stdin(std::process::Stdio::null());
+        let mut piped = std::process::Command::new("true");
+        piped.stdin(std::process::Stdio::piped());
+        let unset = std::process::Command::new("true");
+
+        assert!(stdin_is_null(&null));
+        assert!(!stdin_is_null(&piped));
+        assert!(!stdin_is_null(&unset));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stdout_is_null_only_when_the_command_sets_a_null_stdout() {
+        let mut null = std::process::Command::new("true");
+        null.stdout(std::process::Stdio::null());
+        let mut null_stdin_only = std::process::Command::new("true");
+        null_stdin_only.stdin(std::process::Stdio::null());
+
+        assert!(stdout_is_null(&null));
+        assert!(!stdout_is_null(&null_stdin_only));
+    }
 
     /// Delay used in tests to allow a short-lived spawned process to finish
     /// exiting before asserting on its state.

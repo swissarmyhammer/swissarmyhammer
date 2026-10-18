@@ -343,11 +343,8 @@ impl TerminalManager {
         let command = params.command.clone();
         let args = params.args.clone().unwrap_or_default();
 
-        let mut cmd = Command::new(&command);
-        cmd.args(&args)
-            .current_dir(&working_dir)
-            .envs(&environment)
-            .stdout(std::process::Stdio::piped())
+        let mut cmd = terminal_child_command(&command, &args, &working_dir, &environment);
+        cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|e| {
@@ -591,15 +588,13 @@ impl TerminalManager {
         *session.state.write().await = TerminalState::Running;
 
         // Execute command
-        let output = Command::new(program)
-            .args(args)
-            .current_dir(&session.working_dir)
-            .envs(&session.environment)
-            .output()
-            .await
-            .map_err(|e| {
-                crate::AgentError::ToolExecution(format!("Failed to execute command: {}", e))
-            })?;
+        let output =
+            terminal_child_command(program, args, &session.working_dir, &session.environment)
+                .output()
+                .await
+                .map_err(|e| {
+                    crate::AgentError::ToolExecution(format!("Failed to execute command: {}", e))
+                })?;
 
         // Transition to Finished state and set exit status
         let exit_status = ExitStatus {
@@ -1303,12 +1298,54 @@ impl TerminalSession {
     }
 }
 
+/// Build the command that a terminal session runs as a child process.
+///
+/// The agent can run in `sah serve`, which speaks MCP on its stdin. A child
+/// that inherits that stdin can read MCP frames. The ACP terminal API has no
+/// method that writes to the stdin of a child, so the child gets a null stdin.
+///
+/// Note: tokio `Command::output` does not set an unset stdin to null (std
+/// `Command::output` does). Thus this builder must set stdin for each caller.
+fn terminal_child_command<I, S>(
+    program: &str,
+    args: I,
+    working_dir: &std::path::Path,
+    environment: &HashMap<String, String>,
+) -> Command
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(working_dir)
+        .envs(environment)
+        .stdin(std::process::Stdio::null());
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     async fn create_test_session_manager() -> crate::session::SessionManager {
         crate::session::SessionManager::new()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_child_command_does_not_read_the_stdin_of_this_process() {
+        use swissarmyhammer_common::test_utils::stdin_is_null;
+
+        let command =
+            terminal_child_command("echo", ["test"], std::path::Path::new("/"), &HashMap::new());
+
+        assert!(
+            stdin_is_null(command.as_std()),
+            "stdin is not null: {:#?}",
+            command.as_std()
+        );
     }
 
     /// Build a `TerminalManager` initialized with terminal client capabilities.

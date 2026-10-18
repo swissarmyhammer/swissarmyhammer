@@ -136,21 +136,50 @@ fn find_available_port() -> std::io::Result<u16> {
 
 /// Open URL in default browser.
 fn open_browser(url: &str) -> std::io::Result<()> {
+    if let Some(mut command) = browser_command(url) {
+        command.spawn()?;
+    }
+    Ok(())
+}
+
+/// Build the command that opens `url` in the default browser, or `None` on a
+/// platform that has no such command.
+///
+/// The child gets a null stdin. A child must not read the stdin of this
+/// process, because a parent such as `sah serve` can use that stdin as a
+/// protocol channel.
+fn browser_command(url: &str) -> Option<std::process::Command> {
+    let mut command = platform_browser_command(url)?;
+    command.stdin(std::process::Stdio::null());
+    Some(command)
+}
+
+/// Build the platform-specific command that opens `url` in the default
+/// browser, or `None` on a platform that has no such command.
+fn platform_browser_command(url: &str) -> Option<std::process::Command> {
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open").arg(url).spawn()?;
+        let mut command = std::process::Command::new("open");
+        command.arg(url);
+        Some(command)
     }
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("xdg-open").arg(url).spawn()?;
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(url);
+        Some(command)
     }
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .spawn()?;
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", "", url]);
+        Some(command)
     }
-    Ok(())
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        let _ = url;
+        None
+    }
 }
 
 /// Callback handler for OAuth redirect.
@@ -503,6 +532,17 @@ mod tests {
         let state1 = generate_state();
         let state2 = generate_state();
         assert_ne!(state1, state2);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn browser_command_does_not_read_the_stdin_of_this_process() {
+        use swissarmyhammer_common::test_utils::stdin_is_null;
+
+        let command =
+            browser_command("https://example.com").expect("this platform can open a browser");
+
+        assert!(stdin_is_null(&command), "stdin is not null: {command:#?}");
     }
 
     #[test]

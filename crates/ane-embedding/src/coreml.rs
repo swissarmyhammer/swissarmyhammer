@@ -1,6 +1,7 @@
 //! Thin wrapper isolating all unsafe ObjC interop with CoreML.
 
 use std::path::Path;
+use std::process::Stdio;
 use std::ptr;
 
 use block2::RcBlock;
@@ -80,13 +81,7 @@ impl CoreMLModel {
             let compiled_path = Path::new(compiled_path_string.as_str());
             if compiled_path.exists() && !cache_path.exists() {
                 // Use a command to copy the directory tree (fs::copy doesn't handle dirs)
-                let status = std::process::Command::new("cp")
-                    .args([
-                        "-R",
-                        &compiled_path.to_string_lossy(),
-                        &cache_path.to_string_lossy(),
-                    ])
-                    .status();
+                let status = copy_tree_command(compiled_path, &cache_path).status();
                 match status {
                     Ok(s) if s.success() => {
                         tracing::info!(cache = %cache_path.display(), "Cached compiled CoreML model");
@@ -206,6 +201,22 @@ fn is_cache_valid(source: &Path, cache: &Path) -> bool {
     }
 }
 
+/// Build the `cp -R` command that copies the compiled model tree to the cache.
+///
+/// This command can run in `sah serve`, which speaks MCP on its stdin and
+/// stdout. Thus the child gets a null stdin and a null stdout: it cannot read
+/// MCP frames, and it cannot write text into the MCP channel.
+fn copy_tree_command(source: &Path, destination: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new("cp");
+    command
+        .arg("-R")
+        .arg(source)
+        .arg(destination)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null());
+    command
+}
+
 /// Create an NSArray<NSNumber> representing a shape like [1, seq_len].
 fn nsarray_shape(dims: &[usize]) -> Retained<NSArray<NSNumber>> {
     let nums: Vec<Retained<NSNumber>> = dims
@@ -283,4 +294,18 @@ unsafe fn extract_f32(array: &MLMultiArray) -> crate::error::Result<Vec<f32>> {
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use swissarmyhammer_common::test_utils::{stdin_is_null, stdout_is_null};
+
+    #[test]
+    fn copy_tree_command_does_not_use_the_stdin_or_stdout_of_this_process() {
+        let command = copy_tree_command(Path::new("/compiled.mlmodelc"), Path::new("/cache"));
+
+        assert!(stdin_is_null(&command), "stdin is not null: {command:#?}");
+        assert!(stdout_is_null(&command), "stdout is not null: {command:#?}");
+    }
 }

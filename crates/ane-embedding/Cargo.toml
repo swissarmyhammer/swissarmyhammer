@@ -28,5 +28,6 @@ objc2-foundation = "0.3"
 [dev-dependencies]
 serde_json = { workspace = true }
 serial_test = { workspace = true }
+swissarmyhammer-common = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["full"] }

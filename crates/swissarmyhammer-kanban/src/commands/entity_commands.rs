@@ -437,16 +437,34 @@ pub struct AttachmentRevealCmd;
 
 /// Spawn the platform-specific "reveal in file manager" command.
 ///
-/// Returns the exit status of the spawned process. Each platform uses a
-/// different binary and argument convention, so we branch at compile time
-/// with `#[cfg(target_os)]`.
+/// Returns the exit status of the spawned process.
 fn reveal_in_file_manager(path: &str) -> std::io::Result<std::process::ExitStatus> {
+    reveal_command(path)?.status()
+}
+
+/// Build the "reveal in file manager" command.
+///
+/// The child gets a null stdin and a null stdout. A child must not read the
+/// stdin of this process or write to its stdout, because a parent such as
+/// `sah serve` can use those streams as a protocol channel.
+fn reveal_command(path: &str) -> std::io::Result<std::process::Command> {
+    let mut command = platform_reveal_command(path)?;
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null());
+    Ok(command)
+}
+
+/// Build the platform-specific "reveal in file manager" command.
+///
+/// Each platform uses a different binary and argument convention, so we
+/// branch at compile time with `#[cfg(target_os)]`.
+fn platform_reveal_command(path: &str) -> std::io::Result<std::process::Command> {
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
-            .arg("-R")
-            .arg(path)
-            .status()
+        let mut command = std::process::Command::new("open");
+        command.arg("-R").arg(path);
+        Ok(command)
     }
     #[cfg(target_os = "linux")]
     {
@@ -454,19 +472,21 @@ fn reveal_in_file_manager(path: &str) -> std::io::Result<std::process::ExitStatu
         let parent = std::path::Path::new(path)
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."));
-        std::process::Command::new("xdg-open").arg(parent).status()
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(parent);
+        Ok(command)
     }
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path))
-            .status()
+        let mut command = std::process::Command::new("explorer");
+        command.arg(format!("/select,{}", path));
+        Ok(command)
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            format!("reveal-in-file-manager is not supported on this platform"),
+            "reveal-in-file-manager is not supported on this platform",
         ))
     }
 }
@@ -1227,6 +1247,17 @@ mod tests {
             HashMap::new(),
         );
         assert!(!AttachmentRevealCmd.available(&ctx));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn reveal_command_does_not_use_the_stdin_or_stdout_of_this_process() {
+        use swissarmyhammer_common::test_utils::{stdin_is_null, stdout_is_null};
+
+        let command = reveal_command("/tmp/file.txt").expect("this platform can reveal a file");
+
+        assert!(stdin_is_null(&command), "stdin is not null: {command:#?}");
+        assert!(stdout_is_null(&command), "stdout is not null: {command:#?}");
     }
 
     // =========================================================================

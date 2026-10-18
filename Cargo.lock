@@ -189,6 +189,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "swissarmyhammer-common",
  "tempfile",
  "thiserror 2.0.21",
  "tokenizers",
