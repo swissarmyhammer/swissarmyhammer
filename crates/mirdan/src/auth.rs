@@ -145,14 +145,12 @@ fn open_browser(url: &str) -> std::io::Result<()> {
 /// Build the command that opens `url` in the default browser, or `None` on a
 /// platform that has no such command.
 ///
-/// The child gets a null stdin and a null stdout. A child must not read the
-/// stdin of this process or write to its stdout, because a parent such as
-/// `sah serve` can use those streams as a protocol channel.
+/// The child gets a null stdin and a null stdout from
+/// [`detach_stdio`](swissarmyhammer_common::command::detach_stdio), because a
+/// parent such as `sah serve` can use those streams as a protocol channel.
 fn browser_command(url: &str) -> Option<std::process::Command> {
     let mut command = platform_browser_command(url)?;
-    command
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null());
+    swissarmyhammer_common::command::detach_stdio(&mut command);
     Some(command)
 }
 

@@ -1,12 +1,13 @@
 //! Running a command string through a shell, and describing one that failed.
 //!
-//! Two decisions live here once. Which interpreter runs a command string and
+//! Three decisions live here once. Which interpreter runs a command string and
 //! how the child's streams are wired is [`shell_command`]; how a nonzero exit
 //! reads back to a person is [`command_failure_detail`]. Every caller that
 //! spawns a shell — the review engine's tool-rule runner, the `shell` MCP
 //! tool, the doctor's `--version` probes — goes through them, so two surfaces
 //! can never run the same command two ways or describe the same failure two
-//! ways.
+//! ways. A child that must not touch the stdin or stdout of this process gets
+//! them from [`detach_stdio`].
 
 use std::process::{Command, Output, Stdio};
 
@@ -55,6 +56,20 @@ pub fn shell_command(shell: Shell, script: &str) -> Command {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
+}
+
+/// Give `command` a null stdin and a null stdout, and return it for more
+/// builder calls.
+///
+/// `sah serve` speaks MCP on its stdin and stdout. A child that inherits
+/// those streams can read MCP frames or write text into the MCP channel.
+/// Call this on each `Command` that needs neither stream, before it spawns.
+/// The child keeps the stderr of this process, so its diagnostics still show.
+///
+/// [`shell_command`] does not call this: it captures stdout in a pipe, so it
+/// sets its own streams.
+pub fn detach_stdio(command: &mut Command) -> &mut Command {
+    command.stdin(Stdio::null()).stdout(Stdio::null())
 }
 
 /// Summarize a command that failed: its stderr when it wrote any, its exit
@@ -130,6 +145,33 @@ mod tests {
         );
         assert_eq!(String::from_utf8_lossy(&output.stdout), "out\n");
         assert_eq!(String::from_utf8_lossy(&output.stderr), "err\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detach_stdio_sets_a_null_stdin_and_a_null_stdout() {
+        use crate::test_utils::{stdin_is_null, stdout_is_null};
+
+        let mut command = Command::new("true");
+        detach_stdio(&mut command);
+
+        assert!(stdin_is_null(&command), "stdin is not null: {command:#?}");
+        assert!(stdout_is_null(&command), "stdout is not null: {command:#?}");
+    }
+
+    #[test]
+    fn a_detached_child_writes_nothing_to_the_stdout_of_this_process() {
+        let mut command = Command::new("bash");
+        command.args(["-c", "echo out"]);
+
+        let output = detach_stdio(&mut command).output().expect("bash runs");
+
+        assert!(output.status.success());
+        assert!(
+            output.stdout.is_empty(),
+            "stdout reached this process: {:?}",
+            String::from_utf8_lossy(&output.stdout)
+        );
     }
 
     #[test]

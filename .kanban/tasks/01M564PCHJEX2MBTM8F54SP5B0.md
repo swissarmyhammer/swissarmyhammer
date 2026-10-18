@@ -77,6 +77,48 @@ comments:
     - evidence: cargo nextest run -p mirdan -p claude-agent --no-fail-fast: 1600 run, 1589 passed, 11 timed out, 0 skipped. All 11 timeouts are known environment failures: 8 mirdan git_source test_clone_anthropics_* tests, plus install::profile_consistency_tests (2 tests) and install::tests::test_e2e_clone_anthropics_deploy_validator_uninstall_by_url. Both claude-agent known flaky tests passed. cargo clippy --all-targets --all-features -- -D warnings: clean. cargo fmt --check: clean.
     - next: review
   timestamp: 2026-10-18T01:50:15.894394+00:00
+- actor: claude-code
+  id: 01m56bd0qnrx73hetws3a3sbhy
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD (cde0808d3). 1 finding: crates/mirdan/src/auth.rs:154 duplication/duplication. Counts: 1 confirmed, 0 refuted, 7 attempted, 0 failed.
+    - next: Implement the open item in the section "Review Findings (2026-10-17 20:50)". The task stays in review.
+  timestamp: 2026-10-18T01:53:11.925678+00:00
+- actor: claude-code
+  id: 01m56bds27kc8wnrmqgpn1vvpm
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — 2 files
+    - test: green — cargo nextest -p mirdan -p claude-agent, 1589 of 1600 passed; 11 known mirdan clone timeouts
+    - commit: cde0808d3
+    - review: findings — crates/mirdan/src/auth.rs:154
+  timestamp: 2026-10-18T01:53:36.839039+00:00
+- actor: claude-code
+  id: 01m56bs9vcd7rndprqddcezdfg
+  text: |-
+    Fix for the finding at crates/mirdan/src/auth.rs:154 (duplication/duplication).
+    - Orchestrator decision: reveal_command (kanban) and copy_tree_command (ane-embedding) came from the same commit 7e0dd17ba, so they are inside this change. No separate task. All three sites now call one helper.
+    - New helper: `pub fn detach_stdio(command: &mut Command) -> &mut Command` in crates/swissarmyhammer-common/src/command.rs. It sets stdin and stdout to null. stderr stays inherited.
+    - browser_command, reveal_command and copy_tree_command call it. The local `Stdio` import in coreml.rs is removed.
+    - ane-embedding: swissarmyhammer-common moved from dev-dependencies to the `cfg(target_os = "macos")` dependencies, because coreml.rs compiles on macOS only. Cargo.lock does not change (the edge was already there). `cargo tree -p swissarmyhammer-common -e normal,build -i ane-embedding` finds no match, thus no cycle. mirdan and swissarmyhammer-kanban already had swissarmyhammer-common as a normal dependency.
+    - shell_command does not call detach_stdio: it pipes stdout, so the helper would set stdout and shell_command would then override it. The doc comment of detach_stdio records this.
+    - terminal_child_command (claude-agent) is not changed: it is a tokio Command and its stdout is piped, so only the stdin policy applies there.
+    - Tests: 2 new helper tests (structural with stdin_is_null/stdout_is_null; behavioral: a detached bash `echo out` gives empty captured stdout). RED seen first (E0425, detach_stdio not found). The 3 per-site tests stay and pass.
+  timestamp: 2026-10-18T01:59:54.476203+00:00
+- actor: claude-code
+  id: 01m56bsd0br1dtw2v32y248vvy
+  text: |-
+    ### implement — changed
+    - evidence: 5 files — crates/swissarmyhammer-common/src/command.rs (detach_stdio + 2 tests), crates/mirdan/src/auth.rs, crates/swissarmyhammer-kanban/src/commands/entity_commands.rs, crates/ane-embedding/src/coreml.rs, crates/ane-embedding/Cargo.toml. `cargo nextest run -p swissarmyhammer-common`: 640 run, 640 passed. `cargo nextest run -p mirdan -p swissarmyhammer-kanban -p ane-embedding -E 'test(browser_command) | test(reveal) | test(copy_tree_command)'`: 6 run, 6 passed. `cargo clippy --all-targets --all-features -- -D warnings`: clean. `cargo fmt --check`: clean. Finding flipped to [x].
+    - next: /review
+  timestamp: 2026-10-18T01:59:57.707644+00:00
+- actor: claude-code
+  id: 01m56c92m1cdwdeeev254npdv6
+  text: |-
+    ### test - green
+    - evidence: cargo nextest run -p swissarmyhammer-common -p mirdan -p swissarmyhammer-kanban -p ane-embedding --no-fail-fast: 2831 run, 2820 passed, 11 timed out, 0 skipped. All 11 timeouts are known environment failures: 8 mirdan git_source test_clone_anthropics_*, 2 mirdan install profile_consistency_tests, 1 mirdan install e2e clone test. None of them run the changed code. cargo build --workspace: finished, no warnings. cargo clippy --all-targets --all-features -- -D warnings: finished, no warnings. cargo fmt --check: no output, clean.
+    - next: review
+  timestamp: 2026-10-18T02:08:31.361746+00:00
 position_column: doing
 position_ordinal: '8480'
 title: Do not let a child process inherit the MCP stdin of sah serve
@@ -117,3 +159,12 @@ These sites leave stdin unset on a path that inherits it:
 > - `Cargo.lock` — no validator matches this file
 
 - [x] `crates/mirdan/src/auth.rs:153` `completeness/invariant-propagation` — browser_command nulls the child's stdin but leaves its stdout inherited. The same change nulls stdout for cp (coreml.rs) and reveal, on the stated ground that stdout is the MCP channel of `sah serve`. A browser opener spawned from that process can therefore write text into the MCP stdout stream, which the change does not prevent. In browser_command, also call `.stdout(std::process::Stdio::null())` next to the stdin call, and extend browser_command_does_not_read_the_stdin_of_this_process to assert stdout is null too, as the copy_tree test does. If stdout is deliberately left inherited for browser, document why in the doc comment at auth.rs:145-150.
+
+## Review Findings (2026-10-17 20:50)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 2 file(s) reviewed, 2 not reviewed.
+
+> 2 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 2 file(s)
+
+- [x] `crates/mirdan/src/auth.rs:154` `duplication/duplication` — The change added the stdin and stdout null setup to browser_command. The same policy is already in reveal_command in another crate, so the rule that a child of an MCP server must not use the parent's stdio now exists in two places that can drift apart. Extract one shared helper that applies the null stdin and null stdout policy to a Command, and call it from browser_command. Report the reveal_command counterpart in entity_commands.rs as a separate task, because it is outside this change.

@@ -444,14 +444,12 @@ fn reveal_in_file_manager(path: &str) -> std::io::Result<std::process::ExitStatu
 
 /// Build the "reveal in file manager" command.
 ///
-/// The child gets a null stdin and a null stdout. A child must not read the
-/// stdin of this process or write to its stdout, because a parent such as
-/// `sah serve` can use those streams as a protocol channel.
+/// The child gets a null stdin and a null stdout from
+/// [`detach_stdio`](swissarmyhammer_common::command::detach_stdio), because a
+/// parent such as `sah serve` can use those streams as a protocol channel.
 fn reveal_command(path: &str) -> std::io::Result<std::process::Command> {
     let mut command = platform_reveal_command(path)?;
-    command
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null());
+    swissarmyhammer_common::command::detach_stdio(&mut command);
     Ok(command)
 }
 

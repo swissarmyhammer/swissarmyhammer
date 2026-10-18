@@ -24,10 +24,10 @@ block2 = "0.6"
 objc2 = "0.6"
 objc2-core-ml = { version = "0.3", features = ["MLModel", "MLModel_MLModelCompilation", "MLModelConfiguration", "MLModelDescription", "MLMultiArray", "MLMultiArrayConstraint", "MLFeatureValue", "MLFeatureDescription", "MLDictionaryFeatureProvider", "MLFeatureProvider", "MLPredictionOptions", "block2"] }
 objc2-foundation = "0.3"
+swissarmyhammer-common = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 serial_test = { workspace = true }
-swissarmyhammer-common = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["full"] }

@@ -1,7 +1,6 @@
 //! Thin wrapper isolating all unsafe ObjC interop with CoreML.
 
 use std::path::Path;
-use std::process::Stdio;
 use std::ptr;
 
 use block2::RcBlock;
@@ -13,6 +12,7 @@ use objc2_core_ml::{
     MLModelConfiguration, MLModelDescription, MLMultiArray, MLMultiArrayDataType,
 };
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString, NSURL};
+use swissarmyhammer_common::command::detach_stdio;
 
 use crate::error::EmbeddingError;
 
@@ -204,16 +204,12 @@ fn is_cache_valid(source: &Path, cache: &Path) -> bool {
 /// Build the `cp -R` command that copies the compiled model tree to the cache.
 ///
 /// This command can run in `sah serve`, which speaks MCP on its stdin and
-/// stdout. Thus the child gets a null stdin and a null stdout: it cannot read
-/// MCP frames, and it cannot write text into the MCP channel.
+/// stdout. Thus the child gets a null stdin and a null stdout from
+/// [`detach_stdio`]: it cannot read MCP frames, and it cannot write text into
+/// the MCP channel.
 fn copy_tree_command(source: &Path, destination: &Path) -> std::process::Command {
     let mut command = std::process::Command::new("cp");
-    command
-        .arg("-R")
-        .arg(source)
-        .arg(destination)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null());
+    detach_stdio(command.arg("-R").arg(source).arg(destination));
     command
 }
 
