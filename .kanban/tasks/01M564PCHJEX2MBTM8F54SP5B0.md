@@ -38,6 +38,45 @@ comments:
     - No source file was changed by this step.
     - next: A person must decide. The build cannot be fully green on this machine until the large $TMPDIR problem is fixed. Run the 30 tests on a clean machine or in CI.
   timestamp: 2026-10-18T01:30:45.462118+00:00
+- actor: claude-code
+  id: 01m56am4nwypkdrm7k2scweach
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD (commit 7e0dd17ba). 1 finding (1 confirmed, 1 refuted, 14 attempted, 0 failed): crates/mirdan/src/auth.rs:153
+    - next: Set stdout to null in browser_command and extend its test to assert stdout is null. Then run the review again.
+  timestamp: 2026-10-18T01:39:36.764070+00:00
+- actor: claude-code
+  id: 01m56amrycpjhb878bjjp2d1s9
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 7 files
+    - test: stuck — whole workspace, 12172 of 12202 passed; all 30 failures are the known $TMPDIR and load problems, none runs changed code; 6 new tests pass; clippy and fmt clean
+    - commit: 7e0dd17ba
+    - review: findings — crates/mirdan/src/auth.rs:153
+  timestamp: 2026-10-18T01:39:57.516656+00:00
+- actor: claude-code
+  id: 01m56attwfzna9a9eh2wvksdyp
+  text: |-
+    Fix for the finding at crates/mirdan/src/auth.rs:153 (completeness/invariant-propagation).
+    - browser_command now sets a null stdin and a null stdout. The doc comment says why (stdin and stdout of `sah serve` are the protocol channel).
+    - The test is renamed to browser_command_does_not_use_the_stdin_or_stdout_of_this_process (the same name form as the copy_tree and reveal tests) and asserts stdout_is_null too. RED seen first: "stdout is not null: Command { program: \"open\", ... stdin: Some(Null) }". GREEN after the fix.
+    - Check of terminal_child_command (crates/claude-agent/src/terminal_manager.rs): no spawn path inherits stdout. create_terminal_with_command sets stdout and stderr to piped before spawn. execute_command uses tokio Command::output, which always sets stdout and stderr to piped (tokio-1.53.1 src/process/mod.rs, output(): `self.std.stdout(Stdio::piped()); self.std.stderr(Stdio::piped());`). No code change there. I added a doc comment paragraph to terminal_child_command that records this.
+    - Other sites of the change already null stdout: copy_tree_command (coreml.rs) and reveal_command (kanban).
+  timestamp: 2026-10-18T01:43:16.111311+00:00
+- actor: claude-code
+  id: 01m56aty3bssgq70pc22ckwnr7
+  text: |-
+    ### implement — changed
+    - evidence: 2 files — crates/mirdan/src/auth.rs (stdout null in browser_command, doc comment, test extended and renamed), crates/claude-agent/src/terminal_manager.rs (doc comment only; stdout is already piped on both paths). `cargo nextest run -p mirdan -E 'test(browser_command)'`: 1 run, 1 passed (RED before fix). `cargo nextest run -p claude-agent -E 'test(terminal_child_command)'`: 1 run, 1 passed. `cargo clippy --all-targets --all-features -- -D warnings`: clean. `cargo fmt --check`: clean. Finding flipped to [x].
+    - next: /review
+  timestamp: 2026-10-18T01:43:19.403859+00:00
+- actor: claude-code
+  id: 01m56b7mtpbthe2m1pj3g9j48r
+  text: |-
+    ### test - green
+    - evidence: cargo nextest run -p mirdan -p claude-agent --no-fail-fast: 1600 run, 1589 passed, 11 timed out, 0 skipped. All 11 timeouts are known environment failures: 8 mirdan git_source test_clone_anthropics_* tests, plus install::profile_consistency_tests (2 tests) and install::tests::test_e2e_clone_anthropics_deploy_validator_uninstall_by_url. Both claude-agent known flaky tests passed. cargo clippy --all-targets --all-features -- -D warnings: clean. cargo fmt --check: clean.
+    - next: review
+  timestamp: 2026-10-18T01:50:15.894394+00:00
 position_column: doing
 position_ordinal: '8480'
 title: Do not let a child process inherit the MCP stdin of sah serve
@@ -66,3 +105,15 @@ These sites leave stdin unset on a path that inherits it:
 ## Acceptance criteria
 - No production `Command` that can run in `sah serve` inherits stdin or stdout.
 - `cargo nextest` for the changed crates passes. Clippy `-D warnings` is clean. #bug
+
+## Review Findings (2026-10-17 20:31)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 6 file(s) reviewed, 5 not reviewed.
+
+> 4 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 4 file(s)
+
+> 1 file(s) not reviewed — no validator matched:
+> - `Cargo.lock` — no validator matches this file
+
+- [x] `crates/mirdan/src/auth.rs:153` `completeness/invariant-propagation` — browser_command nulls the child's stdin but leaves its stdout inherited. The same change nulls stdout for cp (coreml.rs) and reveal, on the stated ground that stdout is the MCP channel of `sah serve`. A browser opener spawned from that process can therefore write text into the MCP stdout stream, which the change does not prevent. In browser_command, also call `.stdout(std::process::Stdio::null())` next to the stdin call, and extend browser_command_does_not_read_the_stdin_of_this_process to assert stdout is null too, as the copy_tree test does. If stdout is deliberately left inherited for browser, document why in the doc comment at auth.rs:145-150.

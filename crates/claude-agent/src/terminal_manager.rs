@@ -1306,6 +1306,12 @@ impl TerminalSession {
 ///
 /// Note: tokio `Command::output` does not set an unset stdin to null (std
 /// `Command::output` does). Thus this builder must set stdin for each caller.
+///
+/// The stdout of `sah serve` is its MCP output, so a child must not inherit
+/// it either. This builder does not set stdout, because each caller collects
+/// the output: `create_terminal_with_command` pipes stdout and stderr before
+/// it spawns the child, and `execute_command` uses tokio `Command::output`,
+/// which always pipes stdout and stderr.
 fn terminal_child_command<I, S>(
     program: &str,
     args: I,

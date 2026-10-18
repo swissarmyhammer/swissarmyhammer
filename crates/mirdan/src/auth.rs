@@ -145,12 +145,14 @@ fn open_browser(url: &str) -> std::io::Result<()> {
 /// Build the command that opens `url` in the default browser, or `None` on a
 /// platform that has no such command.
 ///
-/// The child gets a null stdin. A child must not read the stdin of this
-/// process, because a parent such as `sah serve` can use that stdin as a
-/// protocol channel.
+/// The child gets a null stdin and a null stdout. A child must not read the
+/// stdin of this process or write to its stdout, because a parent such as
+/// `sah serve` can use those streams as a protocol channel.
 fn browser_command(url: &str) -> Option<std::process::Command> {
     let mut command = platform_browser_command(url)?;
-    command.stdin(std::process::Stdio::null());
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null());
     Some(command)
 }
 
@@ -536,13 +538,14 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
-    fn browser_command_does_not_read_the_stdin_of_this_process() {
-        use swissarmyhammer_common::test_utils::stdin_is_null;
+    fn browser_command_does_not_use_the_stdin_or_stdout_of_this_process() {
+        use swissarmyhammer_common::test_utils::{stdin_is_null, stdout_is_null};
 
         let command =
             browser_command("https://example.com").expect("this platform can open a browser");
 
         assert!(stdin_is_null(&command), "stdin is not null: {command:#?}");
+        assert!(stdout_is_null(&command), "stdout is not null: {command:#?}");
     }
 
     #[test]
