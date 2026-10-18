@@ -119,8 +119,24 @@ comments:
     - evidence: cargo nextest run -p swissarmyhammer-common -p mirdan -p swissarmyhammer-kanban -p ane-embedding --no-fail-fast: 2831 run, 2820 passed, 11 timed out, 0 skipped. All 11 timeouts are known environment failures: 8 mirdan git_source test_clone_anthropics_*, 2 mirdan install profile_consistency_tests, 1 mirdan install e2e clone test. None of them run the changed code. cargo build --workspace: finished, no warnings. cargo clippy --all-targets --all-features -- -D warnings: finished, no warnings. cargo fmt --check: no output, clean.
     - next: review
   timestamp: 2026-10-18T02:08:31.361746+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01m56cfde14vx09dgezqa503s2
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (82f6f196e): 0 findings, 7 attempted, 0 failed. All prior findings are checked.
+    - next: Task moved to done.
+  timestamp: 2026-10-18T02:11:59.041474+00:00
+- actor: claude-code
+  id: 01m56cg2746q3da00mbqjdbama
+  text: |-
+    ### finish iteration 3 — clean
+    - implement: changed — 5 files (detach_stdio helper)
+    - test: green — cargo nextest 4 crates, 2820 of 2831 passed; 11 known mirdan clone timeouts; workspace build, clippy and fmt clean
+    - commit: 82f6f196e
+    - review: clean — 0 findings; task in done
+  timestamp: 2026-10-18T02:12:20.324369+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffc680
 title: Do not let a child process inherit the MCP stdin of sah serve
 ---
 ## Problem
