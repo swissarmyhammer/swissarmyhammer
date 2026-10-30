@@ -34,8 +34,24 @@ comments:
     - review: not run
     - next: needs rust-analyzer + eslint-plugin-jsdoc installed, then re-run /test
   timestamp: 2026-10-30T14:52:49.793941+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01m66p283bc4qecx12thqx9ye7
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (fe532a658) — 0 findings (confirmed 0, refuted 0; 7 validator runs attempted, 0 failed). 13 files reviewed; 5 Markdown files had no matching validator; .kanban/ excluded by .reviewignore.
+    - next: none — task moved to done.
+  timestamp: 2026-10-30T15:15:15.179666+00:00
+- actor: claude-code
+  id: 01m66p2zf9h619wc60kgw0n7qc
+  text: |-
+    ### finish iteration 2 — clean
+    - environment: installed rust-analyzer (rustup) and eslint-plugin-jsdoc@63.3.3 (global npm), with user approval
+    - test: green — the 6 previously failing tests re-run: 65 run, 65 passed, 0 skipped (source unchanged since the full rdeps run of 8858 with 8852 passing; clippy -D warnings and fmt clean)
+    - commit: fe532a658 (question tool removal); 7aee9ae76 is the separate skills-docs commit
+    - review: clean — review sha HEAD~1..HEAD, 0 findings; task moved to done
+  timestamp: 2026-10-30T15:15:39.113113+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffc780
 title: Remove the sah `question` MCP tool
 ---
 ## What
