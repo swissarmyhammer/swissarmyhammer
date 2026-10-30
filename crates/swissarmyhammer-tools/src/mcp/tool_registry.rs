@@ -918,7 +918,6 @@ pub trait McpTool:
 
             "git" => Some("git"),
             "cel" => Some("cel"),
-            "question" => Some("question"),
             _ => None,
         }
     }
@@ -2115,11 +2114,6 @@ register_tool_category!(
     "Register all git-related tools with the registry"
 );
 register_tool_category!(
-    register_questions_tools,
-    questions,
-    "Register all question-related tools with the registry"
-);
-register_tool_category!(
     register_shell_tools,
     shell,
     "Register all shell-related tools with the registry"
@@ -2170,7 +2164,6 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     // Register all tools exactly like McpServer does
     register_file_tools(&mut registry);
     register_git_tools(&mut registry);
-    register_questions_tools(&mut registry);
     register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);
     register_code_context_tools(&mut registry);
@@ -3080,7 +3073,6 @@ mod tests {
             "code_context",
             "review",
             "ralph",
-            "question",
             "skill",
             "agent",
         ];
@@ -3479,6 +3471,24 @@ mod tests {
             report.is_valid(),
             "all tools in fully registered registry should be valid: {:?}",
             report.errors
+        );
+    }
+
+    /// The `question` tool was removed: neither the fully registered registry
+    /// nor the known-tool-name list may still carry it.
+    #[tokio::test]
+    async fn question_tool_is_not_registered() {
+        let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+        let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(cwd_dir.path())
+            .expect("chdir guard");
+        let registry = create_fully_registered_tool_registry().await;
+        assert!(
+            registry.get_tool("question").is_none(),
+            "fully registered registry must not register a `question` tool"
+        );
+        assert!(
+            !crate::mcp::tool_config::KNOWN_TOOL_NAMES.contains(&"question"),
+            "KNOWN_TOOL_NAMES must not list the removed `question` tool"
         );
     }
 

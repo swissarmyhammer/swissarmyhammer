@@ -12,8 +12,8 @@ use swissarmyhammer_common::health::{Doctorable, HealthCheck};
 use crate::mcp::tool_registry::ToolRegistry;
 use crate::mcp::{
     register_code_context_tools, register_diagnostics_tools, register_file_tools,
-    register_git_tools, register_kanban_tools, register_questions_tools, register_ralph_tools,
-    register_shell_tools, register_web_tools,
+    register_git_tools, register_kanban_tools, register_ralph_tools, register_shell_tools,
+    register_web_tools,
 };
 // The specialized `review` registration lives on the tool module, like
 // `register_review_tool_with_factories` the server wiring uses.
@@ -212,7 +212,6 @@ pub async fn collect_all_health_checks(workspace_root: &std::path::Path) -> Vec<
     register_git_tools(&mut tool_registry);
     register_shell_tools(&mut tool_registry);
     register_kanban_tools(&mut tool_registry);
-    register_questions_tools(&mut tool_registry);
     register_web_tools(&mut tool_registry);
     register_code_context_tools(&mut tool_registry);
     register_ralph_tools(&mut tool_registry);

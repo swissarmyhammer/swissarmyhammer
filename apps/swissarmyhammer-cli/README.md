@@ -70,12 +70,6 @@ Supports Rust, Python, TypeScript, JavaScript, Go, Java, C, C++, C#, Ruby, PHP, 
 
 Workflows are defined in markdown with Mermaid state diagrams. They chain prompts, tool calls, and actions into multi-step orchestrations.
 
-### Questions
-| Tool | Operation | Description |
-|------|-----------|-------------|
-| `question` | `ask question` | Ask the user questions via MCP elicitation |
-| `question` | `summarize questions` | Retrieve question/answer history |
-
 ### JavaScript
 | Tool | Description |
 |------|-------------|

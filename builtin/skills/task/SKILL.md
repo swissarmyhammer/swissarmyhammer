@@ -20,7 +20,7 @@ Use the `/kanban` skill to learn about the kanban tool.
 
 - **One task per invocation.** Multiple items → pick the most important, suggest `/plan` for the rest.
 - **Research before writing.** No guessing at paths, names, test locations.
-- **Ask, don't assume.** Vague requests get the `question` tool.
+- **Ask, don't assume.** Vague requests: ask the user a clarifying question before writing the task.
 - **Task quality is non-negotiable** — What + Acceptance Criteria + Tests.
 - **Kanban only** — no TodoWrite/TaskCreate.
 
