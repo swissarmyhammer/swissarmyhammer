@@ -43,6 +43,8 @@ metadata:
   markers. Never set or read an environment variable to select, skip, or
   switch tests.
 
+{% include "_partials/test-design" %}
+
 ## Guidelines
 
 - All tests pass. A partial pass is a fail.

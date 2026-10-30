@@ -222,6 +222,8 @@ Next failing test for next feature.
   `swift test --package-path IntegrationTests`, or a Rust crate the workspace
   `default-members` list excludes, run with `cargo test -p <crate>`.
 
+{% include "_partials/test-design" %}
+
 ## Good Tests
 
 | Quality | Good | Bad |
