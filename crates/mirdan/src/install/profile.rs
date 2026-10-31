@@ -234,7 +234,7 @@ pub struct Profile {
     /// Whether to install the edit-surface redirect fragment: a
     /// `permissions.deny` on the native `Edit`/`Write` tools so every
     /// mutation flows through the served `files` MCP replacement (the
-    /// diagnostics-instrumented path), mirroring how `shell` supersedes `Bash`.
+    /// diagnostics-instrumented path).
     /// The deny alone closes the surface — no `PreToolUse` hook. Claude-shaped
     /// and inert on hosts that don't read that key (see
     /// [`apply_profile_edit_redirect`]).
@@ -918,9 +918,9 @@ pub(crate) fn apply_statusline_at(path: &Path, install: bool) -> Result<bool, Re
 // ── Edit-surface redirect (close the superseded-native surface) ──────
 //
 // An MCP server cannot disable a host's *native* built-in tools, so closing
-// the surface sah supersedes — forcing every shell command through the served
-// `shell` tool and every file operation through the served `files` tool, so
-// diagnostics always ride the result — ships as an installable Claude Code
+// the surface sah supersedes — forcing every file operation through the served
+// `files` tool, so diagnostics always ride the result — ships as an installable
+// Claude Code
 // settings fragment that `permissions.deny`s those natives. The deny alone
 // closes the surface: the model is steered to the served replacements, and no
 // redirect hook is needed. (An earlier version also installed a `PreToolUse`
@@ -933,18 +933,23 @@ pub(crate) fn apply_statusline_at(path: &Path, install: bool) -> Result<bool, Re
 
 /// The native Claude Code tools sah supersedes, denied by the redirect fragment.
 ///
-/// The deny forces `Bash` to the served `shell` tool and `Read`/`Edit`/`Write`
-/// to the served `files` tool. Kept as data (not spelled into control flow) so
-/// the installer that writes the deny and the
-/// [`permissions_present`](crate::status::permissions_present) detector that
-/// reads it back derive from one source and cannot drift.
-pub const SUPERSEDED_NATIVE_DENY_TOOLS: &[&str] = &["Bash", "Edit", "Read", "Write"];
+/// The deny forces `Read`/`Edit`/`Write` to the served `files` tool. Kept as
+/// data (not spelled into control flow) so the installer that writes the deny
+/// and the [`permissions_present`](crate::status::permissions_present) detector
+/// that reads it back derive from one source and cannot drift.
+pub const SUPERSEDED_NATIVE_DENY_TOOLS: &[&str] = &["Edit", "Read", "Write"];
+
+/// The `Bash` deny entry that older sah versions wrote.
+///
+/// sah no longer denies `Bash`. The edit-redirect step only removes this entry,
+/// on install and on removal, so old settings files are cleaned up.
+pub const LEGACY_BASH_DENY_TOOL: &str = "Bash";
 
 /// The installable Claude Code settings fragment that closes the superseded
 /// surface.
 ///
 /// Denies the natives in [`SUPERSEDED_NATIVE_DENY_TOOLS`] — and nothing else.
-/// The model is steered to the served `shell` and `files` MCP replacements. The
+/// The model is steered to the served `files` MCP replacement. The
 /// deny alone closes the surface; a `PreToolUse` redirect would be redundant and
 /// breaks wherever the replacement isn't mounted (the host's own write attempts,
 /// nested contexts). This is the single source of truth for the fragment's
@@ -964,7 +969,8 @@ pub(crate) fn desired_edit_redirect_fragment() -> serde_json::Value {
 /// On install, every deny entry of [`SUPERSEDED_NATIVE_DENY_TOOLS`] is added
 /// idempotently (existing unrelated deny entries are preserved, and re-running
 /// adds nothing). On removal, exactly those entries are taken back out and
-/// unrelated keys are left intact. A missing
+/// unrelated keys are left intact. In both directions the legacy
+/// [`LEGACY_BASH_DENY_TOOL`] entry is removed, never written. A missing
 /// file is created on install and a no-op on removal. Returns `Ok(true)` when the
 /// file changed.
 pub(crate) fn apply_edit_redirect_at(path: &Path, install: bool) -> Result<bool, RegistryError> {
@@ -993,6 +999,13 @@ pub(crate) fn apply_edit_redirect_at(path: &Path, install: bool) -> Result<bool,
         };
         changed |= one;
     }
+
+    // Old sah versions denied `Bash`. Clean that entry up in both directions.
+    changed |= settings::remove_from_array(
+        &mut settings,
+        &pointer,
+        &serde_json::json!(LEGACY_BASH_DENY_TOOL),
+    );
 
     if changed {
         settings::write_json(path, &settings)?;
@@ -1445,7 +1458,7 @@ fn prune_store_readme_at(
 /// This is the single shared glue every profile consumer needs: the profile
 /// installer ([`init_profile`]) followed by the tool's own `Initializable`
 /// components (e.g. a `.code-context/` directory, `.kanban/` merge drivers, a
-/// `Bash` denial). Each tool CLI and sah build their `Profile`, register their
+/// `Bash` permission cleanup). Each tool CLI and sah build their `Profile`, register their
 /// tool-lifecycle components, and call this — instead of re-spelling the
 /// "profile then registry, concatenate results" sequence in four places.
 ///

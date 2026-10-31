@@ -1,4 +1,4 @@
-//! Pre-scoped clones of the running server, and the native tools they supersede.
+//! Pre-scoped clones of the running server.
 //!
 //! A clone shares every piece of the server's state but carries its own tool
 //! registry, so the set of tools it serves is fixed at construction rather than
@@ -7,8 +7,6 @@
 //! whose registry holds the intrinsic agent tools.
 
 use super::McpServer;
-use crate::mcp::host::Host;
-use rmcp::model::*;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -68,9 +66,6 @@ impl McpServer {
             // rather than re-filtering by host/category, which would apply the
             // primary-only serve gate to its read-only `files` tool.
             compose_per_client: false,
-            // Non-primary instance: the serve-time deny is gated on
-            // `compose_per_client`, so this latch is never read. Its own flag.
-            bash_denied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -152,82 +147,6 @@ impl McpServer {
             // This registry IS the set to serve; serve it verbatim rather than
             // re-filtering by host/category (which strips all `Agent` tools).
             compose_per_client: false,
-            // Non-primary instance (the in-process agent-tools mount): never
-            // fires the serve-time deny (gated on `compose_per_client`).
-            bash_denied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        }
-    }
-
-    /// Suppress the native host tools the served `Replacement` tools supersede,
-    /// for a Claude client connecting at serve time.
-    ///
-    /// A `Replacement { native }` tool (today only `shell`, replacing `"Bash"`)
-    /// is served to Claude so it supersedes Claude's native tool of that name.
-    /// For the supersession to be real, Claude's native must also be *denied* —
-    /// otherwise the model sees both and may keep reaching for the native. This
-    /// writes that deny into Claude's local settings via the same idempotent
-    /// mirdan primitive `sah init` already uses ([`mirdan::install::deny_tool`]),
-    /// deriving the native names from the registry's `Replacement` categories
-    /// rather than hardcoding `"Bash"`, so the suppression tracks the served set.
-    ///
-    /// Gates:
-    /// - **Primary serve only.** Skips when `compose_per_client` is `false` (the
-    ///   validator and agent-tools-mount instances), which never advertise the
-    ///   `Replacement` tools and so must not write denies.
-    /// - **Claude only.** Unknown clients keep their native tools;
-    ///   re-allowing is left to `deinit`, not self-corrected here.
-    /// - **Once.** Latches on first Claude connection so repeated `initialize`s
-    ///   don't rewrite settings; the underlying deny is idempotent regardless.
-    ///
-    /// Scope is [`InitScope::Local`] — Claude's `.claude/settings.local.json`,
-    /// resolved from the serve working directory — so the deny is a runtime/local
-    /// change, not a committed repo edit. Reports through a `tracing`-backed
-    /// reporter because serve-path stderr is swallowed by the MCP transport.
-    pub(super) async fn apply_serve_time_native_deny(&self, client_info: &Implementation) {
-        use std::sync::atomic::Ordering;
-        use swissarmyhammer_common::lifecycle::InitScope;
-        use swissarmyhammer_common::reporter::TracingReporter;
-
-        // Only the primary per-client serve instance suppresses natives; the
-        // validator and agent-tools-mount instances serve pre-scoped registries and
-        // must never write agent settings.
-        if !self.compose_per_client {
-            return;
-        }
-
-        if Host::from_client_info(client_info) != Host::Claude {
-            return;
-        }
-
-        // Latch: first Claude connection wins; later ones are no-ops.
-        if self.bash_denied.swap(true, Ordering::SeqCst) {
-            return;
-        }
-
-        let natives = {
-            let registry = self.tool_registry.read().await;
-            registry.replacement_natives()
-        };
-
-        let reporter = TracingReporter;
-        for native in natives {
-            let results = mirdan::install::deny_tool(InitScope::Local, native, &reporter);
-            for r in &results {
-                if r.status == swissarmyhammer_common::lifecycle::InitStatus::Error {
-                    tracing::warn!(
-                        native = native,
-                        "serve-time native deny error: {} — {}",
-                        r.name,
-                        r.message
-                    );
-                }
-            }
-            tracing::info!(
-                native = native,
-                client = %client_info.name,
-                event = "serve_native_denied",
-                "Denied native host tool for Claude (replaced by served tool)"
-            );
         }
     }
 }

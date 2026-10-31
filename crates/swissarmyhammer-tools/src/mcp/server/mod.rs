@@ -11,8 +11,7 @@
 //!   file-watch paths.
 //! - [`code_context`] — code-context workspace startup: leader election, the
 //!   LSP supervisor, the indexing workers, and the diagnostics fan-out.
-//! - [`profiles`] — the pre-scoped server clones (validator, agent tools) and
-//!   the serve-time native-tool deny.
+//! - [`profiles`] — the pre-scoped server clones (validator, agent tools).
 //! - [`prompts`] — prompt reload and the content signature that decides whether
 //!   a reload changed anything.
 //! - [`file_watch`] — prompt-directory watching, start and stop.
@@ -99,15 +98,6 @@ pub struct McpServer {
     ///   even though no [`Host`] reports `serves(Agent)`, so per-client filtering
     ///   would serve zero tools.
     compose_per_client: bool,
-    /// Latches once the serve-time native-tool deny has run for a Claude client.
-    ///
-    /// When a Claude client connects, the serve path denies the native host
-    /// tool(s) superseded by the served `Replacement` tools (e.g. `Bash`, since
-    /// `shell` replaces it) so the served tool truly supersedes Claude's native
-    /// rather than competing with it. The deny is idempotent, but this flag keeps
-    /// it from re-writing settings on every `initialize`; the first Claude
-    /// connection latches it. Shared across clones so all share the same latch.
-    bash_denied: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Prints the fields a reader can learn without taking a lock.
@@ -123,7 +113,6 @@ impl std::fmt::Debug for McpServer {
             .field("work_dir", &self.work_dir)
             .field("compose_per_client", &self.compose_per_client)
             .field("file_watch_stopped", &self.file_watch_stopped)
-            .field("bash_denied", &self.bash_denied)
             .finish_non_exhaustive()
     }
 }
@@ -206,7 +195,6 @@ impl McpServer {
             work_dir: Some(work_dir),
             tool_config_watcher: Arc::new(Mutex::new(super::tool_config::ToolConfigWatcher::new())),
             compose_per_client: true,
-            bash_denied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 

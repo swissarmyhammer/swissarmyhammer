@@ -355,7 +355,8 @@ fn check_config_file(check_name: &str, path: &std::path::Path, cat: &str) -> Hea
 // agent settings and produced false warnings under a user-scope install. Their
 // concerns are now covered by mirdan's scope-aware install/status stack, which
 // reports per-agent permission and skill rows. The installer side — the tool's
-// `init` delegating the Bash deny to mirdan — is described on `init` below.
+// `init` delegating the legacy Bash-deny cleanup to mirdan — is described on
+// `init` below.
 
 /// Create `.shell/config.yaml` from the builtin template when it doesn't exist.
 ///
@@ -440,11 +441,11 @@ impl Doctorable for ShellExecuteTool {
 /// names that difference so one function runs both directions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LifecycleDirection {
-    /// Registers the MCP server entry, denies `Bash`, and writes the project
-    /// config.
+    /// Registers the MCP server entry, removes any legacy `Bash` deny, and
+    /// writes the project config.
     Install,
-    /// Unregisters the MCP server entry, allows `Bash` again, and removes the
-    /// project config.
+    /// Unregisters the MCP server entry, removes any legacy `Bash` deny, and
+    /// removes the project config.
     Remove,
 }
 
@@ -452,7 +453,7 @@ impl LifecycleDirection {
     /// The message a run reports when no step failed.
     fn success_message(self) -> &'static str {
         match self {
-            Self::Install => "Shell tool initialized (MCP + Bash deny + config)",
+            Self::Install => "Shell tool initialized (MCP + config)",
             Self::Remove => "Shell tool deinitialized",
         }
     }
@@ -468,8 +469,8 @@ impl LifecycleDirection {
 
 /// Runs one direction of the shell tool's lifecycle over `scope`.
 ///
-/// The three steps — the MCP server entry, the `Bash` permission, and the
-/// tool's own `.shell/` config — are the same for both directions, so `init`
+/// The three steps — the MCP server entry, the legacy `Bash` deny cleanup, and
+/// the tool's own `.shell/` config — are the same for both directions, so `init`
 /// and `deinit` differ only in the `direction` they hand in.
 ///
 /// A step answers `None` when it succeeded and `Some(message)` when it failed.
@@ -495,15 +496,14 @@ fn run_lifecycle(
         })
     };
 
-    let bash_permission = || -> Option<String> {
-        applier_error(&match direction {
-            LifecycleDirection::Install => {
-                mirdan::install::deny_tool(*scope, BASH_TOOL_NAME, reporter)
-            }
-            LifecycleDirection::Remove => {
-                mirdan::install::allow_tool(*scope, BASH_TOOL_NAME, reporter)
-            }
-        })
+    // Older sah versions denied `Bash`. Both directions allow it again, so
+    // init and deinit leave `Bash` allowed.
+    let legacy_bash_cleanup = || -> Option<String> {
+        applier_error(&mirdan::install::allow_tool(
+            *scope,
+            BASH_TOOL_NAME,
+            reporter,
+        ))
     };
 
     let project_config = || -> Option<String> {
@@ -520,7 +520,7 @@ fn run_lifecycle(
     let mut results = Vec::new();
     for step in [
         &mcp_server as &dyn Fn() -> Option<String>,
-        &bash_permission,
+        &legacy_bash_cleanup,
         &project_config,
     ] {
         if let Some(err) = step() {
@@ -559,8 +559,9 @@ impl swissarmyhammer_common::lifecycle::Initializable for ShellExecuteTool {
     /// 1. Register the MCP server entry (if one was injected via
     ///    [`ShellExecuteTool::with_mcp_server`]) across detected agents via
     ///    [`mirdan::install::register_mcp_server`].
-    /// 2. Deny the built-in `Bash` tool across detected agents via
-    ///    [`mirdan::install::deny_tool`].
+    /// 2. Allow the built-in `Bash` tool across detected agents via
+    ///    [`mirdan::install::allow_tool`]. This only removes a deny entry that
+    ///    older sah versions wrote. sah no longer denies `Bash`.
     /// 3. Create `.shell/config.yaml` from the builtin template — the tool's
     ///    own (non-agent) config, only for Project and Local scopes (a
     ///    User-scope install has no project dir).
@@ -1225,7 +1226,7 @@ mod tests {
         assert!(config_path.exists());
     }
 
-    // Bash deny/allow at each scope is now owned by mirdan's per-agent
+    // The legacy Bash deny cleanup at each scope is owned by mirdan's per-agent
     // strategies and exercised by the scope-aware lifecycle tests below
     // (which inject a synthetic claude-code agent). The tool no longer writes
     // settings files directly.
@@ -1412,7 +1413,7 @@ mod tests {
     // and tested there. The tool only declares intent and delegates.
 
     // =====================================================================
-    // Scope-aware lifecycle: MCP registration + Bash deny + config dir
+    // Scope-aware lifecycle: MCP registration + legacy Bash deny cleanup + config dir
     //
     // These drive the tool's full install lifecycle across User/Local/Project.
     // They mutate process-global HOME, CWD, and the `MIRDAN_AGENTS_CONFIG`
@@ -1487,9 +1488,19 @@ mod tests {
             .unwrap_or(false)
     }
 
-    /// User scope: the agent's global settings file gains/loses Bash, the
-    /// agent's global MCP config gains/loses the `shelltool` entry, and NO
-    /// `.shell/` dir is created.
+    /// Seed the settings file at `path` the way an older sah left it: with
+    /// `Bash` in `permissions.deny`.
+    fn seed_legacy_bash_deny(path: &std::path::Path) {
+        std::fs::create_dir_all(path.parent().expect("settings path has a parent"))
+            .expect("create the settings directory");
+        std::fs::write(path, r#"{"permissions":{"deny":["Bash"]}}"#).expect("seed legacy deny");
+        assert!(bash_denied(path), "the fixture must start with Bash denied");
+    }
+
+    /// User scope: init removes a legacy Bash deny from the agent's global
+    /// settings file and deinit leaves Bash allowed, the agent's global MCP
+    /// config gains/loses the `shelltool` entry, and NO `.shell/` dir is
+    /// created.
     #[tokio::test]
     #[serial(cwd, env)]
     async fn test_tool_lifecycle_user_scope() {
@@ -1501,13 +1512,15 @@ mod tests {
         let config_path = write_agents_config(&home, &global_mcp, &global_settings);
         let _mirdan = MirdanConfigGuard::set(&config_path);
 
+        seed_legacy_bash_deny(&global_settings);
+
         let tool = tool_with_shelltool_server();
         let reporter = NullReporter;
         let _ = Initializable::init(&tool, &InitScope::User, &reporter);
 
         assert!(
-            bash_denied(&global_settings),
-            "Bash should be denied at user scope"
+            !bash_denied(&global_settings),
+            "Bash must not be denied at user scope after init"
         );
 
         let global: serde_json::Value =
@@ -1522,7 +1535,7 @@ mod tests {
         let _ = Initializable::deinit(&tool, &InitScope::User, &reporter);
         assert!(
             !bash_denied(&global_settings),
-            "Bash should be removed at user scope"
+            "Bash must stay allowed at user scope after deinit"
         );
         let global_after: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&global_mcp).unwrap()).unwrap();
@@ -1532,11 +1545,12 @@ mod tests {
         );
     }
 
-    /// Local scope: the agent's `settings.local.json` sibling denies Bash and
-    /// loses it on deinit, and NO `.shell/` dir leaks outside Project|Local
-    /// gating (Local does create one). The local-scope MCP registration +
-    /// empty-map prune is covered by mirdan's strategy tests; this test asserts
-    /// the tool's delegation drives the per-scope settings sibling.
+    /// Local scope: init removes a legacy Bash deny from the agent's
+    /// `settings.local.json` sibling and deinit leaves Bash allowed, and NO
+    /// `.shell/` dir leaks outside Project|Local gating (Local does create
+    /// one). The local-scope MCP registration + empty-map prune is covered by
+    /// mirdan's strategy tests; this test asserts the tool's delegation drives
+    /// the per-scope settings sibling.
     #[tokio::test]
     #[serial(cwd, env)]
     async fn test_tool_lifecycle_local_scope() {
@@ -1550,28 +1564,29 @@ mod tests {
         let config_path = write_agents_config(&project, &global_mcp, &global_settings);
         let _mirdan = MirdanConfigGuard::set(&config_path);
 
-        let tool = tool_with_shelltool_server();
-        let reporter = NullReporter;
-        let _ = Initializable::init(&tool, &InitScope::Local, &reporter);
-
         // The strategy derives the local settings sibling from the agent's
         // project settings file: agent-config/settings.local.json.
         let local_settings = project.join("agent-config").join("settings.local.json");
+        seed_legacy_bash_deny(&local_settings);
+
+        let tool = tool_with_shelltool_server();
+        let reporter = NullReporter;
+        let _ = Initializable::init(&tool, &InitScope::Local, &reporter);
         assert!(
-            bash_denied(&local_settings),
-            "Bash should be denied at local scope"
+            !bash_denied(&local_settings),
+            "Bash must not be denied at local scope after init"
         );
 
         let _ = Initializable::deinit(&tool, &InitScope::Local, &reporter);
         assert!(
             !bash_denied(&local_settings),
-            "Bash should be removed at local scope"
+            "Bash must stay allowed at local scope after deinit"
         );
     }
 
-    /// Project scope: the project MCP file gets the shelltool entry, the
-    /// agent's project settings file denies Bash, and `.shell/config.yaml` is
-    /// created.
+    /// Project scope: the project MCP file gets the shelltool entry, init
+    /// removes a legacy Bash deny from the agent's project settings file, and
+    /// `.shell/config.yaml` is created.
     #[tokio::test]
     #[serial(cwd, env)]
     async fn test_tool_lifecycle_project_scope() {
@@ -1585,6 +1600,9 @@ mod tests {
         let config_path = write_agents_config(&project, &global_mcp, &global_settings);
         let _mirdan = MirdanConfigGuard::set(&config_path);
 
+        let project_settings = project.join("agent-config").join("settings.json");
+        seed_legacy_bash_deny(&project_settings);
+
         let tool = tool_with_shelltool_server();
         let reporter = NullReporter;
         let _ = Initializable::init(&tool, &InitScope::Project, &reporter);
@@ -1594,10 +1612,9 @@ mod tests {
                 .unwrap();
         assert_eq!(mcp_json["mcpServers"]["shelltool"]["command"], "shelltool");
 
-        let project_settings = project.join("agent-config").join("settings.json");
         assert!(
-            bash_denied(&project_settings),
-            "Bash should be denied at project scope"
+            !bash_denied(&project_settings),
+            "Bash must not be denied at project scope after init"
         );
 
         let config_yaml = project.join(".shell").join("config.yaml");

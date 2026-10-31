@@ -11,8 +11,7 @@
 //!    that decides whether SAH serves a tool of a given category to a given host.
 //!
 //! Centralizing the name → identity mapping here means later serve-time policy
-//! (e.g. the Bash-deny for Claude's native shell) reuses the exact same mapping
-//! instead of re-deriving it inline.
+//! reuses the exact same mapping instead of re-deriving it inline.
 
 use rmcp::model::Implementation;
 

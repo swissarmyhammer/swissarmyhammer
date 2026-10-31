@@ -1,0 +1,2 @@
+description: Remove the shelltool CLI binary and the MCP shell tool. Agents use the host Bash tool instead.
+name: remove-shelltool

@@ -26,9 +26,9 @@
 //! project types; reading a rule's `install.commands` means parsing the
 //! validator stack, which the profile installer cannot do.
 //!
-//! There is no Bash-permission component: the Bash deny is owned by the serve
-//! path (applied when a Claude client connects) and is sticky — neither
-//! `sah init` nor `sah deinit` denies or re-allows Bash.
+//! There is no Bash-permission component: sah no longer denies Bash. The
+//! profile's `edit_redirect` step removes a legacy Bash deny that an older sah
+//! wrote.
 
 use swissarmyhammer_common::lifecycle::InitRegistry;
 

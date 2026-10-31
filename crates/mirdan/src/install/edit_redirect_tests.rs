@@ -1,10 +1,11 @@
 use super::*;
 use serde_json::json;
+use std::path::Path;
 
 /// The generated fragment must be valid Claude Code settings JSON: it denies
 /// every native sah supersedes and installs **no** `PreToolUse` hook. The deny
-/// alone closes the surface — the model is steered to the served `shell` and
-/// `files` replacements.
+/// alone closes the surface — the model is steered to the served `files`
+/// replacement.
 #[test]
 fn fragment_denies_superseded_natives_without_hook() {
     let fragment = desired_edit_redirect_fragment();
@@ -71,7 +72,7 @@ fn apply_edit_redirect_at_preserves_unrelated_keys() {
         &path,
         serde_json::to_string_pretty(&json!({
             "model": "opus",
-            "permissions": { "deny": ["Bash"], "allow": ["Read"] },
+            "permissions": { "deny": ["WebFetch"], "allow": ["Read"] },
             "hooks": {
                 "PostToolUse": [
                     { "matcher": "Write", "hooks": [{ "type": "command", "command": "fmt" }] }
@@ -88,24 +89,99 @@ fn apply_edit_redirect_at_preserves_unrelated_keys() {
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     // Unrelated top-level key untouched.
     assert_eq!(written["model"], json!("opus"));
-    // Pre-existing allow + the pre-existing Bash deny survive.
+    // Pre-existing allow + the pre-existing unrelated deny survive.
     assert_eq!(written["permissions"]["allow"], json!(["Read"]));
     let deny = written["permissions"]["deny"].as_array().unwrap();
-    assert!(deny.iter().any(|v| v == &json!("Bash")));
+    assert!(deny.iter().any(|v| v == &json!("WebFetch")));
     assert!(deny.iter().any(|v| v == &json!("Edit")));
     // The unrelated PostToolUse hook is preserved.
     assert!(written["hooks"]["PostToolUse"].is_array());
 }
 
-/// The deny set is the exact roster of natives sah supersedes: `Bash` (served
-/// as `shell`) and `Read`/`Edit`/`Write` (served as `files`). Pinned so a silent
-/// change to the roster fails a test instead of shipping.
+/// The deny set is the exact roster of natives sah supersedes:
+/// `Read`/`Edit`/`Write` (served as `files`). Pinned so a silent change to the
+/// roster fails a test instead of shipping.
 #[test]
-fn superseded_deny_set_is_exactly_the_four_natives() {
+fn superseded_deny_set_is_exactly_the_three_file_natives() {
     assert_eq!(
         SUPERSEDED_NATIVE_DENY_TOOLS,
-        ["Bash", "Edit", "Read", "Write"],
-        "the superseded-native deny set must hold exactly the four natives sah replaces"
+        ["Edit", "Read", "Write"],
+        "the superseded-native deny set must hold exactly the three file natives sah replaces"
+    );
+}
+
+/// Read the `permissions.deny` strings of the settings file at `path`.
+fn read_deny(path: &Path) -> Vec<String> {
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    written["permissions"]["deny"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Write a settings file whose `permissions.deny` holds `entries`.
+fn seed_deny(path: &Path, entries: &[&str]) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        path,
+        json!({ "permissions": { "deny": entries } }).to_string(),
+    )
+    .unwrap();
+}
+
+/// A legacy `Bash` deny that an older sah wrote is removed on install.
+#[test]
+fn install_removes_a_legacy_bash_deny() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(".claude/settings.json");
+    seed_deny(&path, &[LEGACY_BASH_DENY_TOOL]);
+
+    assert!(
+        apply_edit_redirect_at(&path, true).unwrap(),
+        "install must change the file"
+    );
+
+    let deny = read_deny(&path);
+    assert!(
+        !deny.iter().any(|v| v == LEGACY_BASH_DENY_TOOL),
+        "legacy Bash deny must be removed; got {deny:?}"
+    );
+}
+
+/// A legacy `Bash` deny that an older sah wrote is removed on removal too, and
+/// an unrelated deny entry stays.
+#[test]
+fn removal_removes_a_legacy_bash_deny() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(".claude/settings.json");
+    seed_deny(&path, &[LEGACY_BASH_DENY_TOOL, "WebFetch"]);
+
+    assert!(
+        apply_edit_redirect_at(&path, false).unwrap(),
+        "removal must change the file"
+    );
+
+    assert_eq!(read_deny(&path), ["WebFetch"]);
+}
+
+/// A fresh install never writes a `Bash` deny.
+#[test]
+fn fresh_install_never_writes_a_bash_deny() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(".claude/settings.json");
+
+    apply_edit_redirect_at(&path, true).unwrap();
+
+    let deny = read_deny(&path);
+    assert!(
+        !deny.iter().any(|v| v == LEGACY_BASH_DENY_TOOL),
+        "install must not write a Bash deny; got {deny:?}"
     );
 }
 

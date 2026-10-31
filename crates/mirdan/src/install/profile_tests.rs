@@ -321,6 +321,126 @@ fn init_profile_installs_edit_redirect_and_deinit_removes() {
     );
 }
 
+/// Read the `permissions.deny` strings of the agent settings file under `root`.
+fn fake_agent_deny(root: &Path) -> Vec<String> {
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join(".fake/settings.json")).unwrap())
+            .unwrap();
+    settings["permissions"]["deny"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Write the agent settings file under `root` with the given deny entries.
+fn seed_fake_agent_deny(root: &Path, entries: &[&str]) {
+    let settings_path = root.join(".fake/settings.json");
+    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &settings_path,
+        serde_json::json!({ "permissions": { "deny": entries } }).to_string(),
+    )
+    .unwrap();
+}
+
+/// Run the real `init_profile` (`edit_redirect: true`, project scope, explicit
+/// `root`) against a fake agent rooted at `root`, then assert no step errored.
+fn init_edit_redirect(root: &Path) {
+    let profile = Profile {
+        edit_redirect: true,
+        ..Profile::default()
+    };
+    let results = init_profile(&profile, InitScope::Project, Some(root), &NullReporter);
+    assert!(
+        results
+            .iter()
+            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+        "edit-redirect init must not error: {results:?}"
+    );
+}
+
+/// After a real `init_profile`, `Bash` is NOT denied; `Edit`/`Read`/`Write` are.
+#[test]
+#[serial]
+fn init_profile_does_not_deny_bash() {
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path().canonicalize().unwrap();
+    let _cwd = CurrentDirGuard::new(&root).unwrap();
+    let _mirdan = MirdanConfigGuard::set(write_profile_agents_config(&root));
+
+    init_edit_redirect(&root);
+
+    let deny = fake_agent_deny(&root);
+    assert!(
+        !deny.iter().any(|v| v == LEGACY_BASH_DENY_TOOL),
+        "Bash must not be denied after init; got {deny:?}"
+    );
+    for tool in ["Edit", "Read", "Write"] {
+        assert!(
+            deny.iter().any(|v| v == tool),
+            "{tool} must be denied after init; got {deny:?}"
+        );
+    }
+}
+
+/// A settings file that an older sah wrote with `Bash` denied is cleaned by a
+/// real `init_profile`; unrelated and roster entries stay denied.
+#[test]
+#[serial]
+fn init_profile_removes_a_legacy_bash_deny() {
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path().canonicalize().unwrap();
+    let _cwd = CurrentDirGuard::new(&root).unwrap();
+    let _mirdan = MirdanConfigGuard::set(write_profile_agents_config(&root));
+    seed_fake_agent_deny(&root, &["Bash", "Edit"]);
+
+    init_edit_redirect(&root);
+
+    let deny = fake_agent_deny(&root);
+    assert!(
+        !deny.iter().any(|v| v == LEGACY_BASH_DENY_TOOL),
+        "legacy Bash deny must be gone after init; got {deny:?}"
+    );
+    assert!(
+        deny.iter().any(|v| v == "Edit"),
+        "Edit must stay denied after init; got {deny:?}"
+    );
+}
+
+/// A real `deinit_profile` removes a legacy `Bash` deny that an older sah wrote.
+#[test]
+#[serial]
+fn deinit_profile_removes_a_legacy_bash_deny() {
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path().canonicalize().unwrap();
+    let _cwd = CurrentDirGuard::new(&root).unwrap();
+    let _mirdan = MirdanConfigGuard::set(write_profile_agents_config(&root));
+    seed_fake_agent_deny(&root, &["Bash"]);
+
+    let profile = Profile {
+        edit_redirect: true,
+        ..Profile::default()
+    };
+    let results = deinit_profile(&profile, InitScope::Project, Some(&root), &NullReporter);
+    assert!(
+        results
+            .iter()
+            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
+        "edit-redirect deinit must not error: {results:?}"
+    );
+
+    let deny = fake_agent_deny(&root);
+    assert!(
+        !deny.iter().any(|v| v == LEGACY_BASH_DENY_TOOL),
+        "legacy Bash deny must be gone after deinit; got {deny:?}"
+    );
+}
+
 /// `Selector::Named` resolves in source order, skipping unknown names.
 #[test]
 fn selector_named_resolves_known_and_skips_unknown() {

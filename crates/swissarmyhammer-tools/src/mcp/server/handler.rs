@@ -127,7 +127,7 @@ impl ServerHandler for McpServer {
     /// Logs the client name and version against the session id, installs this
     /// connection's peer on the process-wide diagnostics resource, starts the
     /// prompt-directory watcher, ensures the kanban actor for the client,
-    /// applies the serve-time native-tool deny, starts code-context background
+    /// starts code-context background
     /// work, and runs `start()` on every registered tool. Answers the server's
     /// capabilities, identity, and health-aware instructions.
     ///
@@ -169,13 +169,6 @@ impl ServerHandler for McpServer {
 
         // Auto-create agent actor for the connecting MCP client
         self.ensure_agent_actor(&request.client_info.name).await;
-
-        // Suppress the native host tool(s) the served `Replacement` tools
-        // supersede (e.g. Claude's `Bash`, replaced by `shell`) so the served
-        // tool truly replaces the native rather than competing with it. Gated on
-        // the connecting client being Claude.
-        self.apply_serve_time_native_deny(&request.client_info)
-            .await;
 
         // Start code-context background work (LSP, indexing, file watcher)
         // only when an MCP client actually connects — not in the constructor.

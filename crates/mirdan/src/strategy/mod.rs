@@ -4,7 +4,7 @@
 //! servers, how it expresses a denied tool, the per-scope settings-file
 //! layout — lives here, behind one [`AgentConfigStrategy`] per supported
 //! agent. Tools and CLIs never reach into agent config directly; they declare
-//! intent ("register me as an MCP server", "deny Bash") and the appliers in
+//! intent ("register me as an MCP server", "allow Bash") and the appliers in
 //! [`crate::install`] dispatch to the right strategy via [`strategy_for`].
 //!
 //! Two strategies cover every agent today:
@@ -17,7 +17,7 @@
 //! - [`GenericMcpJsonStrategy`] uses only the declarative `mcp_config` fields
 //!   from [`AgentDef`] (servers_key / entry_extras / project_path /
 //!   global_path). It has no permission or local-scope mechanism, so its
-//!   `deny_tool`/`allow_tool` are no-ops and its MCP local scope falls back to
+//!   `allow_tool` is a no-op and its MCP local scope falls back to
 //!   the project config.
 
 pub(crate) mod claude_settings;
@@ -62,15 +62,6 @@ pub trait AgentConfigStrategy {
         agent: &AgentDef,
         scope: InitScope,
         server_name: &str,
-    ) -> Result<bool, RegistryError>;
-
-    /// Deny `tool` for `agent` at `scope`. Returns `true` when the config
-    /// changed.
-    fn deny_tool(
-        &self,
-        agent: &AgentDef,
-        scope: InitScope,
-        tool: &str,
     ) -> Result<bool, RegistryError>;
 
     /// Allow `tool` (remove a prior deny) for `agent` at `scope`. Returns
@@ -183,17 +174,6 @@ impl AgentConfigStrategy for ClaudeCodeStrategy {
                 generic_unregister_mcp(agent, scope, server_name)
             }
         }
-    }
-
-    fn deny_tool(
-        &self,
-        agent: &AgentDef,
-        scope: InitScope,
-        tool: &str,
-    ) -> Result<bool, RegistryError> {
-        Self::edit_deny(agent, scope, |root| {
-            settings::ensure_array_contains(root, &permissions_deny_pointer(), &json!(tool))
-        })
     }
 
     fn allow_tool(
@@ -348,16 +328,6 @@ impl AgentConfigStrategy for GenericMcpJsonStrategy {
         server_name: &str,
     ) -> Result<bool, RegistryError> {
         generic_unregister_mcp(agent, scope, server_name)
-    }
-
-    /// Generic agents have no permission mechanism — denying a tool is a no-op.
-    fn deny_tool(
-        &self,
-        _agent: &AgentDef,
-        _scope: InitScope,
-        _tool: &str,
-    ) -> Result<bool, RegistryError> {
-        Ok(false)
     }
 
     /// Generic agents have no permission mechanism — allowing a tool is a no-op.
@@ -527,24 +497,37 @@ mod tests {
     /// Addressing it with [`claude_settings::POINTER_KEY_PERMISSIONS`] and
     /// [`claude_settings::POINTER_KEY_DENY`] rather than spelling the path out
     /// is what makes these tests fail when a key changes and the pointer
-    /// `deny_tool`/`allow_tool` write through no longer follows it.
+    /// `allow_tool` writes through no longer follows it.
     fn denied_tools(settings: &serde_json::Value) -> &Vec<serde_json::Value> {
         settings[claude_settings::POINTER_KEY_PERMISSIONS][claude_settings::POINTER_KEY_DENY]
             .as_array()
             .expect("settings must hold the denied-tools array the schema keys name")
     }
 
+    /// Write a settings file at `path` whose denied-tools array holds `tool`,
+    /// built from the schema keys so the seed follows any key change.
+    fn seed_denied_tool(path: &Path, tool: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let seeded = json!({
+            claude_settings::POINTER_KEY_PERMISSIONS: {
+                claude_settings::POINTER_KEY_DENY: [tool],
+            }
+        });
+        std::fs::write(path, seeded.to_string()).unwrap();
+    }
+
     #[test]
     fn strategy_for_dispatches_on_id() {
         let dir = tempfile::tempdir().unwrap();
-        // Behavior, not type: only ClaudeCodeStrategy denies a tool.
+        // Behavior, not type: only ClaudeCodeStrategy edits a deny array.
         let claude = claude_agent(dir.path());
         let generic = generic_agent(dir.path());
+        seed_denied_tool(&dir.path().join(".claude/settings.json"), "Bash");
         assert!(strategy_for(&claude)
-            .deny_tool(&claude, InitScope::Project, "Bash")
+            .allow_tool(&claude, InitScope::Project, "Bash")
             .unwrap());
         assert!(!strategy_for(&generic)
-            .deny_tool(&generic, InitScope::Project, "Bash")
+            .allow_tool(&generic, InitScope::Project, "Bash")
             .unwrap());
     }
 
@@ -587,21 +570,11 @@ mod tests {
     }
 
     #[test]
-    fn claude_deny_and_allow_tool_project() {
+    fn claude_allow_tool_project_removes_the_deny() {
         let dir = tempfile::tempdir().unwrap();
         let agent = claude_agent(dir.path());
         let settings_path = dir.path().join(".claude/settings.json");
-
-        assert!(ClaudeCodeStrategy
-            .deny_tool(&agent, InitScope::Project, "Bash")
-            .unwrap());
-        let json = read(&settings_path);
-        assert!(denied_tools(&json).iter().any(|v| v == "Bash"));
-
-        // Idempotent deny: no change the second time.
-        assert!(!ClaudeCodeStrategy
-            .deny_tool(&agent, InitScope::Project, "Bash")
-            .unwrap());
+        seed_denied_tool(&settings_path, "Bash");
 
         assert!(ClaudeCodeStrategy
             .allow_tool(&agent, InitScope::Project, "Bash")
@@ -611,32 +584,36 @@ mod tests {
     }
 
     #[test]
-    fn claude_deny_tool_user_writes_global_settings() {
+    fn claude_allow_tool_user_edits_global_settings() {
         let dir = tempfile::tempdir().unwrap();
         let agent = claude_agent(dir.path());
+        let global = dir.path().join("global-settings.json");
+        seed_denied_tool(&global, "Bash");
+
         ClaudeCodeStrategy
-            .deny_tool(&agent, InitScope::User, "Bash")
+            .allow_tool(&agent, InitScope::User, "Bash")
             .unwrap();
-        let json = read(&dir.path().join("global-settings.json"));
-        assert!(denied_tools(&json).iter().any(|v| v == "Bash"));
+        let json = read(&global);
+        assert!(!denied_tools(&json).iter().any(|v| v == "Bash"));
     }
 
     #[test]
-    fn claude_deny_tool_local_writes_settings_local_json() {
+    fn claude_allow_tool_local_edits_settings_local_json() {
         let dir = tempfile::tempdir().unwrap();
         let agent = claude_agent(dir.path());
+        let local = dir.path().join(".claude/settings.local.json");
+        seed_denied_tool(&local, "Bash");
+
         ClaudeCodeStrategy
-            .deny_tool(&agent, InitScope::Local, "Bash")
+            .allow_tool(&agent, InitScope::Local, "Bash")
             .unwrap();
         // Local denies live in the settings.local.json sibling, not settings.json.
-        let local = dir.path().join(".claude/settings.local.json");
-        assert!(local.exists(), "local settings file should be written");
         assert!(
             !dir.path().join(".claude/settings.json").exists(),
-            "project settings.json must not be touched by local-scope deny"
+            "project settings.json must not be touched by local-scope allow"
         );
         let json = read(&local);
-        assert!(denied_tools(&json).iter().any(|v| v == "Bash"));
+        assert!(!denied_tools(&json).iter().any(|v| v == "Bash"));
     }
 
     #[test]
@@ -706,12 +683,9 @@ mod tests {
     }
 
     #[test]
-    fn generic_deny_and_allow_are_noops() {
+    fn generic_allow_is_noop() {
         let dir = tempfile::tempdir().unwrap();
         let agent = generic_agent(dir.path());
-        assert!(!GenericMcpJsonStrategy
-            .deny_tool(&agent, InitScope::Project, "Bash")
-            .unwrap());
         assert!(!GenericMcpJsonStrategy
             .allow_tool(&agent, InitScope::Project, "Bash")
             .unwrap());

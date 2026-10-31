@@ -73,10 +73,10 @@ mod tests {
 
     /// Guard: `sah deinit` must NOT clean up the serve-applied denies.
     ///
-    /// Since `SUPERSEDED_NATIVE_DENY_TOOLS` (`mirdan::install::profile`) folded
-    /// `Bash` into the roster sah's `edit_redirect` profile fragment installs
-    /// and removes, `sah init`/`sah deinit` now *do* manage those entries in
-    /// `permissions.deny` — but only in `settings.json`
+    /// `sah init`/`sah deinit` manage the `SUPERSEDED_NATIVE_DENY_TOOLS`
+    /// roster (`mirdan::install::profile`) that sah's `edit_redirect` profile
+    /// fragment installs and removes in `permissions.deny` — but only in
+    /// `settings.json`
     /// (`agent_project_settings_file` / `agent_global_settings_file`). The
     /// serve path's deny is a separate mechanism: it targets
     /// `InitScope::Local`, which resolves to the `settings.local.json` sibling
@@ -111,10 +111,9 @@ mod tests {
     }
 
     /// Guard: `sah deinit` DOES remove every `SUPERSEDED_NATIVE_DENY_TOOLS`
-    /// entry from the profile-managed `settings.json`, `Bash` and `Read`
-    /// included — the accepted consequence of folding the roster into one
-    /// constant (see the doctor-agreement fix that added `Bash`/`Read` to
-    /// `SUPERSEDED_NATIVE_DENY_TOOLS`). This is the mirror of
+    /// entry from the profile-managed `settings.json`, `Read` included — the
+    /// roster is one constant shared by the installer and the doctor probe.
+    /// This is the mirror of
     /// [`test_deinit_does_not_reallow_superseded_natives`]: that test guards
     /// the file the profile never touches, this one guards the file it does.
     #[test]

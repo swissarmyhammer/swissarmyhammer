@@ -6,7 +6,7 @@
 //!    builtin `shell` skill. These are declared once as a [`mirdan::install::Profile`]
 //!    and applied by [`mirdan::install::init_profile`] / `deinit_profile`, the
 //!    single data-driven installer shared across the tool CLIs and sah.
-//! 2. **Genuine tool lifecycle** — the `Bash` tool denial and the
+//! 2. **Genuine tool lifecycle** — the legacy `Bash` deny cleanup and the
 //!    `.shell/config.yaml` template. These are not install-of-an-agent concerns,
 //!    so they stay on [`ShellExecuteTool`]'s own `Initializable` impl, run via the
 //!    [`InitRegistry`]. The tool is constructed *without* an injected MCP server,
@@ -37,7 +37,7 @@ const SKILL_NAME: &str = "shell";
 /// including `User` — a global install lands it in the global store
 /// (`~/.skills` + the agent's global skill dir), so `init user` is a full
 /// configuration. [`ShellExecuteTool`] is the only genuine lifecycle
-/// component, for its `Bash` denial and `.shell/config.yaml`; it is built
+/// component, for its legacy `Bash` deny cleanup and `.shell/config.yaml`; it is built
 /// *without* `with_mcp_server` because the profile owns the MCP
 /// registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,7 +86,7 @@ mod tests {
         assert_tool_profile::<ShelltoolInstall>(&Selector::Single(SKILL_NAME.to_string()));
     }
 
-    /// Just the tool (Bash deny + `.shell/config.yaml`). MCP registration and
+    /// Just the tool (legacy Bash deny cleanup + `.shell/config.yaml`). MCP registration and
     /// skill deployment moved to the profile installer.
     #[test]
     fn test_component_registry_holds_only_tool_lifecycle() {

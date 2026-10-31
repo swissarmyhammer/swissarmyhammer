@@ -1,7 +1,7 @@
 //! ── Scope-aware appliers (the single per-agent iteration + reporting site) ──
 //!
 //! Tools and CLIs call these to apply a declarative change — register me as an
-//! MCP server, deny a tool — across every detected agent. Each applier loads
+//! MCP server, allow a tool — across every detected agent. Each applier loads
 //! the detected agents, dispatches to the right [`strategy::AgentConfigStrategy`]
 //! via [`strategy::strategy_for`], applies the change, and emits reporter
 //! events. They take a `swissarmyhammer_common` [`InitScope`] + [`InitReporter`]
@@ -41,7 +41,7 @@ fn detected_agents_or_error() -> Result<Vec<crate::agents::DetectedAgent>, Vec<I
 /// dispatch to, and the per-agent message format.
 ///
 /// The public appliers ([`register_mcp_server`], [`unregister_mcp_server`],
-/// [`deny_tool`], [`allow_tool`]) each construct one variant and delegate to
+/// [`allow_tool`]) each construct one variant and delegate to
 /// [`apply_strategy_action`], so the shared iteration and reporting logic
 /// lives in exactly one place.
 #[derive(Debug, Clone, Copy)]
@@ -53,8 +53,6 @@ enum StrategyAction<'a> {
     },
     /// Unregister `server_name` as an MCP server.
     UnregisterMcp { server_name: &'a str },
-    /// Deny `tool` in the agent's permission config.
-    DenyTool { tool: &'a str },
     /// Allow `tool` (remove a prior deny) in the agent's permission config.
     AllowTool { tool: &'a str },
 }
@@ -65,7 +63,6 @@ impl StrategyAction<'_> {
         match self {
             Self::RegisterMcp { .. } => "Registered",
             Self::UnregisterMcp { .. } => "Removed",
-            Self::DenyTool { .. } => "Configured",
             Self::AllowTool { .. } => "Removed",
         }
     }
@@ -84,7 +81,6 @@ impl StrategyAction<'_> {
             Self::UnregisterMcp { server_name } => {
                 strategy.unregister_mcp(agent, scope, server_name)
             }
-            Self::DenyTool { tool } => strategy.deny_tool(agent, scope, tool),
             Self::AllowTool { tool } => strategy.allow_tool(agent, scope, tool),
         }
     }
@@ -97,12 +93,6 @@ impl StrategyAction<'_> {
             }
             Self::UnregisterMcp { server_name } => {
                 format!("{server_name} MCP server from {}", agent.name)
-            }
-            Self::DenyTool { tool } => {
-                format!(
-                    "{tool} tool denied for {} — use the shell tool instead",
-                    agent.name
-                )
             }
             Self::AllowTool { tool } => format!("{tool} deny rule for {}", agent.name),
         }
@@ -234,12 +224,6 @@ pub fn unregister_mcp_server(
     )
 }
 
-/// Deny `tool` across every detected agent at `scope`, dispatching to each
-/// agent's strategy. Agents with no permission mechanism are silently skipped.
-pub fn deny_tool(scope: InitScope, tool: &str, reporter: &dyn InitReporter) -> Vec<InitResult> {
-    apply_strategy_action(scope, reporter, StrategyAction::DenyTool { tool })
-}
-
 /// Allow `tool` (remove a prior deny) across every detected agent at `scope`,
 /// dispatching to each agent's strategy.
 pub fn allow_tool(scope: InitScope, tool: &str, reporter: &dyn InitReporter) -> Vec<InitResult> {
@@ -326,7 +310,7 @@ mod applier_tests {
 
     #[test]
     #[serial]
-    fn deny_tool_noop_for_agent_without_permission_mechanism() {
+    fn allow_tool_noop_for_agent_without_permission_mechanism() {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().canonicalize().unwrap();
         let _cwd = swissarmyhammer_common::test_utils::CurrentDirGuard::new(&project).unwrap();
@@ -334,14 +318,8 @@ mod applier_tests {
         let _mirdan = MirdanConfigGuard::set(&config_path);
 
         let reporter = NullReporter;
-        // The generic strategy has no deny mechanism: nothing is written and
-        // the applier still returns Ok.
-        let results = deny_tool(InitScope::Project, "Bash", &reporter);
-        assert!(results
-            .iter()
-            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error));
-
-        // Round-trip: the inverse `allow_tool` is also a clean no-op here.
+        // The generic strategy has no permission mechanism: nothing is
+        // written and the applier still returns Ok.
         let results = allow_tool(InitScope::Project, "Bash", &reporter);
         assert!(results
             .iter()
