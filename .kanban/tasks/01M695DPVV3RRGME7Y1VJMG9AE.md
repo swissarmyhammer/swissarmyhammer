@@ -17,10 +17,26 @@ comments:
     - evidence: cargo nextest run --workspace --no-fail-fast: 13943 run, 13943 passed, 0 failed, 0 skipped (1 leaky, 30 slow, all passed). cargo clippy --workspace --all-targets -- -D warnings: exit 0, 0 warnings. cargo fmt --check: exit 0.
     - next: review
   timestamp: 2026-10-31T20:28:04.305728+00:00
+- actor: claude-code
+  id: 01m69tfktzbtv6nb7672akaqz0
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD, 0 findings (attempted 7, failed 0). Cargo.lock and builtin/shell/config.yaml had no matching validator.
+    - next: none. Task moved to done.
+  timestamp: 2026-10-31T20:30:10.783831+00:00
+- actor: claude-code
+  id: 01m69tfy3c3pke4zw494j0smaa
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — crate and builtin config deleted
+    - test: green — nextest workspace 13943 passed, clippy and fmt clean
+    - commit: cbd009bbd
+    - review: clean — zero new findings, task done
+  timestamp: 2026-10-31T20:30:21.292295+00:00
 depends_on:
 - 01M695D70TVS1PX9QF894S8TZ3
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffcb80
 project: remove-shelltool
 title: Delete the swissarmyhammer-shell crate and shell config
 ---

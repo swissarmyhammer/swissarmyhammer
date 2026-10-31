@@ -7,13 +7,35 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use swissarmyhammer_cli::cli::{Cli, Commands};
+use swissarmyhammer_cli::exit_codes::{EXIT_ERROR, EXIT_SUCCESS};
 use swissarmyhammer_cli::validate;
 
 /// Exit code for a failure inside the test harness itself, not in the command under test.
 const EXIT_INTERNAL_ERROR: i32 = 125;
 
+/// Exit code for a subprocess that cannot be started.
+const EXIT_CANNOT_EXECUTE: i32 = 126;
+
+/// Exit code for a binary that does not exist (the shell "command not found" code).
+const EXIT_COMMAND_NOT_FOUND: i32 = 127;
+
+/// Exit code for a subprocess that exceeded its time limit (the `timeout` command code).
+const EXIT_TIMED_OUT: i32 = 124;
+
+/// Exit code for a general failure when no more specific code applies.
+const EXIT_GENERAL_FAILURE: i32 = 1;
+
+/// Time limit, in seconds, for a command run as a subprocess.
+const SUBPROCESS_TIMEOUT_SECS: u64 = 60;
+
+/// Name of the `sah` binary and the program name given to the CLI parser.
+const SAH_BINARY_NAME: &str = "sah";
+
+/// Prefix on every debug line that reports a failed subprocess.
+const SUBPROCESS_DEBUG_PREFIX: &str = "DEBUG SUBPROCESS";
+
 /// Captures output from in-process CLI command execution
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct CapturedOutput {
     pub stdout: String,
     pub stderr: String,
@@ -38,7 +60,7 @@ fn result_to_captured(
 ) -> CapturedOutput {
     match result {
         Ok(output) => output,
-        Err(e) => capture_error(format!("{}: {}", context, e), error_code),
+        Err(e) => capture_error(format!("{context}: {e:#}"), error_code),
     }
 }
 
@@ -50,7 +72,7 @@ fn validate_and_get_binary() -> Result<std::path::PathBuf, CapturedOutput> {
     if !binary_path_buf.exists() {
         return Err(capture_error(
             format!("binary not found at path: {}", binary_path),
-            127, // Command not found exit code
+            EXIT_COMMAND_NOT_FOUND,
         ));
     }
 
@@ -64,11 +86,11 @@ fn log_subprocess_failure(
     working_dir: &std::path::Path,
     output: &CapturedOutput,
 ) {
-    eprintln!("DEBUG SUBPROCESS: command={} {:?}", binary, args);
-    eprintln!("DEBUG SUBPROCESS: working_dir={:?}", working_dir);
-    eprintln!("DEBUG SUBPROCESS: exit_code={}", output.exit_code);
-    eprintln!("DEBUG SUBPROCESS: stderr={}", output.stderr);
-    eprintln!("DEBUG SUBPROCESS: stdout={}", output.stdout);
+    eprintln!("{SUBPROCESS_DEBUG_PREFIX}: command={binary} {args:?}");
+    eprintln!("{SUBPROCESS_DEBUG_PREFIX}: working_dir={working_dir:?}");
+    eprintln!("{SUBPROCESS_DEBUG_PREFIX}: exit_code={}", output.exit_code);
+    eprintln!("{SUBPROCESS_DEBUG_PREFIX}: stderr={}", output.stderr);
+    eprintln!("{SUBPROCESS_DEBUG_PREFIX}: stdout={}", output.stdout);
 }
 
 /// Helper function to get the sah binary path
@@ -82,15 +104,16 @@ fn get_sah_binary_path() -> String {
         if std::path::Path::new(&path)
             .file_name()
             .and_then(|name| name.to_str())
-            == Some("sah")
+            == Some(SAH_BINARY_NAME)
         {
             return path;
         }
     }
     // Fallback to the correct binary location
     format!(
-        "{}/target/debug/sah",
-        env!("CARGO_MANIFEST_DIR").replace("/apps/swissarmyhammer-cli", "")
+        "{}/target/debug/{}",
+        env!("CARGO_MANIFEST_DIR").replace("/apps/swissarmyhammer-cli", ""),
+        SAH_BINARY_NAME
     )
 }
 
@@ -102,12 +125,22 @@ pub async fn run_sah_command_in_process_with_dir(
     args: &[&str],
     working_dir: &std::path::Path,
 ) -> Result<CapturedOutput> {
-    let result = run_sah_command_in_process_inner_with_dir(args, working_dir).await;
-    Ok(result_to_captured(
-        result,
+    run_with_dir_and_context(
+        args,
+        working_dir,
         "Unexpected error in run_sah_command_in_process_with_dir",
-        EXIT_INTERNAL_ERROR,
-    ))
+    )
+    .await
+}
+
+/// Run a command in a directory and fold a harness failure into a `CapturedOutput`
+async fn run_with_dir_and_context(
+    args: &[&str],
+    working_dir: &std::path::Path,
+    context: &str,
+) -> Result<CapturedOutput> {
+    let result = run_sah_command_in_process_inner_with_dir(args, working_dir).await;
+    Ok(result_to_captured(result, context, EXIT_INTERNAL_ERROR))
 }
 
 /// Execute any CLI command, using in-process for supported commands, subprocess for others
@@ -116,12 +149,12 @@ pub async fn run_sah_command_in_process_with_dir(
 pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput> {
     let current_dir = std::env::current_dir()
         .context("failed to get the current directory for the in-process test command")?;
-    let result = run_sah_command_in_process_inner_with_dir(args, &current_dir).await;
-    Ok(result_to_captured(
-        result,
+    run_with_dir_and_context(
+        args,
+        &current_dir,
         "Unexpected error in run_sah_command_in_process",
-        EXIT_INTERNAL_ERROR,
-    ))
+    )
+    .await
 }
 
 /// Check if a command should be run as a subprocess
@@ -140,11 +173,7 @@ async fn execute_in_process(cli: Cli, args_with_program: &[String]) -> Result<Ca
         match execute_cli_command_with_capture(cli, args_with_program).await {
             Ok(result) => result,
             Err(e) => {
-                return Ok(CapturedOutput {
-                    stdout: String::new(),
-                    stderr: e.to_string(),
-                    exit_code: 1,
-                });
+                return Ok(capture_error(format!("{e:#}"), EXIT_GENERAL_FAILURE));
             }
         };
 
@@ -178,8 +207,8 @@ async fn run_subprocess_with_output(
         Ok(output) => output,
         Err(e) => {
             return Ok(capture_error(
-                format!("failed to execute subprocess {}: {}", binary_path, e),
-                126,
+                format!("failed to execute subprocess {binary_path}: {e:#}"),
+                EXIT_CANNOT_EXECUTE,
             ));
         }
     };
@@ -187,10 +216,10 @@ async fn run_subprocess_with_output(
     let captured = CapturedOutput {
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        exit_code: output.status.code().unwrap_or(1),
+        exit_code: output.status.code().unwrap_or(EXIT_GENERAL_FAILURE),
     };
 
-    if captured.exit_code != 0 {
+    if captured.exit_code != EXIT_SUCCESS {
         log_subprocess_failure(binary_path, args, working_dir, &captured);
     }
 
@@ -220,14 +249,17 @@ async fn execute_via_subprocess(
     use tokio::time::{timeout, Duration};
 
     let result = timeout(
-        Duration::from_secs(60),
+        Duration::from_secs(SUBPROCESS_TIMEOUT_SECS),
         execute_subprocess_inner(args, working_dir),
     )
     .await
     .unwrap_or_else(|_| {
         Ok(capture_error(
-            "test command timed out after 60 seconds".to_string(),
-            124,
+            format!(
+                "test command timed out after {} seconds",
+                SUBPROCESS_TIMEOUT_SECS
+            ),
+            EXIT_TIMED_OUT,
         ))
     })?;
 
@@ -247,13 +279,9 @@ fn parse_cli_args(args_with_program: &[String]) -> Result<Cli, CapturedOutput> {
                 ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => CapturedOutput {
                     stdout: error_str,
                     stderr: String::new(),
-                    exit_code: 0,
+                    exit_code: EXIT_SUCCESS,
                 },
-                _ => CapturedOutput {
-                    stdout: String::new(),
-                    stderr: error_str,
-                    exit_code: 2,
-                },
+                _ => capture_error(error_str, EXIT_ERROR),
             })
         }
     }
@@ -291,7 +319,7 @@ fn determine_execution_strategy(args: &[&str]) -> Result<ExecutionStrategy, Capt
 
 /// Build args with program name prepended
 fn build_args_with_program(args: &[&str]) -> Vec<String> {
-    std::iter::once("sah".to_string())
+    std::iter::once(SAH_BINARY_NAME.to_string())
         .chain(args.iter().map(|s| s.to_string()))
         .collect()
 }
@@ -334,12 +362,10 @@ async fn handle_validate_command(
     format: swissarmyhammer_cli::cli::OutputFormat,
     validate_tools: bool,
 ) -> (String, String, i32) {
-    use swissarmyhammer_cli::exit_codes::EXIT_ERROR;
-
     match validate::run_validate_command_with_dirs_captured(quiet, format, validate_tools).await {
         Ok((output, exit_code)) => (output, String::new(), exit_code),
         Err(e) => {
-            let stderr_str = format!("{}", e);
+            let stderr_str = format!("{e:#}");
             (String::new(), stderr_str, EXIT_ERROR)
         }
     }
@@ -350,12 +376,11 @@ fn handle_completion_command(shell: clap_complete::Shell) -> (String, String, i3
     use clap::CommandFactory;
     use clap_complete::generate;
     use std::io::Cursor;
-    use swissarmyhammer_cli::exit_codes::EXIT_SUCCESS;
 
     let mut cmd = swissarmyhammer_cli::cli::Cli::command();
     let mut buf = Cursor::new(Vec::new());
 
-    generate(shell, &mut cmd, "sah", &mut buf);
+    generate(shell, &mut cmd, SAH_BINARY_NAME, &mut buf);
 
     let completion_output = String::from_utf8_lossy(buf.get_ref()).to_string();
     (completion_output, String::new(), EXIT_SUCCESS)
@@ -366,8 +391,6 @@ async fn execute_cli_command_with_capture(
     cli: Cli,
     _args: &[String],
 ) -> Result<(String, String, i32)> {
-    use swissarmyhammer_cli::exit_codes::EXIT_SUCCESS;
-
     let (stdout, stderr, exit_code) = match cli.command {
         Some(Commands::Validate {
             quiet,

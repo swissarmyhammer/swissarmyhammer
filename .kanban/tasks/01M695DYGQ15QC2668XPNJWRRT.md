@@ -18,6 +18,39 @@ comments:
     - evidence: cargo nextest run --workspace --no-fail-fast: 13943 run, 13943 passed, 0 failed, 0 skipped. cargo clippy --workspace --all-targets -- -D warnings: exit 0, zero warnings. cargo fmt --check: exit 0.
     - next: review
   timestamp: 2026-10-31T20:43:41.432976+00:00
+- actor: claude-code
+  id: 01m69vckmvqeyfgv3kegye8td1
+  text: |-
+    ### review — findings
+    - evidence: 1 finding — apps/swissarmyhammer-cli/tests/in_process_test_utils.rs:229. Hand-check of skills, validators and docs: zero dangling shell-tool references.
+    - next: implementer fixes the open finding, then review runs again.
+  timestamp: 2026-10-31T20:46:00.859052+00:00
+- actor: claude-code
+  id: 01m69vd5dj97yzcnj8m8zz8vja
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 17 files, shell skill deleted, docs and skills cleaned
+    - test: green — nextest workspace 13943 passed, clippy and fmt clean
+    - commit: 44b3e9b20
+    - review: findings — apps/swissarmyhammer-cli/tests/in_process_test_utils.rs:229
+  timestamp: 2026-10-31T20:46:19.058625+00:00
+- actor: claude-code
+  id: 01m69vnwy9btctx45wycc5gxsr
+  text: |-
+    ### implement — changed
+    - evidence: One file changed: apps/swissarmyhammer-cli/tests/in_process_test_utils.rs. Finding code-hygiene/magic-numbers is fixed and flipped to [x]. SUBPROCESS_TIMEOUT_SECS (60) now feeds both Duration::from_secs and the format! message.
+    - same cause removed from the whole file: named constants EXIT_CANNOT_EXECUTE (126), EXIT_COMMAND_NOT_FOUND (127), EXIT_TIMED_OUT (124), EXIT_GENERAL_FAILURE (1), SAH_BINARY_NAME ("sah", was 4 copies), SUBPROCESS_DEBUG_PREFIX (was 5 copies). Bare 0 and 2 now use the shared EXIT_SUCCESS and EXIT_ERROR from swissarmyhammer_cli::exit_codes (one import at the top replaces three inner imports).
+    - review file on the whole file: first run gave 9 findings, all fixed: CapturedOutput derives Hash and Default; error chains use {e:#} at 4 sites (result_to_captured, execute_in_process, subprocess spawn error, handle_validate_command); new helper run_with_dir_and_context removes the duplicate body of the two public run functions; execute_in_process and parse_cli_args now call capture_error. Second run: 0 findings.
+    - checks (run once at the end): cargo check --workspace --tests exit 0; cargo nextest run --override-version-check -p swissarmyhammer-cli: 702 run, 702 passed, 0 skipped; cargo fmt --check clean; cargo clippy --workspace --all-targets -- -D warnings clean.
+    - next: /review
+  timestamp: 2026-10-31T20:51:05.289441+00:00
+- actor: claude-code
+  id: 01m69vqj2s6wkj34z4qcsd3hq2
+  text: |-
+    ### test — green
+    - evidence: cargo nextest run --override-version-check -E 'rdeps(swissarmyhammer-cli)' — 702 run, 702 passed, 0 failed, 0 skipped. cargo clippy --workspace --all-targets -- -D warnings — exit 0, 0 warnings. cargo fmt --check — exit 0.
+    - next: review
+  timestamp: 2026-10-31T20:51:59.705434+00:00
 position_column: doing
 position_ordinal: '8480'
 project: remove-shelltool
@@ -38,3 +71,11 @@ Work:
 - Fix the fixtures in `FoundationModelsExtras/Tests/.../skills/shell/SKILL.md` only if the Rust change breaks them.
 
 Done when: no skill or validator names the shell tool, and `cargo test -p swissarmyhammer-skills` passes. #remove-shell
+
+## Review Findings (2026-10-31 15:44)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 3 file(s) reviewed, 18 not reviewed.
+
+> 14 markdown files were not reviewed: no validator matches them. A clean report on them means nothing could look. The reviewer checked the edited skill and doc files by hand with a search for `get lines`, `grep history`, `execute command`, `/shell`, `list processes`, `kill process`, `mcp__sah__shell`, `` `shell` `` and `shelltool` under `builtin/` and `doc/`. The search found zero matches. The remaining uses of the word "shell" in `builtin/skills/` mean the OS shell and are correct.
+
+- [x] `apps/swissarmyhammer-cli/tests/in_process_test_utils.rs:229` `code-hygiene/magic-numbers` — The timeout value 60 is written twice: in the message string here and in `Duration::from_secs(60)` at unchanged line 223. If the timeout changes, the message reports the wrong duration. Define one `const SUBPROCESS_TIMEOUT_SECS: u64 = 60;` and use it in `Duration::from_secs(...)`. Build the message with `format!` from the same constant.

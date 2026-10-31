@@ -22,10 +22,26 @@ comments:
     - evidence: cargo nextest run --override-version-check --workspace --no-fail-fast: 14049 run, 14049 passed, 0 failed, 0 skipped. cargo clippy --workspace --all-targets -- -D warnings: exit 0, zero warnings. cargo fmt --check: exit 0.
     - next: review
   timestamp: 2026-10-31T20:17:59.394101+00:00
+- actor: claude-code
+  id: 01m69sypryeek58rjf87yxnf79
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (commit 7502aa15c). 0 findings, 0 confirmed, 1 refuted, 8 attempted, 0 failed. 5 files had no matching validator (README, shelltool completions, doc pages). 2 .kanban files ignored.
+    - next: task moved to done.
+  timestamp: 2026-10-31T20:20:56.734123+00:00
+- actor: claude-code
+  id: 01m69sz39jnr2tqjkzxfwz0mk6
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 24 files
+    - test: green — nextest workspace 14049 passed, clippy and fmt clean
+    - commit: 7502aa15c
+    - review: clean — zero new findings, task done
+  timestamp: 2026-10-31T20:21:09.554348+00:00
 depends_on:
 - 01M695D70TVS1PX9QF894S8TZ3
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffca80
 project: remove-shelltool
 title: Delete the shelltool CLI binary and its packaging
 ---
