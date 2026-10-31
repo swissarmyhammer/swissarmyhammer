@@ -236,5 +236,5 @@ async fn test_tool_context_with_peer_sets_peer() {
 
 #[test]
 fn test_logger_name_displays_its_contents() {
-    assert_eq!(LoggerName("files").to_string(), "files");
+    assert_eq!(LoggerName("kanban").to_string(), "kanban");
 }

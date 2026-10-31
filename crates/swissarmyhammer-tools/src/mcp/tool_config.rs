@@ -31,7 +31,6 @@ use tracing::warn;
 pub const KNOWN_TOOL_NAMES: &[&str] = &[
     "agent",
     "code_context",
-    "files",
     "git",
     "kanban",
     "ralph",
@@ -400,14 +399,13 @@ mod tests {
         use tokio::sync::RwLock;
 
         use crate::mcp::tool_registry::{
-            register_code_context_tools, register_diagnostics_tools, register_file_tools,
-            register_git_tools, register_kanban_tools, register_ralph_tools, register_review_tools,
-            register_web_tools, ToolRegistry,
+            register_code_context_tools, register_diagnostics_tools, register_git_tools,
+            register_kanban_tools, register_ralph_tools, register_review_tools, register_web_tools,
+            ToolRegistry,
         };
         use crate::mcp::tools::{agent::register_agent_tools, skill::register_skill_tools};
 
         let mut registry = ToolRegistry::new();
-        register_file_tools(&mut registry);
         register_git_tools(&mut registry);
         register_kanban_tools(&mut registry);
         register_ralph_tools(&mut registry);

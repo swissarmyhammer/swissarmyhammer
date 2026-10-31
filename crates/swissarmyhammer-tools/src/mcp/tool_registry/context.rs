@@ -352,10 +352,10 @@ impl ToolContext {
     /// Resolve the session working directory — the root every tool operates against.
     ///
     /// The working directory of a board *is* the working directory of its agent
-    /// session, so all file tools (grep, glob, read, write, edit) resolve
-    /// relative paths and default search roots from this value, never from the
-    /// process current directory. For the bundled GUI app the process CWD is `/`
-    /// (a read-only filesystem root); a single app process also hosts multiple
+    /// session, so every tool that resolves relative paths or default search
+    /// roots uses this value, never the process current directory. For the
+    /// bundled GUI app the process CWD is `/` (a read-only filesystem root); a
+    /// single app process also hosts multiple
     /// boards, so process CWD cannot be a per-session root anyway.
     ///
     /// Resolution order:
@@ -369,10 +369,9 @@ impl ToolContext {
     ///
     /// Falls back to `.` when even the current directory cannot be determined
     /// (e.g. it was deleted). This relative fallback is intentionally *not* a
-    /// usable search root: search tools (grep, glob) call
-    /// [`reject_filesystem_root`](crate::mcp::tools::files::shared_utils::reject_filesystem_root)
-    /// on the resolved root, which rejects a relative `.` (and the filesystem
-    /// root `/`) rather than walking the process CWD this method exists to avoid.
+    /// usable search root: a caller that walks the tree must reject a relative
+    /// `.` (and the filesystem root `/`) rather than walk the process CWD this
+    /// method exists to avoid.
     pub fn session_root(&self) -> PathBuf {
         self.working_dir
             .clone()

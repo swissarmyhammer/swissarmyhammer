@@ -5,7 +5,7 @@
 use swissarmyhammer_operations::WIRE_DROPPED_KEYS;
 use swissarmyhammer_tools::mcp::tool_registry::ToolRegistry;
 use swissarmyhammer_tools::mcp::tool_registry::{
-    create_fully_registered_tool_registry, register_file_tools, register_kanban_tools,
+    create_fully_registered_tool_registry, register_git_tools, register_kanban_tools,
     register_web_tools,
 };
 
@@ -25,7 +25,7 @@ async fn test_mcp_tools_are_registered() {
     let _guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
 
     // This mirrors exactly what McpServer does in its constructor
-    register_file_tools(&mut registry);
+    register_git_tools(&mut registry);
     register_kanban_tools(&mut registry);
     register_web_tools(&mut registry);
 
@@ -33,7 +33,7 @@ async fn test_mcp_tools_are_registered() {
     println!("📊 Registered {} MCP tools", tool_count);
 
     // We should have a significant number of tools. The threshold of 3 is based on the
-    // minimum set of core tools across all categories (files, kanban, web).
+    // minimum set of core tools across all categories (git, kanban, web).
     // This acts as a smoke test to catch missing tool registrations.
     assert!(
         tool_count >= 3,
@@ -42,7 +42,7 @@ async fn test_mcp_tools_are_registered() {
     );
 
     // Check for specific tools we know should be there (internal names, not MCP prefixed)
-    let expected_tools = ["files", "kanban", "web"];
+    let expected_tools = ["git", "kanban", "web"];
 
     let mut missing_tools = Vec::new();
     let mut found_tools = Vec::new();
@@ -128,7 +128,7 @@ async fn test_cli_categories_are_available() {
     let _guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
 
     // Register all tools
-    register_file_tools(&mut registry);
+    register_git_tools(&mut registry);
     register_kanban_tools(&mut registry);
     register_web_tools(&mut registry);
 
@@ -136,7 +136,7 @@ async fn test_cli_categories_are_available() {
     println!("📋 CLI Categories: {:?}", categories);
 
     // These categories should be available (excluding hidden tools like JS and notify)
-    let expected_categories = ["files", "kanban", "web"];
+    let expected_categories = ["git", "kanban", "web"];
 
     for &expected_cat in &expected_categories {
         assert!(
@@ -189,7 +189,7 @@ async fn test_tool_schemas_are_claude_api_compatible() {
     let _guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
 
     // Register all tools
-    register_file_tools(&mut registry);
+    register_git_tools(&mut registry);
     register_kanban_tools(&mut registry);
     register_web_tools(&mut registry);
 

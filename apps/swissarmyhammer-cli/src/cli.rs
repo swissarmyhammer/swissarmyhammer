@@ -673,7 +673,7 @@ mod tests {
     #[test]
     fn test_tools_enable_multiple_names() {
         let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "tools", "enable", "files", "git"]);
+            Cli::try_parse_from_args(["swissarmyhammer", "tools", "enable", "kanban", "git"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -683,7 +683,7 @@ mod tests {
         }) = cli.command
         {
             assert!(!global);
-            assert_eq!(names, vec!["files", "git"]);
+            assert_eq!(names, vec!["kanban", "git"]);
         } else {
             unreachable!("Expected Tools Enable command with names");
         }
@@ -710,7 +710,7 @@ mod tests {
     #[test]
     fn test_tools_global_flag_with_enable() {
         let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "tools", "--global", "enable", "files"]);
+            Cli::try_parse_from_args(["swissarmyhammer", "tools", "--global", "enable", "kanban"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -720,7 +720,7 @@ mod tests {
         }) = cli.command
         {
             assert!(global);
-            assert_eq!(names, vec!["files"]);
+            assert_eq!(names, vec!["kanban"]);
         } else {
             unreachable!("Expected Tools Enable command with global flag");
         }

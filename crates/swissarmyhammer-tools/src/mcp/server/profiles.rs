@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::mcp::tool_registry::{register_file_tools, register_web_tools, ToolRegistry};
+use crate::mcp::tool_registry::{register_web_tools, ToolRegistry};
 use crate::mcp::tools::agent::register_agent_tools;
 use crate::mcp::tools::skill::register_skill_tools;
 
@@ -20,15 +20,12 @@ impl McpServer {
     ///
     /// The returned server shares all state (ToolContext, prompt library, etc.)
     /// but has a separate ToolRegistry containing only validator tools
-    /// (code_context + the unified read-only `files` tool).
+    /// (`code_context`).
     ///
-    /// The validator file surface is the read-only variant of the unified
-    /// `files` tool ([`FilesTool::read_only`](crate::mcp::tools::files::FilesTool::read_only)):
-    /// `read file` / `glob files` / `grep files` ops only, no `write`/`edit`.
     /// See [`crate::mcp::tools::register_validator_tools`] for the profile.
     pub fn create_validator_server(&self) -> McpServer {
         // Build the validator registry from the single, data-driven validator
-        // profile (code_context + the unified read-only `files` tool). The
+        // profile (`code_context`). The
         // profile is defined once in `tools::register_validator_tools`; this is
         // the only path that interprets it.
         let mut validator_registry = ToolRegistry::new();
@@ -62,7 +59,7 @@ impl McpServer {
             // The validator registry is already exactly the validator profile
             // (composed by `tools::register_validator_tools`); serve it verbatim
             // rather than re-filtering by host/category, which would apply the
-            // primary-only serve gate to its read-only `files` tool.
+            // primary-only serve gate to its tools.
             compose_per_client: false,
         }
     }
@@ -72,14 +69,9 @@ impl McpServer {
     /// The returned server shares all state (ToolContext, prompt/skill/agent
     /// libraries, etc.) but has a separate `ToolRegistry` containing only the
     /// tools a base agent needs to be useful: the `Agent`-category tools
-    /// (the unified `files` tool — read/write/edit/glob/grep — web, skill,
-    /// subagent). This is the set an ACP agent
+    /// (web, skill, subagent). This is the set an ACP agent
     /// with no native tools mounts in-process as its own built-ins, so the agent
     /// is fully tooled even when handed zero external MCP servers.
-    ///
-    /// Files are served through the single unified `files` tool (CLI-style `op`
-    /// dispatch), which keeps `write`/`edit` for the agent. The by-name split
-    /// forms are not registered.
     ///
     /// # `compose_per_client = false` — load-bearing
     ///
@@ -98,9 +90,6 @@ impl McpServer {
         // module scope.
         let mut agent_registry = ToolRegistry::new();
 
-        // Files: the unified `op`-dispatched tool, which keeps write/edit/read/
-        // glob/grep for the agent.
-        register_file_tools(&mut agent_registry);
         register_web_tools(&mut agent_registry);
         register_agent_tools(
             &mut agent_registry,
@@ -148,7 +137,6 @@ impl McpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::server::handler::format_call_result_text;
     use swissarmyhammer_templating::TemplateLibrary;
 
     #[tokio::test]
@@ -166,39 +154,19 @@ mod tests {
         );
         drop(full_tools);
 
-        // Validator server should expose exactly two tools:
-        // code_context plus the unified read-only `files` tool.
+        // Validator server should expose exactly one tool: code_context.
         let validator = server.create_validator_server();
         let validator_tools = validator.tool_registry.read().await;
         assert_eq!(
             validator_tools.len(),
-            2,
-            "Validator should have exactly 2 tools (code_context + files)"
+            1,
+            "Validator should have exactly 1 tool (code_context)"
         );
 
-        // Verify the right tools are present.
-        assert!(
-            validator_tools.get_tool("files").is_some(),
-            "Validator should have the unified 'files' tool"
-        );
+        // Verify the right tool is present.
         assert!(
             validator_tools.get_tool("code_context").is_some(),
             "Validator should have 'code_context' tool"
-        );
-
-        // The former split by-name tools must NOT be served on the validator
-        // endpoint — only the unified op-dispatched `files` tool.
-        assert!(
-            validator_tools.get_tool("read_file").is_none(),
-            "Validator must NOT have the split 'read_file' tool"
-        );
-        assert!(
-            validator_tools.get_tool("glob_files").is_none(),
-            "Validator must NOT have the split 'glob_files' tool"
-        );
-        assert!(
-            validator_tools.get_tool("grep_files").is_none(),
-            "Validator must NOT have the split 'grep_files' tool"
         );
 
         // Verify disallowed tools are absent
@@ -231,27 +199,10 @@ mod tests {
             registry.get_tool("kanban").is_none(),
             "Validator context registry should not contain 'kanban'"
         );
-        // The unified `files` tool is present; the former split tools are not.
-        assert!(
-            registry.get_tool("files").is_some(),
-            "Validator context registry should contain the unified 'files' tool"
-        );
-        assert!(
-            registry.get_tool("read_file").is_none(),
-            "Validator context registry must NOT contain the split 'read_file' tool"
-        );
-        assert!(
-            registry.get_tool("glob_files").is_none(),
-            "Validator context registry must NOT contain the split 'glob_files' tool"
-        );
-        assert!(
-            registry.get_tool("grep_files").is_none(),
-            "Validator context registry must NOT contain the split 'grep_files' tool"
-        );
         assert_eq!(
             registry.len(),
-            2,
-            "Validator context registry should have exactly 2 tools (code_context + files)"
+            1,
+            "Validator context registry should have exactly 1 tool (code_context)"
         );
     }
 
@@ -277,149 +228,13 @@ mod tests {
             .iter_tools()
             .map(crate::mcp::tool_registry::McpTool::name)
             .collect();
-        let expected: BTreeSet<&str> = ["code_context", "files"].into_iter().collect();
+        let expected: BTreeSet<&str> = ["code_context"].into_iter().collect();
 
         assert_eq!(
             actual, expected,
             "Validator server must serve exactly the validator profile \
-             (code_context + files)"
+             (code_context)"
         );
-    }
-
-    /// Read-only enforcement + op-dispatched behavior audit (#4 in task
-    /// description).
-    ///
-    /// The validator endpoint exposes the unified, read-only `files` tool —
-    /// `read file` / `glob files` / `grep files` ops only. The `write file` and
-    /// `edit file` ops are rejected, and the former split by-name tools
-    /// (`read_file`, `glob_files`, `grep_files`) are not addressable at all.
-    /// This test asserts every half of that contract by EXECUTING real op
-    /// calls through the validator-facing server and inspecting the output:
-    ///
-    /// 1. Op-dispatched `read file` / `glob files` / `grep files` succeed and
-    ///    return the expected real content.
-    /// 2. Op-dispatched `write file` / `edit file` are rejected (read-only),
-    ///    and the file on disk is unchanged.
-    /// 3. The former split by-name tool names are Unknown to the registry.
-    #[tokio::test]
-    #[serial_test::serial(cwd)]
-    async fn test_validator_files_tool_is_read_only_and_op_dispatched() {
-        let tmp = tempfile::tempdir().unwrap();
-        let test_file = tmp.path().join("test.txt");
-        std::fs::write(&test_file, "hello world").unwrap();
-
-        let server =
-            McpServer::new_with_work_dir(TemplateLibrary::default(), tmp.path().to_path_buf())
-                .await
-                .unwrap();
-
-        let validator = server.create_validator_server();
-
-        // 1a. Op-dispatched `read file` succeeds and returns the file content.
-        let read_result = validator
-            .execute_tool(
-                "files",
-                serde_json::json!({
-                    "op": "read file",
-                    "path": test_file.to_str().unwrap(),
-                }),
-            )
-            .await
-            .expect("op-dispatched 'read file' must succeed on the validator server");
-        let (_, read_text) = format_call_result_text(&read_result);
-        assert!(
-            read_text.contains("hello world"),
-            "read output must contain the real file content; got: {read_text}"
-        );
-
-        // 1b. Op-dispatched `glob files` succeeds and finds the test file.
-        let glob_result = validator
-            .execute_tool(
-                "files",
-                serde_json::json!({
-                    "op": "glob files",
-                    "pattern": "*.txt",
-                    "path": tmp.path().to_str().unwrap(),
-                }),
-            )
-            .await
-            .expect("op-dispatched 'glob files' must succeed on the validator server");
-        let (_, glob_text) = format_call_result_text(&glob_result);
-        assert!(
-            glob_text.contains("test.txt"),
-            "glob output must list the matched file; got: {glob_text}"
-        );
-
-        // 1c. Op-dispatched `grep files` succeeds and finds the matching line.
-        let grep_result = validator
-            .execute_tool(
-                "files",
-                serde_json::json!({
-                    "op": "grep files",
-                    "pattern": "hello",
-                    "path": tmp.path().to_str().unwrap(),
-                }),
-            )
-            .await
-            .expect("op-dispatched 'grep files' must succeed on the validator server");
-        let (_, grep_text) = format_call_result_text(&grep_result);
-        assert!(
-            grep_text.contains("hello"),
-            "grep output must contain the matched text; got: {grep_text}"
-        );
-
-        // 2. Write/edit ops are rejected by the read-only surface.
-        let write_result = validator
-            .execute_tool(
-                "files",
-                serde_json::json!({
-                    "op": "write file",
-                    "file_path": tmp.path().join("written.txt").to_str().unwrap(),
-                    "content": "should not be written",
-                }),
-            )
-            .await;
-        assert!(
-            write_result.is_err(),
-            "'write file' op must be rejected on the read-only validator surface"
-        );
-
-        let edit_result = validator
-            .execute_tool(
-                "files",
-                serde_json::json!({
-                    "op": "edit file",
-                    "file_path": test_file.to_str().unwrap(),
-                    "old_string": "hello",
-                    "new_string": "goodbye",
-                }),
-            )
-            .await;
-        assert!(
-            edit_result.is_err(),
-            "'edit file' op must be rejected on the read-only validator surface"
-        );
-
-        // The file must remain unchanged — write/edit ops are refused before
-        // touching disk.
-        assert_eq!(
-            std::fs::read_to_string(&test_file).unwrap(),
-            "hello world",
-            "rejected write/edit ops must not modify the file on disk"
-        );
-
-        // 3. The former split by-name tools are not addressable.
-        for split in ["read_file", "glob_files", "grep_files"] {
-            let err = validator
-                .execute_tool(split, serde_json::json!({}))
-                .await
-                .expect_err("split by-name tools must not be registered on the validator server");
-            let msg = format!("{:?}", err);
-            assert!(
-                msg.contains("unknown tool"),
-                "validator should reject '{split}' as an unknown tool; got: {msg}"
-            );
-        }
     }
 
     // ---------------------------------------------------------------
@@ -447,8 +262,6 @@ mod tests {
     #[serial_test::serial(cwd)]
     async fn test_create_validator_server_tool_execution() {
         let tmp = tempfile::tempdir().unwrap();
-        let test_file = tmp.path().join("hello.txt");
-        std::fs::write(&test_file, "hi").unwrap();
 
         let server =
             McpServer::new_with_work_dir(TemplateLibrary::default(), tmp.path().to_path_buf())
@@ -457,23 +270,16 @@ mod tests {
 
         let validator = server.create_validator_server();
 
-        // Should be able to execute a validator file read via the unified
-        // op-dispatched `files` tool. The split by-name tools are no longer
-        // registered; the validator surface is the unified read-only `files`.
+        // The validator surface serves `code_context`, so the tool must be
+        // addressable and answer a status request.
         let result = validator
-            .execute_tool(
-                "files",
-                serde_json::json!({"op": "read file", "path": test_file.to_str().unwrap()}),
-            )
+            .execute_tool("code_context", serde_json::json!({"op": "get status"}))
             .await;
-        if let Err(e) = &result {
-            let msg = format!("{:?}", e);
-            assert!(
-                !msg.contains("unknown tool"),
-                "files tool should be available on validator: {}",
-                msg
-            );
-        }
+        assert!(
+            result.is_ok(),
+            "code_context tool should be available on validator: {:?}",
+            result.err()
+        );
 
         // Should NOT be able to execute non-validator tools
         let result = validator

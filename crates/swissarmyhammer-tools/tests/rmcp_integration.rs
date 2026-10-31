@@ -6,6 +6,28 @@
 use rmcp::model::CallToolRequestParams;
 use swissarmyhammer_tools::mcp::test_utils::start_test_server_and_client;
 
+/// Bytes in the old log preview cap. A result logged past this cap proves the
+/// completion record is not truncated.
+const OLD_LOG_PREVIEW_CAP_BYTES: usize = 256;
+
+/// Length of the filler in the large-result marker. It sits well past
+/// [`OLD_LOG_PREVIEW_CAP_BYTES`].
+const LARGE_TOKEN_FILL_BYTES: usize = 600;
+
+/// Turn a JSON object literal into the argument map a tool call takes.
+fn arguments(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    value.as_object().cloned().unwrap_or_default()
+}
+
+/// The `tool_call complete` record among the captured log lines.
+fn find_complete_line<'a>(lines: &[&'a str]) -> Result<&'a str, String> {
+    lines
+        .iter()
+        .find(|l| l.contains("tool_call complete"))
+        .copied()
+        .ok_or_else(|| "expected a tool_call complete log line".to_string())
+}
+
 /// Test MCP server with RMCP client (Fast In-Process)
 ///
 /// Tests MCP server tool functionality without subprocess overhead:
@@ -31,29 +53,29 @@ async fn test_mcp_server_with_rmcp_client() {
     let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
     // `tools/list` composes per connecting client. The default `test-client`
     // name is an unknown host, served `Shared` tools only — not the
-    // `Agent`-category `files` tool. It remains *callable*; composition gates
+    // `Agent`-category `web` tool. It remains *callable*; composition gates
     // only what is advertised.
     assert!(
-        !tool_names.contains(&"files".to_string()),
-        "unknown host must not be advertised the Agent-category files tool"
+        !tool_names.contains(&"web".to_string()),
+        "unknown host must not be advertised the Agent-category web tool"
     );
 
-    // Test a simple tool call - files with glob op should work
+    // Test a simple tool call - kanban with the init board op should work
     let tool_result = client
         .call_tool(
-            CallToolRequestParams::new("files").with_arguments(
-                serde_json::json!({
-                    "op": "glob files",
-                    "pattern": "*.md"
-                })
-                .as_object()
-                .cloned()
-                .unwrap_or_default(),
-            ),
+            CallToolRequestParams::new("kanban").with_arguments(arguments(serde_json::json!({
+                "op": "init board",
+                "name": "Rmcp Test"
+            }))),
         )
         .await
         .expect("Tool call should work");
 
+    assert_ne!(
+        tool_result.is_error,
+        Some(true),
+        "kanban init board must succeed: {tool_result:?}"
+    );
     assert!(
         !tool_result.content.is_empty(),
         "Tool should return content"
@@ -69,9 +91,14 @@ async fn test_mcp_server_with_rmcp_client() {
 ///
 /// The user has repeatedly forbidden truncating log messages. This drives a
 /// real tool call whose result far exceeds the old 256-byte preview cap and
-/// asserts the complete result token (including its tail, well past byte 256)
-/// surfaces in the emitted log. Under the old `truncate_utf8_for_log(_, 256)`
+/// asserts the complete result token surfaces in the `result` field of the
+/// emitted completion record. Under the old `truncate_utf8_for_log(_, 256)`
 /// path the tail was dropped and this assertion failed.
+///
+/// The result is an error message that echoes the unknown `op`: error text is
+/// a single line, so the whole record sits on one captured log line. (A
+/// multi-line result wraps onto continuation lines that the `traced_test`
+/// scope filter drops, so it cannot be asserted through `logs_assert`.)
 ///
 /// Runs on the default current-thread tokio runtime so the in-process server's
 /// spawned tasks are polled on the same OS thread the `traced_test` subscriber
@@ -81,106 +108,73 @@ async fn test_mcp_server_with_rmcp_client() {
 async fn tool_call_complete_log_emits_full_result_untruncated() {
     // The shared helper starts the in-process HTTP server bound to a fresh temp
     // dir (so `initialize_code_context` skips the host-monorepo walk) and
-    // connects a client. `temp` is the server's working dir — the fixture file
-    // is written into it below, before the tool call that reads it.
-    let (mut server, client, temp) = start_test_server_and_client().await;
+    // connects a client. `_temp` holds the working-dir guard alive.
+    let (mut server, client, _temp) = start_test_server_and_client().await;
 
-    // A single unique token, 600 bytes long — comfortably past the old 256-byte
-    // preview cap. The tail (`...TAIL_MARKER`) only lands in the log if the full
-    // result is logged without truncation.
-    let token = format!("FULLRESULTMARKER_{}_TAIL", "x".repeat(600));
-    let read_target = temp.path().join("big_result.txt");
-    std::fs::write(&read_target, &token).expect("write big result fixture");
-
-    let tool_result = client
-        .call_tool(
-            CallToolRequestParams::new("files").with_arguments(
-                serde_json::json!({
-                    "op": "read file",
-                    "path": read_target.to_string_lossy(),
-                })
-                .as_object()
-                .cloned()
-                .unwrap_or_default(),
-            ),
-        )
-        .await
-        .expect("read_file tool call should work");
-    assert!(
-        !tool_result.content.is_empty(),
-        "read_file should return content"
+    // A single unique token, far past the old 256-byte preview cap. The `git`
+    // tool rejects an unknown `op` with an error that echoes the op, so the
+    // token rides in the tool result.
+    let token = format!(
+        "FULLRESULTMARKER_{}_TAIL",
+        "x".repeat(LARGE_TOKEN_FILL_BYTES)
     );
 
-    // The full token — including the `_TAIL` suffix past byte 256 — must appear
-    // on the emitted `tool_call complete` record. We scope the assertion to that
-    // record (the completion line plus any continuation lines it wraps onto) —
-    // not the whole log buffer — so a separate full-payload TRACE line cannot
-    // mask truncation on the INFO record. Truncation at 256 bytes would drop the
-    // tail and fail this assertion.
-    //
-    // The default read output now begins with a `#hash:<hex>` freshness-token
-    // line, so the logged `result=...` embeds a newline and the record wraps
-    // across captured lines. A continuation line is one that does not start a
-    // fresh timestamped tracing event, so we rejoin from the completion line up
-    // to (but excluding) the next event.
-    // The default read result now begins with a `#hash:<hex>` freshness-token
-    // line, so the logged `result=...` value embeds a newline and the record
-    // wraps across captured lines (and concurrent events may interleave between
-    // the header and its continuation). Non-truncation is therefore proven by
-    // two facts on the completion record:
-    //   1. The `tool_call complete` line reports `result_bytes=<N>` equal to the
-    //      FULL result length — the full result was measured and emitted, not a
-    //      256-byte preview.
-    //   2. The full token (including its tail past byte 256) appears verbatim in
-    //      the captured log buffer — it was logged, not dropped.
-    //
-    // Full result = `#hash:` + 32 hex chars + `\n` + `N:HH|` anchor + token.
-    let expected_result_bytes = "#hash:".len() + 32 + 1 + "1:9f|".len() + token.len();
-    let result_bytes_marker = format!("result_bytes={expected_result_bytes}");
-    logs_assert(move |lines: &[&str]| {
-        let complete_line = lines
-            .iter()
-            .find(|l| l.contains("tool_call complete"))
-            .ok_or_else(|| "expected a tool_call complete log line".to_string())?;
+    client
+        .call_tool(
+            CallToolRequestParams::new("git")
+                .with_arguments(arguments(serde_json::json!({ "op": token }))),
+        )
+        .await
+        .expect_err("an unknown git op must be rejected with an error naming the op");
 
-        if !complete_line.contains(&result_bytes_marker) {
+    // The `tool_call complete` record must carry the complete token in its
+    // `result` field. The same token also rides on the span's `op` field before
+    // `result=`, so the result check reads only what follows `result=`. The
+    // record also reports `result_bytes=<N>` with N at least the token length —
+    // the full result was measured, not a 256-byte preview. The `tool_call`
+    // span must carry the dispatched `op` so per-op aggregation over the logs
+    // (token accounting, latency by op) does not depend on joining the args
+    // line by adjacency — which breaks under concurrent calls. The span prefix
+    // renders on every line inside the call, including the completion line.
+    logs_assert(move |lines: &[&str]| {
+        let complete_line = find_complete_line(lines)?;
+
+        let reported_bytes = complete_line
+            .split("result_bytes=")
+            .nth(1)
+            .and_then(|rest| {
+                rest.chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect::<String>()
+                    .parse::<usize>()
+                    .ok()
+            })
+            .ok_or_else(|| format!("no result_bytes on the record: {complete_line}"))?;
+        if reported_bytes < token.len() {
             return Err(format!(
-                "tool_call complete must report the FULL result length \
-                 ({result_bytes_marker}), proving it was not truncated to a \
-                 preview; got: {complete_line}"
+                "tool_call complete must report the FULL result length (at least {} \
+                 bytes), proving it was not truncated to a {OLD_LOG_PREVIEW_CAP_BYTES}-byte \
+                 preview; got: {complete_line}",
+                token.len()
             ));
         }
 
-        // The 600-byte tail of the token lands well past the old 256-byte cap;
-        // its presence anywhere in the buffer proves the result was logged in
-        // full (the old `truncate_utf8_for_log(_, 256)` path dropped it).
-        if lines.iter().any(|l| l.contains("_TAIL")) {
-            Ok(())
-        } else {
-            Err(
-                "the full result token tail (past byte 256) was not logged — \
-                 result appears truncated"
-                    .to_string(),
-            )
+        let result_field = complete_line
+            .split("result=")
+            .nth(1)
+            .ok_or_else(|| format!("no result field on the record: {complete_line}"))?;
+        if !result_field.contains(&token) {
+            return Err(format!(
+                "the full result token (past byte {OLD_LOG_PREVIEW_CAP_BYTES}) is missing \
+                 from the result field — result appears truncated; got: {result_field}"
+            ));
         }
-    });
 
-    // The `tool_call` span must carry the dispatched `op` so per-op aggregation
-    // over the logs (token accounting, latency by op) does not depend on
-    // joining the args line by adjacency — which breaks under concurrent
-    // calls. The span prefix renders on every line inside the call, including
-    // the completion line.
-    logs_assert(|lines: &[&str]| {
-        let complete_line = lines
-            .iter()
-            .find(|l| l.contains("tool_call complete"))
-            .ok_or_else(|| "expected a tool_call complete log line".to_string())?;
-        if complete_line.contains(r#"op="read file""#) {
+        if complete_line.contains(r#"op="FULLRESULTMARKER_"#) {
             Ok(())
         } else {
             Err(format!(
-                "tool_call span must carry the dispatched op (op=\"read file\"); \
-                 got: {complete_line}"
+                "tool_call span must carry the dispatched op; got: {complete_line}"
             ))
         }
     });

@@ -193,7 +193,7 @@ mod tests {
         // The full tool union is registered, but `tools/list` composes the
         // advertised set per connecting client. The default `test-client` name
         // is an unknown host → `Shared` only, so `Agent`-category tools like
-        // `files` are NOT advertised (host-specific behavior is asserted in the
+        // `web` are NOT advertised (host-specific behavior is asserted in the
         // `per_client_tool_composition` integration test).
         let (mut server, client, _temp) = start_test_server_and_client().await;
 
@@ -201,11 +201,11 @@ mod tests {
         assert!(!tools.tools.is_empty());
 
         let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
-        // Unknown host gets `Shared` only: the `Agent`-category `files` tool is
+        // Unknown host gets `Shared` only: the `Agent`-category `web` tool is
         // not advertised, but `Shared` tools like `kanban` are.
         assert!(
-            !tool_names.contains(&"files".to_string()),
-            "unknown host must not be advertised the Agent-category `files` tool"
+            !tool_names.contains(&"web".to_string()),
+            "unknown host must not be advertised the Agent-category `web` tool"
         );
         assert!(
             tool_names.contains(&"kanban".to_string()),
@@ -219,16 +219,16 @@ mod tests {
     // multi_thread required — see `test_client_handshake_is_fast`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_client_call_tool() {
-        // The full tool union (including agent tools like `files`) is always
-        // registered.
+        // The full tool union is always registered; a call by name is not
+        // gated by per-client composition.
         let (mut server, client, _temp) = start_test_server_and_client().await;
 
         let result = client
             .call_tool(
-                CallToolRequestParams::new("files").with_arguments(
+                CallToolRequestParams::new("kanban").with_arguments(
                     serde_json::json!({
-                        "op": "glob files",
-                        "pattern": "*.md"
+                        "op": "init board",
+                        "name": "Call Tool Test"
                     })
                     .as_object()
                     .cloned()
@@ -238,6 +238,11 @@ mod tests {
             .await
             .unwrap();
 
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "kanban init board must succeed: {result:?}"
+        );
         assert!(!result.content.is_empty());
 
         client.cancel().await.unwrap();

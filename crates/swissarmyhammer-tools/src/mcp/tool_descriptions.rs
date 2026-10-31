@@ -101,40 +101,40 @@ mod tests {
     #[test]
     fn test_get_tool_description() {
         // Test that we can get descriptions for known tools
-        // Note: todo tools were removed, use files/read instead
-        assert!(get_tool_description("files", "read").is_some());
+        // Note: todo tools were removed, use git/changes instead
+        assert!(get_tool_description("git", "changes").is_some());
     }
 
     #[test]
     fn test_has_tool_description() {
-        assert!(has_tool_description("files", "read"));
+        assert!(has_tool_description("git", "changes"));
         assert!(!has_tool_description("nonexistent", "tool"));
     }
 
     #[test]
     fn test_get_descriptions_by_noun() {
         let grouped = get_descriptions_by_noun();
-        assert!(grouped.contains_key("files"));
+        assert!(grouped.contains_key("git"));
 
-        // Check that files has expected verbs
-        let files = &grouped["files"];
-        let verbs: Vec<&str> = files.iter().map(|(v, _)| v.as_str()).collect();
-        assert!(verbs.contains(&"read"));
+        // Check that git has expected verbs
+        let git = &grouped["git"];
+        let verbs: Vec<&str> = git.iter().map(|(v, _)| v.as_str()).collect();
+        assert!(verbs.contains(&"changes"));
     }
 
     #[test]
     fn test_description_content_quality() {
         // Note: The tool description system stores descriptions by domain/verb.
-        // Since kanban is a unified tool, use files/read as a test case instead.
-        if let Some(files_read_desc) = get_tool_description("files", "read") {
-            assert!(
-                files_read_desc.len() > 10,
-                "Description should be substantial"
-            );
-            assert!(
-                !files_read_desc.trim().is_empty(),
-                "Description should not be empty"
-            );
-        }
+        // Since kanban is a unified tool, use git/changes as a test case instead.
+        let git_changes_desc =
+            get_tool_description("git", "changes").expect("git changes description must exist");
+        assert!(
+            git_changes_desc.len() > 10,
+            "Description should be substantial"
+        );
+        assert!(
+            !git_changes_desc.trim().is_empty(),
+            "Description should not be empty"
+        );
     }
 }

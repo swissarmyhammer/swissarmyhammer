@@ -8,7 +8,6 @@
 
 use serde_json::json;
 use swissarmyhammer_cli::mcp_integration::CliToolContext;
-use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
 use crate::test_utils::setup_git_repo;
 
@@ -25,23 +24,6 @@ async fn setup_isolated_context() -> (tempfile::TempDir, CliToolContext) {
         .await
         .expect("Failed to create isolated CliToolContext");
     (temp, context)
-}
-
-/// Creates a fully isolated test context backed by an `IsolatedTestEnvironment`.
-///
-/// The full tool union is always registered, so agent-category tools (files,
-/// skill) are available alongside the shared domain tools.
-async fn setup_agent_tool_test_context() -> (IsolatedTestEnvironment, CliToolContext) {
-    let env = IsolatedTestEnvironment::new().unwrap();
-    let temp_path = env.temp_dir();
-
-    // Set up git repository for tests that need it
-    setup_git_repo(&temp_path).expect("Failed to set up git repository");
-
-    let context = CliToolContext::new_isolated(&temp_path)
-        .await
-        .expect("Failed to create isolated CliToolContext");
-    (env, context)
 }
 
 /// Creates a CallToolResult for testing purposes.
@@ -75,23 +57,19 @@ async fn test_cli_can_call_mcp_tools() {
 }
 
 #[tokio::test]
-async fn test_files_read_tool_integration() {
-    let (env, context) = setup_agent_tool_test_context().await;
+async fn test_kanban_init_board_tool_integration() {
+    let (_temp, context) = setup_isolated_context().await;
 
-    // Create a test file to read
-    let test_file = env.temp_dir().join("test_file.txt");
-    std::fs::write(&test_file, "Test content for files read").unwrap();
-
-    // Test calling unified files tool with read operation
+    // Test calling the unified kanban tool with the init board operation
     let args = context.create_arguments(vec![
-        ("op", json!("read file")),
-        ("path", json!(test_file.to_string_lossy().to_string())),
+        ("op", json!("init board")),
+        ("name", json!("CLI Integration")),
     ]);
 
-    let result = context.execute_tool("files", args).await;
+    let result = context.execute_tool("kanban", args).await;
     assert!(
         result.is_ok(),
-        "Failed to execute files tool: {:?}",
+        "Failed to execute kanban tool: {:?}",
         result.err()
     );
 
@@ -166,12 +144,12 @@ async fn test_nonexistent_tool_error() {
 
 #[tokio::test]
 async fn test_invalid_arguments_error() {
-    let (_env, context) = setup_agent_tool_test_context().await;
+    let (_temp, context) = setup_isolated_context().await;
 
-    // Test calling files with invalid arguments (missing required fields)
+    // Test calling kanban with invalid arguments (missing required fields)
     let args = context.create_arguments(vec![("invalid_field", json!("invalid_value"))]);
 
-    let result = context.execute_tool("files", args).await;
+    let result = context.execute_tool("kanban", args).await;
     assert!(result.is_err(), "Should return error for invalid arguments");
 }
 

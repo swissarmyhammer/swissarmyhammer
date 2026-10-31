@@ -9,7 +9,6 @@ use rmcp::ErrorData as McpError;
 #[test]
 fn test_cli_category_extraction() {
     // Test known categories
-    assert_eq!(FilesTool.cli_category(), Some("file"));
     assert_eq!(WebTool.cli_category(), Some("web"));
     assert_eq!(OutlineGenerateTool.cli_category(), Some("outline"));
 
@@ -23,7 +22,6 @@ fn test_cli_category_extraction() {
 #[test]
 fn test_cli_name_extraction() {
     // Test action extraction
-    assert_eq!(FilesTool.cli_name(), "files");
     assert_eq!(WebTool.cli_name(), "search_and_fetch");
     assert_eq!(OutlineGenerateTool.cli_name(), "generate");
 
@@ -38,8 +36,8 @@ fn test_cli_name_extraction() {
 fn test_cli_about_extraction() {
     // Test first line extraction
     assert_eq!(
-        FilesTool.cli_about(),
-        Some("Unified file operations (read, write, edit, glob, grep)")
+        KanbanTool.cli_about(),
+        Some("Kanban board operations for task management")
     );
     assert_eq!(MultiLineTool.cli_about(), Some("First line of description"));
 }
@@ -47,7 +45,7 @@ fn test_cli_about_extraction() {
 #[test]
 fn test_hidden_from_cli_default() {
     // Test default implementation returns false
-    assert!(!FilesTool.hidden_from_cli());
+    assert!(!KanbanTool.hidden_from_cli());
     assert!(!UnknownCategoryTool.hidden_from_cli());
     assert!(!NoUnderscoreTool.hidden_from_cli());
 }
@@ -63,14 +61,6 @@ fn test_cli_integration_comprehensive() {
         Some("A tool with an unknown category prefix")
     );
     assert!(!tool.hidden_from_cli());
-}
-
-#[test]
-fn test_files_category_alias() {
-    // Test that "files" prefix maps to "file" category
-    let tool = FilesTool;
-    assert_eq!(tool.cli_category(), Some("file"));
-    assert_eq!(tool.cli_name(), "files");
 }
 
 /// `cli_about` feeds clap's one-line command summary. A wrapper tag is not a
@@ -101,10 +91,10 @@ fn test_get_cli_categories_empty_registry() {
 fn test_get_cli_categories_returns_sorted_unique() {
     let mut registry = ToolRegistry::new();
     // KanbanTool → category "kanban"
-    // FilesTool → category "file"
+    // WebTool → category "web"
     // GitStatusTool and MockTool "git_log" → both category "git"
     registry.register(KanbanTool);
-    registry.register(FilesTool);
+    registry.register(WebTool);
     registry.register(GitStatusTool);
     registry.register(MockTool {
         name: "git_log",
@@ -119,7 +109,7 @@ fn test_get_cli_categories_returns_sorted_unique() {
     // Two tools share the "git" category, so it must be listed exactly once
     assert_eq!(categories.iter().filter(|c| *c == "git").count(), 1);
     assert!(categories.contains(&"kanban".to_string()));
-    assert!(categories.contains(&"file".to_string()));
+    assert!(categories.contains(&"web".to_string()));
     assert!(categories.contains(&"git".to_string()));
 }
 
@@ -127,16 +117,19 @@ fn test_get_cli_categories_returns_sorted_unique() {
 fn test_get_tools_for_category_returns_correct_tools() {
     let mut registry = ToolRegistry::new();
     registry.register(KanbanTool);
-    registry.register(FilesTool);
+    registry.register(WebTool);
     registry.register(GitStatusTool);
 
     let kanban_tools = registry.get_tools_for_category("kanban");
     assert_eq!(kanban_tools.len(), 1);
     assert_eq!(<dyn McpTool as McpTool>::name(kanban_tools[0]), "kanban");
 
-    let file_tools = registry.get_tools_for_category("file");
-    assert_eq!(file_tools.len(), 1);
-    assert_eq!(<dyn McpTool as McpTool>::name(file_tools[0]), "files");
+    let web_tools = registry.get_tools_for_category("web");
+    assert_eq!(web_tools.len(), 1);
+    assert_eq!(
+        <dyn McpTool as McpTool>::name(web_tools[0]),
+        "web_search_and_fetch"
+    );
 }
 
 #[test]

@@ -11,8 +11,8 @@ use swissarmyhammer_common::health::{Doctorable, HealthCheck};
 
 use crate::mcp::tool_registry::ToolRegistry;
 use crate::mcp::{
-    register_code_context_tools, register_diagnostics_tools, register_file_tools,
-    register_git_tools, register_kanban_tools, register_ralph_tools, register_web_tools,
+    register_code_context_tools, register_diagnostics_tools, register_git_tools,
+    register_kanban_tools, register_ralph_tools, register_web_tools,
 };
 // The specialized `review` registration lives on the tool module, like
 // `register_review_tool_with_factories` the server wiring uses.
@@ -207,7 +207,6 @@ pub async fn collect_all_health_checks(workspace_root: &std::path::Path) -> Vec<
     // Register every MCP tool group (same set the server registers in
     // `register_all_tools`) so `sah doctor` enumerates all tools, each
     // surfacing at least one OK line via the Doctorable default.
-    register_file_tools(&mut tool_registry);
     register_git_tools(&mut tool_registry);
     register_kanban_tools(&mut tool_registry);
     register_web_tools(&mut tool_registry);

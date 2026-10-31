@@ -586,7 +586,7 @@ async fn route_subcommand(context: &CliContext, cli_tool_context: Arc<CliToolCon
 /// Handles MCP tool commands with the pattern: `sah <category> <tool_name> [args...]`
 ///
 /// # Arguments
-/// * `category` - The tool category (e.g., "files")
+/// * `category` - The tool category (e.g., "git")
 /// * `tool_name` - The specific tool within that category (e.g., "read")
 /// * `tool_matches` - The tool's specific arguments
 /// * `cli_tool_context` - The tool context for MCP tool execution

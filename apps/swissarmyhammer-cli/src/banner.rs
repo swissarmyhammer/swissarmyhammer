@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn no_banner_with_multiple_args() {
-        let args = vec!["sah".to_string(), "files".to_string(), "read".to_string()];
+        let args = vec!["sah".to_string(), "git".to_string(), "status".to_string()];
         assert!(!should_show_banner(&args));
     }
 

@@ -1,7 +1,7 @@
 //! Tool doubles shared by the tool registry test modules.
 
 use crate::mcp::tool_handlers::ToolHandlers;
-use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
+use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolCategory, ToolContext};
 use crate::{impl_default_doctorable, impl_empty_initializable};
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
@@ -56,6 +56,44 @@ impl McpTool for MockTool {
     }
 }
 
+/// Native host tool the [`ReplacementMockTool`] claims to supersede.
+pub(super) const REPLACEMENT_MOCK_NATIVE: &str = "Edit";
+
+/// Mock tool in the `Replacement` category, for per-host composition tests.
+pub(super) struct ReplacementMockTool;
+
+impl_default_doctorable!(ReplacementMockTool);
+impl_empty_initializable!(ReplacementMockTool);
+
+#[async_trait::async_trait]
+impl McpTool for ReplacementMockTool {
+    fn name(&self) -> &'static str {
+        "replacement_mock"
+    }
+
+    fn description(&self) -> &'static str {
+        "Replacement-category mock tool"
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object", "properties": {}})
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Replacement {
+            native: REPLACEMENT_MOCK_NATIVE,
+        }
+    }
+
+    async fn execute(
+        &self,
+        _arguments: serde_json::Map<String, serde_json::Value>,
+        _context: &ToolContext,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        Ok(BaseToolImpl::create_success_response("replacement"))
+    }
+}
+
 /// Macro to create test tools with minimal boilerplate
 ///
 /// This macro reduces code duplication by generating identical tool implementations
@@ -95,11 +133,6 @@ test_tool!(
     KanbanTool,
     "kanban",
     "Kanban board operations for task management"
-);
-test_tool!(
-    FilesTool,
-    "files",
-    "Unified file operations (read, write, edit, glob, grep)"
 );
 test_tool!(
     WebTool,

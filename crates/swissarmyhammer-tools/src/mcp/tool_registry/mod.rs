@@ -231,8 +231,8 @@ mod tests;
 pub use context::ToolContext;
 pub use registration::{
     create_fully_registered_tool_registry, register_code_context_tools, register_diagnostics_tools,
-    register_file_tools, register_git_tools, register_kanban_tools, register_ralph_tools,
-    register_review_tools, register_web_tools, send_mcp_log, LoggerName,
+    register_git_tools, register_kanban_tools, register_ralph_tools, register_review_tools,
+    register_web_tools, send_mcp_log, LoggerName,
 };
 pub use registry::{CliCategory, CliName, ToolRegistry};
 pub use tool::{McpTool, ToolCategory};

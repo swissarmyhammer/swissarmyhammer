@@ -240,24 +240,6 @@ async fn question_tool_is_not_registered() {
     );
 }
 
-// --- category() tests ---
-
-#[test]
-fn test_registered_files_tool_reports_replacement_category() {
-    let mut registry = ToolRegistry::new();
-    register_file_tools(&mut registry);
-
-    let tool = registry
-        .get_tool("files")
-        .expect("files tool is registered");
-
-    assert_eq!(
-        McpTool::category(tool),
-        ToolCategory::Replacement { native: "Edit" }
-    );
-    assert_ne!(McpTool::category(tool), ToolCategory::Agent);
-}
-
 // --- category default test ---
 
 #[test]

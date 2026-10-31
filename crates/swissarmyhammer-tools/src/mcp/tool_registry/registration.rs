@@ -49,12 +49,6 @@ pub async fn send_mcp_log(
 }
 
 register_tool_category!(
-    register_file_tools,
-    files,
-    "Register all file-related tools with the registry"
-);
-
-register_tool_category!(
     register_git_tools,
     git,
     "Register all git-related tools with the registry"
@@ -103,7 +97,6 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
 
     // Register all tools exactly like McpServer does
-    register_file_tools(&mut registry);
     register_git_tools(&mut registry);
     register_kanban_tools(&mut registry);
     register_code_context_tools(&mut registry);

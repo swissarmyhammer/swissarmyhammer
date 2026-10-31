@@ -21,7 +21,7 @@ use swissarmyhammer_common::health::Doctorable;
 /// # Implementation Guidelines
 ///
 /// ## Tool Names
-/// Tool names should follow the pattern `{domain}_{action}` (e.g., `memo_create`, `files`).
+/// Tool names should follow the pattern `{domain}_{action}` (e.g., `memo_create`, `kanban`).
 /// Names must be unique within the registry and should be stable across versions.
 ///
 /// ## Descriptions
@@ -63,7 +63,7 @@ pub trait McpTool:
     /// Get the tool's unique identifier name
     ///
     /// The name must be unique within the registry and should follow the
-    /// `{domain}_{action}` pattern (e.g., `memo_create`, `files`).
+    /// `{domain}_{action}` pattern (e.g., `memo_create`, `kanban`).
     /// Names should be stable across versions.
     fn name(&self) -> &'static str;
 
@@ -172,7 +172,7 @@ pub trait McpTool:
     ///
     /// * `memo_create` → Some("memo")
     /// * `kanban` → Some("kanban")
-    /// * `files` → Some("file")
+    /// * `web_fetch` → Some("web")
     fn cli_category(&self) -> Option<&'static str> {
         // Extract category from tool name by taking prefix before first underscore
         let name = <Self as McpTool>::name(self);
@@ -193,7 +193,7 @@ pub trait McpTool:
     ///
     /// * `memo_create` → "create"
     /// * `kanban` → "kanban"
-    /// * `files` → "files"
+    /// * `web_fetch` → "fetch"
     fn cli_name(&self) -> &'static str {
         // Extract action from tool name by taking suffix after first underscore
         let name = <Self as McpTool>::name(self);
@@ -298,9 +298,9 @@ pub trait McpTool:
 ///   (like Claude Code) already provide natively: file read/write/edit, glob,
 ///   grep, web, skills, subagent delegation. Mounted for hosts that lack it.
 /// - [`ToolCategory::Replacement`] — an agent capability that also supersedes a
-///   named native host tool. `native` is the host tool it replaces (e.g. `files`
-///   replaces `Edit`). A replacement is an agent capability *and* signals that the
-///   host's native tool of that name should defer to it.
+///   named native host tool. `native` is the host tool it replaces (e.g. a
+///   `shell` tool replaces `Bash`). A replacement is an agent capability *and*
+///   signals that the host's native tool of that name should defer to it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum ToolCategory {
     /// Domain capability available to every host. The default.
@@ -378,8 +378,6 @@ macro_rules! impl_empty_initializable {
 /// the first underscore. A new category is one new row.
 const CLI_CATEGORY_TABLE: &[(&str, &str)] = &[
     ("memo", "memo"),
-    ("file", "file"),
-    ("files", "file"),
     ("web", "web"),
     ("outline", "outline"),
     ("notify", "notify"),

@@ -43,13 +43,13 @@
 //! ### Registering Tools
 //!
 //! ```rust,no_run
-//! use swissarmyhammer_tools::mcp::{ToolRegistry, register_file_tools};
+//! use swissarmyhammer_tools::mcp::{ToolRegistry, register_git_tools};
 //!
 //! # async fn example() {
 //! let mut registry = ToolRegistry::new();
 //!
 //! // Register tool categories
-//! register_file_tools(&mut registry);
+//! register_git_tools(&mut registry);
 //!
 //! println!("Registered {} tools", registry.list_tools().len());
 //! # }
@@ -90,9 +90,9 @@ pub use plan_notifications::{
 pub use server::McpServer;
 pub use tool_handlers::ToolHandlers;
 pub use tool_registry::{
-    register_code_context_tools, register_diagnostics_tools, register_file_tools,
-    register_git_tools, register_kanban_tools, register_ralph_tools, register_review_tools,
-    register_web_tools, ToolContext, ToolRegistry,
+    register_code_context_tools, register_diagnostics_tools, register_git_tools,
+    register_kanban_tools, register_ralph_tools, register_review_tools, register_web_tools,
+    ToolContext, ToolRegistry,
 };
 // The library-backed tool families live under `tools`, not `tool_registry`;
 // re-exported here so every `register_*_tools` entry point is reachable from

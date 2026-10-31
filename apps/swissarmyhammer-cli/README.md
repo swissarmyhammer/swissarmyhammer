@@ -29,7 +29,6 @@ sah provides MCP tools organized by category:
 ### Files
 | Tool | Description |
 |------|-------------|
-| `files` | Unified file operations (read, write, edit, glob, grep) selected via `op` parameter |
 
 ### Git
 | Tool | Description |

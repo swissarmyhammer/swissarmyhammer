@@ -44,9 +44,9 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
-    register_code_context_tools, register_diagnostics_tools, register_file_tools,
-    register_git_tools, register_kanban_tools, register_ralph_tools, register_review_tools,
-    register_web_tools, ToolContext, ToolRegistry,
+    register_code_context_tools, register_diagnostics_tools, register_git_tools,
+    register_kanban_tools, register_ralph_tools, register_review_tools, register_web_tools,
+    ToolContext, ToolRegistry,
 };
 use super::tools::agent::register_agent_tools;
 use super::tools::skill::register_skill_tools;
@@ -343,7 +343,6 @@ impl McpServer {
         register_code_context_tools(tool_registry);
         register_ralph_tools(tool_registry);
         register_agent_tools(tool_registry, agent_library, prompt_library.clone());
-        register_file_tools(tool_registry);
         register_review_tools(tool_registry);
         register_diagnostics_tools(tool_registry);
         register_skill_tools(tool_registry, skill_library, prompt_library);
@@ -580,10 +579,10 @@ mod tests {
                 .unwrap();
 
         // The full tool union is always registered — agent capabilities
-        // (files, web, skill, agent) are present regardless of host. Per-client
+        // (web, skill, agent) are present regardless of host. Per-client
         // composition happens at the serve boundary, not here.
         let tools = server.list_tools().await;
-        for expected in ["files", "web", "skill", "agent"] {
+        for expected in ["web", "skill", "agent"] {
             assert!(
                 tools.iter().any(|t| t.name == expected),
                 "expected agent tool '{}' to be registered; got: {:?}",
@@ -672,8 +671,8 @@ mod tests {
         // boundary, not in registration.
         let tool_names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
         assert!(
-            tool_names.contains(&"files".to_string()),
-            "files tool should be registered, got: {:?}",
+            tool_names.contains(&"web".to_string()),
+            "web tool should be registered, got: {:?}",
             tool_names
         );
         assert!(
@@ -714,19 +713,19 @@ mod tests {
         // A non-object `arguments` is replaced by an empty map, so the named
         // tool still runs and answers for itself.
         let result = server
-            .execute_tool("files", serde_json::json!("not an object"))
+            .execute_tool("web", serde_json::json!("not an object"))
             .await;
 
-        // `files` dispatches on `op`, and an empty map carries none, so it
+        // `web` dispatches on `op`, and an empty map carries none, so it
         // reports the missing operation. That message is the proof the
         // substitution happened: an unsubstituted non-object would have failed
         // before reaching the tool, and the message would name the arguments
         // rather than the operation.
-        let err = result.expect_err("`files` with no `op` must return an error");
+        let err = result.expect_err("`web` with no `op` must return an error");
         let msg = format!("{err:?}");
         assert!(
             msg.contains("cannot determine operation"),
-            "the empty map must reach `files`, which then reports the missing \
+            "the empty map must reach `web`, which then reports the missing \
              operation; got: {msg}"
         );
     }

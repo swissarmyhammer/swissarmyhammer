@@ -2,9 +2,6 @@
 
 mod code_context_ops_e2e;
 mod diagnostics_request_socket_e2e;
-mod file_rate_limiting;
-mod file_size_limits;
-mod file_tools_integrations;
 mod final_http;
 mod mcp_server_paritys;
 mod per_client_tool_composition;

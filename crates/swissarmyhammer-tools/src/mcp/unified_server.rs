@@ -1853,18 +1853,12 @@ mod tests {
     /// Boots an actual HTTP MCP server, opens an RMCP client against the
     /// `/mcp/validator` sub-route, sends `tools/list`, and asserts the
     /// returned tool names are exactly the validator allowlist —
-    /// `{"files", "code_context"}` — no more, no less.
-    ///
-    /// The validator file surface is the unified, read-only `files` tool
-    /// (op-dispatched `read file` / `glob files` / `grep files`); the former
-    /// split by-name tools (`read_file`/`glob_files`/`grep_files`) are gone.
+    /// `{"code_context"}` — no more, no less.
     ///
     /// This is the durable guard against tool-set drift. If anyone adds a
     /// `register_kanban_tools(&mut registry)` call to `create_validator_server`
     /// "because it seemed harmless", the runtime list won't match and this
-    /// test fails at the boundary the actual validator agent talks to. It also
-    /// catches a regression that re-introduces the split by-name tools or drops
-    /// the unified `files` tool from the validator surface.
+    /// test fails at the boundary the actual validator agent talks to.
     ///
     /// The validator route serves exactly the validator profile
     /// (`tools::register_validator_tools`); the full server registering the
@@ -1902,29 +1896,26 @@ mod tests {
             .expect("tools/list against /mcp/validator must succeed");
 
         let actual: BTreeSet<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
-        let expected: BTreeSet<String> = ["files", "code_context"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let expected: BTreeSet<String> = ["code_context"].iter().map(|s| s.to_string()).collect();
 
         assert_eq!(
             actual, expected,
-            "validator endpoint must expose exactly {{files, code_context}} — got: {:?}",
+            "validator endpoint must expose exactly {{code_context}} — got: {:?}",
             actual
         );
 
-        // The unified `files` tool must be present — it is the read-only file
-        // surface served to validators.
+        // The `code_context` tool must be present — it is the only tool served
+        // to validators.
         assert!(
-            actual.contains("files"),
-            "validator endpoint must advertise the unified 'files' tool — got: {:?}",
+            actual.contains("code_context"),
+            "validator endpoint must advertise the 'code_context' tool — got: {:?}",
             actual
         );
 
         // Defense in depth: enumerate the categories the validator must
         // never advertise. If any of these names appear, registration has
-        // leaked a forbidden tool through the validator route. The former
-        // split file tools are included — they must no longer be served.
+        // leaked a forbidden tool through the validator route. The removed
+        // `files` tool is included — it must no longer be served.
         for forbidden in [
             "git",
             "kanban",
@@ -1933,11 +1924,7 @@ mod tests {
             "ralph",
             "skill",
             "agent",
-            "write_file",
-            "edit_file",
-            "read_file",
-            "glob_files",
-            "grep_files",
+            "files",
         ] {
             assert!(
                 !actual.contains(forbidden),

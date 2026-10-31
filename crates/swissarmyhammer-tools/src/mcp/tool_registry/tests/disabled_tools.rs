@@ -1,6 +1,6 @@
 //! Enable and disable behaviour and deterministic tool listing order.
 
-use super::fixtures::MockTool;
+use super::fixtures::{MockTool, ReplacementMockTool};
 use crate::mcp::tool_registry::*;
 
 // --- disabled_tools tests ---
@@ -167,7 +167,6 @@ fn test_list_tools_deterministic_sorted_order() {
         "kanban",
         "git",
         "web",
-        "files",
         "code_context",
         "review",
         "ralph",
@@ -220,18 +219,15 @@ fn test_list_tools_deterministic_sorted_order() {
     );
 }
 
-/// The unified `files` tool is a `Replacement` for the native edit surface,
-/// so the primary per-client serve advertises it to Claude (which gets
-/// `Shared` + `Replacement`) but not to unknown clients (which get `Shared`
-/// only). Regression for the bug where `files` was `Agent`-category and
-/// therefore stripped from every host — including Claude — leaving Claude
-/// with its native edit surface denied and no served replacement.
+/// A `Replacement`-category tool supersedes a native host tool, so the primary
+/// per-client serve advertises it to Claude (which gets `Shared` +
+/// `Replacement`) but not to unknown clients (which get `Shared` only).
 #[test]
-fn files_replacement_served_to_claude_not_unknown() {
+fn replacement_served_to_claude_not_unknown() {
     use crate::mcp::host::Host;
 
     let mut registry = ToolRegistry::new();
-    register_file_tools(&mut registry);
+    registry.register(ReplacementMockTool);
 
     let names_for = |host: Host| -> Vec<String> {
         registry
@@ -242,12 +238,16 @@ fn files_replacement_served_to_claude_not_unknown() {
     };
 
     assert!(
-        names_for(Host::Claude).iter().any(|n| n == "files"),
-        "Claude must be served the `files` replacement"
+        names_for(Host::Claude)
+            .iter()
+            .any(|n| n == "replacement_mock"),
+        "Claude must be served the `Replacement` tool"
     );
     assert!(
-        !names_for(Host::Other).iter().any(|n| n == "files"),
-        "unknown clients must not be served `files` via the primary serve"
+        !names_for(Host::Other)
+            .iter()
+            .any(|n| n == "replacement_mock"),
+        "unknown clients must not be served a `Replacement` tool via the primary serve"
     );
 }
 
