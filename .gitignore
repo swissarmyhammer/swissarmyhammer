@@ -137,7 +137,7 @@ cc.json
 # Generated man pages (built at compile time, included in release archives)
 docs/*.1
 
-# AVP and shell tool dirs self-manage their own .gitignore
+# AVP dir self-manages its own .gitignore
 
 # Lockfiles (generated during install, project-specific)
 avp-lock.json
@@ -178,8 +178,6 @@ ane-embedding/convert/output/
 **/.validators/
 
 
-# Shell tool runtime state
-**/.shell/
 .claude/worktrees
 .swissarmyhammer
 .code-context/

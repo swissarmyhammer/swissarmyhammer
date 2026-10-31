@@ -1,6 +1,6 @@
 # MCP Tool Standards
 
-Standards and conventions for building MCP tools in SwissArmyHammer. Every new tool MUST follow these patterns. Derived from the shell and code_context reference implementations.
+Standards and conventions for building MCP tools in SwissArmyHammer. Every new tool MUST follow these patterns. Derived from the git and code_context reference implementations.
 
 ## File Structure
 
@@ -48,7 +48,7 @@ impl McpTool for MyTool {
 }
 ```
 
-**`cli_category()` and `cli_name()`**: Always set these explicitly. The trait has defaults that extract from the tool name, but explicit values are clearer and prevent surprises when names change. If your tool name IS the category (e.g., "kanban", "shell", "ralph"), both return the same value.
+**`cli_category()` and `cli_name()`**: Always set these explicitly. The trait has defaults that extract from the tool name, but explicit values are clearer and prevent surprises when names change. If your tool name IS the category (e.g., "kanban", "git", "ralph"), both return the same value.
 
 **`is_agent_tool()`**: Set to `true` ONLY if your tool replicates capabilities the host agent already has natively (e.g., `files` duplicates Claude Code's Read/Write/Glob/Grep). Most tools should be `false` — they provide new capabilities the agent doesn't have.
 
@@ -146,7 +146,7 @@ static MY_OPERATIONS: Lazy<Vec<&'static dyn Operation>> = Lazy::new(|| vec![
 
 ### Exposing Operations from `operations()`
 
-The `operations()` method must return `&'static [&'static dyn Operation]`. Since `OPERATIONS` is a `Lazy<Vec<...>>`, both shell and code_context use an unsafe transmute to extend the lifetime. This is safe because the `Lazy` is truly static, but the pattern must include a safety comment:
+The `operations()` method must return `&'static [&'static dyn Operation]`. Since `OPERATIONS` is a `Lazy<Vec<...>>`, git, ralph and web use an unsafe transmute to extend the lifetime. This is safe because the `Lazy` is truly static, but the pattern must include a safety comment:
 
 ```rust
 fn operations(&self) -> &'static [&'static dyn Operation] {
@@ -203,7 +203,7 @@ same operation metadata and expose them through TWO trait methods:
   in-process surface the CLI generator consumes. It carries the heavy keys.
 
 Factor the `SchemaConfig` into one private helper so both methods stay in lockstep
-(the `*_schema_config()` pattern used by `shell`, `git`, `web`, `kanban`, `review`):
+(the `*_schema_config()` pattern used by `git`, `web`, `kanban`, `review`):
 
 ```rust
 use swissarmyhammer_operations::{
@@ -301,11 +301,11 @@ async fn execute(&self, arguments: Map<String, Value>, context: &ToolContext) ->
 
 ### Default operation (optional)
 
-If your tool has one primary operation, you may treat `""` (missing op) as that operation. The shell tool does this — missing `op` defaults to `"execute command"`:
+If your tool has one primary operation, you may treat `""` (missing op) as that operation. The git tool does this — missing `op` defaults to `"get changes"`:
 
 ```rust
-"execute command" | "" => {
-    // Default: execute a command
+"get changes" | "" => {
+    // Default: list the changes
 }
 ```
 
@@ -337,7 +337,7 @@ Ok(BaseToolImpl::create_error_response("Operation failed", Some(details)))
 
 ## Execution Results (Audit Trail)
 
-The `ExecutionResult` enum exists for tools that need audit logging of mutations. The kanban tool uses this extensively. Shell and code_context do NOT use it — they return `CallToolResult` directly.
+The `ExecutionResult` enum exists for tools that need audit logging of mutations. The kanban tool uses this extensively. Git and code_context do NOT use it — they return `CallToolResult` directly.
 
 **Use `ExecutionResult` when**: your tool has a persistent store and you want per-entity audit logs (like kanban's per-task JSONL logs).
 
@@ -369,10 +369,10 @@ Two patterns exist in the codebase:
 fn description(&self) -> &'static str { include_str!("description.md") }
 ```
 
-**Pattern B — registry lookup** (used by shell, when description key differs from tool name):
+**Pattern B — registry lookup** (use only when the description key differs from the tool name):
 ```rust
 fn description(&self) -> &'static str {
-    get_tool_description("shell", "execute")
+    get_tool_description("files", "read")
         .expect("Tool description should be available")
 }
 ```
@@ -457,7 +457,6 @@ Choose based on your tool's needs:
 | Stateless (`#[derive(Default)]`) | Pure computation, no persistence | js, web |
 | File-based (working dir) | Per-project persistent state | kanban (`.kanban/`), ralph (`.sah/ralph/`) |
 | Shared libraries (`Arc<RwLock<T>>`) | Dynamic registries | agent, skill |
-| In-process (`Arc<Mutex<T>>`) | Session-scoped ephemeral state | shell (command history) |
 | Context access (`ToolContext`) | Shared infrastructure | git (via `context.git_ops`) |
 
 ### File-based state convention
@@ -565,7 +564,7 @@ sah tool ralph ralph check --
 
 ## Advanced Patterns
 
-These patterns appear in the reference tools (shell, code_context) and should be used where applicable.
+These patterns appear in the reference tool (code_context) and should be used where applicable.
 
 ### Working directory and git root discovery
 
@@ -590,10 +589,10 @@ if let Some(progress_msg) = check_readiness(&workspace) {
 
 ### Background workers
 
-For tools that need async processing (embedding computation, indexing), spawn a background worker at construction time. The shell tool does this for semantic search embeddings:
+For tools that need async processing (embedding computation, indexing), spawn a background worker at construction time. The code_context tool does this for indexing and file watching. The shape is:
 
 ```rust
-impl ShellState {
+impl MyToolState {
     pub fn new() -> Self {
         let (chunk_tx, chunk_rx) = mpsc::channel(100);
         let worker_handle = tokio::spawn(embedding_worker(chunk_rx, db.clone()));
@@ -621,14 +620,14 @@ The agent and skill tools do this to append `<available_agents>` / `<available_s
 
 ### Process management
 
-For tools that spawn child processes (shell), implement:
+For tools that spawn child processes, implement:
 - Timeout with graceful SIGTERM → forced SIGKILL escalation
 - Process tracking by ID for `kill` operations
 - Proper cleanup on drop (AsyncProcessGuard pattern)
 
 ### Output size limiting
 
-For tools that may produce large output (shell, grep), implement output buffering with size limits:
+For tools that may produce large output (grep), implement output buffering with size limits:
 - Binary detection (don't return binary content to the agent)
 - Line-count limiting (`max_lines` parameter)
 - Truncation markers so the agent knows output was cut

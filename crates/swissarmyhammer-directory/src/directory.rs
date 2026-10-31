@@ -893,20 +893,6 @@ mod tests {
         assert_eq!(*dir.root_type(), DirectoryRootType::XdgConfig);
     }
 
-    /// xdg_data with ShellConfig to exercise that config type.
-    #[test]
-    #[serial]
-    fn test_xdg_data_shell() {
-        let temp = TempDir::new().unwrap();
-        let xdg_data = temp.path().join("data");
-
-        std::env::set_var("XDG_DATA_HOME", &xdg_data);
-        let dir = ManagedDirectory::<crate::config::ShellConfig>::xdg_data().unwrap();
-        std::env::remove_var("XDG_DATA_HOME");
-
-        assert_eq!(dir.root(), xdg_data.join("shell"));
-    }
-
     /// xdg_cache with AvpConfig to exercise that config path.
     #[test]
     #[serial]

@@ -67,7 +67,7 @@ mod yaml_expander;
 
 // Re-export main types
 pub use config::{
-    AvpConfig, CodeContextConfig, DirectoryConfig, RalphConfig, ShellConfig, SwissarmyhammerConfig,
+    AvpConfig, CodeContextConfig, DirectoryConfig, RalphConfig, SwissarmyhammerConfig,
     ValidatorsConfig,
 };
 pub use directory::{

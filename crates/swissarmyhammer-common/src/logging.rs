@@ -68,8 +68,7 @@ pub fn log_file_name() -> String {
 ///
 /// - `.kanban/` holds committed board data and must NOT be auto-created by
 ///   the logger — it is initialized through the normal kanban workflow.
-/// - `.shell/` and `.code-context/` hold runtime data and are auto-created
-///   on demand.
+/// - `.code-context/` holds runtime data and is auto-created on demand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirPolicy {
     /// The data directory must already exist. When absent, `open_log_file`
@@ -151,7 +150,7 @@ impl Write for FileWriterGuard {
 ///
 /// The on-disk file name comes from [`log_file_name`], i.e. `mcp.<pid>.log`,
 /// NOT the bare [`LOG_FILE_NAME`]. This is the centralized chokepoint every CLI
-/// (sah, kanban, shell, code-context) inherits: because each process owns a
+/// (sah, kanban, code-context) inherits: because each process owns a
 /// distinct file name, multiple processes logging into the same data directory
 /// never truncate or interleave one another's output. The file is still
 /// created fresh (truncate-on-create) — but only this process ever owns that
@@ -170,7 +169,7 @@ impl Write for FileWriterGuard {
 ///
 /// * `root` - The directory to look under for the data directory
 ///   (typically the current working directory).
-/// * `dir_name` - The name of the data directory (e.g. `.kanban`, `.shell`).
+/// * `dir_name` - The name of the data directory (e.g. `.kanban`, `.code-context`).
 /// * `policy` - Whether the directory may be auto-created.
 ///
 /// # Returns
@@ -248,7 +247,7 @@ pub fn open_log_file_named(
 /// * `filter` - The `EnvFilter` to apply to every emitted record.
 /// * `root` - The directory to look under for the data directory
 ///   (typically the current working directory).
-/// * `dir_name` - The name of the data directory (e.g. `.kanban`, `.shell`).
+/// * `dir_name` - The name of the data directory (e.g. `.kanban`, `.code-context`).
 /// * `policy` - Whether the directory may be auto-created.
 ///
 /// # Returns
@@ -433,13 +432,13 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
 
-        let (file, error) = open_log_file(root, ".shell", DirPolicy::AutoCreate);
+        let (file, error) = open_log_file(root, ".code-context", DirPolicy::AutoCreate);
 
         assert!(file.is_some());
         assert!(error.is_none());
-        assert!(root.join(".shell").is_dir());
+        assert!(root.join(".code-context").is_dir());
         // The on-disk name is per-process (`mcp.<pid>.log`), not the bare stem.
-        assert!(root.join(".shell").join(log_file_name()).exists());
+        assert!(root.join(".code-context").join(log_file_name()).exists());
     }
 
     #[test]
@@ -460,14 +459,14 @@ mod tests {
         let root = tmp.path();
 
         let (file_a, err_a) =
-            open_log_file_named(root, ".shell", DirPolicy::AutoCreate, "mcp.1001.log");
+            open_log_file_named(root, ".code-context", DirPolicy::AutoCreate, "mcp.1001.log");
         assert!(err_a.is_none());
         let mut file_a = file_a.expect("process A log file");
         file_a.write_all(b"line from process A\n").unwrap();
         file_a.flush().unwrap();
 
         let (file_b, err_b) =
-            open_log_file_named(root, ".shell", DirPolicy::AutoCreate, "mcp.1002.log");
+            open_log_file_named(root, ".code-context", DirPolicy::AutoCreate, "mcp.1002.log");
         assert!(err_b.is_none());
         let mut file_b = file_b.expect("process B log file");
         file_b.write_all(b"line from process B\n").unwrap();
@@ -475,7 +474,7 @@ mod tests {
 
         // Process A's marker must still be present after process B opened.
         let mut a_contents = String::new();
-        std::fs::File::open(root.join(".shell").join("mcp.1001.log"))
+        std::fs::File::open(root.join(".code-context").join("mcp.1001.log"))
             .unwrap()
             .read_to_string(&mut a_contents)
             .unwrap();
@@ -486,7 +485,7 @@ mod tests {
 
         // And process B's file is independently readable with its own content.
         let mut b_contents = String::new();
-        std::fs::File::open(root.join(".shell").join("mcp.1002.log"))
+        std::fs::File::open(root.join(".code-context").join("mcp.1002.log"))
             .unwrap()
             .read_to_string(&mut b_contents)
             .unwrap();
@@ -503,7 +502,7 @@ mod tests {
         let blocker = tmp.path().join("blocker");
         std::fs::write(&blocker, b"not a dir").unwrap();
 
-        let (file, error) = open_log_file(&blocker, ".shell", DirPolicy::AutoCreate);
+        let (file, error) = open_log_file(&blocker, ".code-context", DirPolicy::AutoCreate);
 
         assert!(file.is_none());
         assert!(error.is_some());
