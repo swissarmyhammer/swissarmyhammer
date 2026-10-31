@@ -5,7 +5,7 @@
 //! - `kanban` binary in PATH
 //! - Kanban board initialized under `.kanban/` in the current working directory
 //!
-//! Modeled on the same `DoctorRunner` pattern as `shelltool-cli`
+//! Modeled on the same `DoctorRunner` pattern as `code-context-cli`
 //! so the CLI doctors stay structurally consistent.
 
 use std::env;

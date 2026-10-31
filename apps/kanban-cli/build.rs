@@ -10,7 +10,7 @@
 //! Only the lifecycle subcommands (serve/init/deinit/doctor) defined in
 //! `src/cli.rs` appear in generated docs. The schema-driven noun/verb
 //! commands are built dynamically in `main.rs` and are not visible to
-//! clap's static introspection -- same trade-off as shelltool-cli.
+//! clap's static introspection -- same trade-off as code-context-cli.
 
 use std::path::Path;
 

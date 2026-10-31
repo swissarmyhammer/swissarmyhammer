@@ -6,7 +6,7 @@
 //! `mirdan::install::stage_and_deploy_skill`, so the dependency edge runs
 //! mirdan → skills (not the other way around).
 //!
-//! Used by `shelltool-cli`, `code-context-cli`, and `kanban-cli` to avoid
+//! Used by `code-context-cli` and `kanban-cli` to avoid
 //! duplicating the resolve → format logic. Template rendering (which depends on
 //! `swissarmyhammer-templating`) is left to each CLI's thin wrapper because
 //! adding that crate here would create a dependency cycle.

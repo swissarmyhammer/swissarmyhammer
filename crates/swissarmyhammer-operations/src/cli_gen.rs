@@ -7,8 +7,8 @@
 //! that operation accepts — not the global union of every operation's parameters.
 //!
 //! This engine is tool-agnostic: it consumes whatever full schema it is handed,
-//! so every CLI built on the `Operation` trait (kanban-cli, sah, code-context-cli,
-//! shelltool-cli) can share it.
+//! so every CLI built on the `Operation` trait (kanban-cli, sah, code-context-cli)
+//! can share it.
 //!
 //! The two public entry points are:
 //! - [`build_commands_from_schema`] — schema → clap command tree.

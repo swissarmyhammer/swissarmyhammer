@@ -48,7 +48,7 @@ Every task is a Markdown file with YAML frontmatter — so a move from `doing` t
   title: 'kanban init/deinit: adopt mirdan per-agent strategy'
   ---
   ## What
-  Bring `kanban init/deinit` in line with the shelltool/sah pattern...
+  Bring `kanban init/deinit` in line with the code-context/sah pattern...
 ```
 
 The card body is real Markdown, so agents write rich, durable task notes — acceptance criteria, references, decisions — that survive across sessions and show up in code review. Alongside each task, an append-only `.jsonl` changelog records every create/update with a timestamp and a patch: a full, git-versioned audit trail of how the work evolved.

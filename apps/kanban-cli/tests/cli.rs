@@ -3,7 +3,7 @@
 //! These tests launch the compiled `kanban` binary as a child process and
 //! assert on exit codes and captured output for the four lifecycle commands
 //! wired into `src/main.rs` (`serve`, `init`, `deinit`, `doctor`). They
-//! mirror the style of `shelltool-cli/tests/cli.rs`.
+//! mirror the style of `code-context-cli/tests/cli.rs`.
 //!
 //! The binary path is resolved via `env!("CARGO_BIN_EXE_kanban")`, which
 //! Cargo (and nextest) populates automatically for integration tests that

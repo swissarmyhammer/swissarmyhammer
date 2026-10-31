@@ -64,7 +64,7 @@ fn determine_log_level(
 ///
 /// Suppresses noisy rmcp internals at warn while letting the requested level
 /// apply to everything else. Named `make_filter` to match the vocabulary
-/// used by the other CLI `logging.rs` wrappers (kanban, shelltool,
+/// used by the other CLI `logging.rs` wrappers (kanban,
 /// code-context) — sah's signature differs because the level is computed
 /// from `verbose`/`debug`/`quiet`/`is_mcp_mode` flags before the filter is
 /// built, but the helper role is the same.
@@ -180,7 +180,7 @@ fn validate_log_file_name(name: &str) -> Result<&str, std::io::Error> {
 /// Routes through the shared
 /// [`init_file_tracing_with_fallback_named`] chokepoint so `sah serve` reuses
 /// the same file-opening + [`FileWriterGuard`] + stderr-fallback wiring as every
-/// other CLI (kanban, shelltool, code-context) — there is no separate
+/// other CLI (kanban, code-context) — there is no separate
 /// `File::create` here. The on-disk file is created under `<sah-root>/.sah/`
 /// using the name from [`resolve_log_file_name`]: the per-process
 /// `mcp.<pid>.log` by default (so concurrent serves in one workspace never

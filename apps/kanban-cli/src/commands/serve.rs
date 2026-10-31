@@ -4,7 +4,7 @@
 //! dispatches to [`swissarmyhammer_kanban`]. Built directly on the kanban crate
 //! so that `kanban-cli` does not depend on `swissarmyhammer-tools`.
 //!
-//! Error handling follows the same shape as `shelltool-cli`'s `serve` module:
+//! Error handling follows the same shape as `code-context-cli`'s `serve` module:
 //! fatal errors are surfaced as `Result<(), String>` for the CLI layer to print.
 
 use std::borrow::Cow;

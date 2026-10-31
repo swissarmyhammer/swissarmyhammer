@@ -1,10 +1,10 @@
-//! Production-path consistency tests for the four real CLI profiles.
+//! Production-path consistency tests for the three real CLI profiles.
 //!
 //! Card "Real-path tests: every profile init/deinit is consistent and
 //! round-trips". Where [`profile_tests`] exercises the installer with a
 //! synthetic `sample_profile`, this module reconstructs the *actual* profiles
-//! declared by the four consumers — sah ([`apps/swissarmyhammer-cli`]),
-//! shelltool, kanban-cli, and code-context — from the same public mirdan
+//! declared by the three consumers — sah ([`apps/swissarmyhammer-cli`]),
+//! kanban-cli, and code-context — from the same public mirdan
 //! primitives (`ProfileMcpServer::serve`, `Selector::*`) those CLIs use, then
 //! drives them all through the single [`init_profile`] / [`deinit_profile`]
 //! path. The point is the "one mechanism, no drift" guarantee: every profile
@@ -13,7 +13,7 @@
 //! reintroduced a per-app installer or a copy-vs-symlink fork would fail here.
 //!
 //! Scope note: these reconstructions cover the install *mechanism* across the
-//! four profile *shapes*; they deliberately do **not** enumerate each profile's
+//! three profile *shapes*; they deliberately do **not** enumerate each profile's
 //! real skill set. That authority — "which skills does this CLI actually
 //! deploy" — lives in each app's own `commands::registry` test, which drives the
 //! real `profile(scope)` through [`init_profile`] via the shared
@@ -42,7 +42,7 @@ use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironmen
 ///
 /// These reconstructions exist only to exercise the shared install
 /// *mechanism* (store + symlink, MCP registration, round-trip, scope matrix)
-/// across the four profile *shapes* — the coverage that legitimately must
+/// across the three profile *shapes* — the coverage that legitimately must
 /// live in mirdan, which cannot import the app crates. They deliberately do
 /// **not** enumerate each profile's real skill set: the authoritative,
 /// drift-proof check of "which skills does this CLI actually deploy" lives in
@@ -75,16 +75,7 @@ fn sah_profile(_scope: InitScope) -> Profile {
         validators: Some(Selector::All),
         statusline: true,
         edit_redirect: true,
-    }
-}
-
-/// shelltool's profile — `shelltool serve` + the single `shell` skill,
-/// deployed at every scope (`apps/shelltool-cli/.../registry.rs`).
-fn shelltool_profile(_scope: InitScope) -> Profile {
-    Profile {
-        mcp_server: Some(ProfileMcpServer::serve("shelltool")),
-        skills: Some(Selector::Single("shell".to_string())),
-        ..Default::default()
+        legacy_mcp_servers: vec![LEGACY_SHELLTOOL_MCP_SERVER.to_string()],
     }
 }
 
@@ -110,9 +101,9 @@ fn code_context_profile(_scope: InitScope) -> Profile {
 }
 
 /// The number of real CLI profiles reconstructed below.
-const CLI_PROFILE_COUNT: usize = 4;
+const CLI_PROFILE_COUNT: usize = 3;
 
-/// The four real CLI profiles, in the order their cards migrated them. Each
+/// The three real CLI profiles, in the order their cards migrated them. Each
 /// carries a single `probe_skill` to exercise the deploy mechanism — not the
 /// full skill set, which the per-CLI registry tests own (see [`CliProfile`]).
 fn cli_profiles() -> [CliProfile; CLI_PROFILE_COUNT] {
@@ -122,12 +113,6 @@ fn cli_profiles() -> [CliProfile; CLI_PROFILE_COUNT] {
             server: "sah",
             probe_skill: "commit",
             build: sah_profile,
-        },
-        CliProfile {
-            label: "shelltool",
-            server: "shelltool",
-            probe_skill: "shell",
-            build: shelltool_profile,
         },
         CliProfile {
             label: "kanban",
@@ -154,7 +139,7 @@ fn assert_no_error(label: &str, phase: &str, results: &[InitResult]) {
 /// mechanism — each selected skill is a central store entry **symlinked**
 /// (never copied) into the agent's skill dir, the MCP server lands in the
 /// agent's `.mcp.json`, and `deinit_profile` round-trips every artifact away.
-/// Driven with an explicit root so the four runs are independent tempdirs.
+/// Driven with an explicit root so the three runs are independent tempdirs.
 ///
 /// Round-trip here is asserted at `Project` scope only; `Local`-scope
 /// round-trip is exercised by the code-context regression test
@@ -182,7 +167,7 @@ fn every_cli_profile_installs_by_store_symlink_and_round_trips() {
         assert_no_error(cli.label, "init", &results);
 
         // Probe skill: central store entry + a *symlink* (not a copy) in the
-        // agent dir — the single deploy mechanism, identical for all four.
+        // agent dir — the single deploy mechanism, identical for all three.
         // (The full per-profile skill set is asserted by the per-CLI registry
         // tests; here we only prove the mechanism.)
         let skill = cli.probe_skill;
@@ -270,7 +255,7 @@ fn explicit_root_install_never_touches_cwd_for_any_profile() {
     }
 }
 
-/// Case 4: the scope matrix. For a representative profile (shelltool), each
+/// Case 4: the scope matrix. For a representative profile (kanban), each
 /// scope lands in the correct location: `Project`/`Local` deploy skills under
 /// the project store; `User` deploys skills into the *global* store and
 /// registers the MCP server in the agent's global config. The MCP target file
@@ -289,18 +274,18 @@ fn scope_matrix_lands_artifacts_in_the_right_place() {
         let _mirdan = MirdanConfigGuard::set(&config_path);
 
         let results = init_profile(
-            &shelltool_profile(InitScope::Project),
+            &kanban_profile(InitScope::Project),
             InitScope::Project,
             None,
             &reporter,
         );
-        assert_no_error("shelltool", "project init", &results);
+        assert_no_error("kanban", "project init", &results);
         assert!(
-            root.join(".skills/shell/SKILL.md").is_file(),
-            "project scope must deploy the shell skill"
+            root.join(".skills/kanban/SKILL.md").is_file(),
+            "project scope must deploy the kanban skill"
         );
         assert!(
-            read_json(&root.join(".mcp.json"))["mcpServers"]["shelltool"]["command"] == "shelltool",
+            read_json(&root.join(".mcp.json"))["mcpServers"]["kanban"]["command"] == "kanban",
             "project scope must register MCP in project .mcp.json"
         );
     }
@@ -316,15 +301,15 @@ fn scope_matrix_lands_artifacts_in_the_right_place() {
         let _mirdan = MirdanConfigGuard::set(&config_path);
 
         let results = init_profile(
-            &shelltool_profile(InitScope::Local),
+            &kanban_profile(InitScope::Local),
             InitScope::Local,
             None,
             &reporter,
         );
-        assert_no_error("shelltool", "local init", &results);
+        assert_no_error("kanban", "local init", &results);
         assert!(
-            root.join(".skills/shell/SKILL.md").is_file(),
-            "local scope must deploy the shell skill"
+            root.join(".skills/kanban/SKILL.md").is_file(),
+            "local scope must deploy the kanban skill"
         );
     }
 
@@ -339,24 +324,24 @@ fn scope_matrix_lands_artifacts_in_the_right_place() {
         let _mirdan = MirdanConfigGuard::set(&config_path);
 
         let results = init_profile(
-            &shelltool_profile(InitScope::User),
+            &kanban_profile(InitScope::User),
             InitScope::User,
             None,
             &reporter,
         );
-        assert_no_error("shelltool", "user init", &results);
+        assert_no_error("kanban", "user init", &results);
         // The global store is `~/.skills` (HOME-rooted, via `dirs`); the
         // agent's global skill dir is its config's `global_path`
         // (`<work>/.fake/skills`, since `write_single_agent_config` roots
         // globals at its `home` argument, here `work`), which holds the symlink.
         assert!(
-            env.home_path().join(".skills/shell/SKILL.md").is_file(),
-            "user scope must deploy the shell skill into the global ~/.skills store"
+            env.home_path().join(".skills/kanban/SKILL.md").is_file(),
+            "user scope must deploy the kanban skill into the global ~/.skills store"
         );
-        let link = work.join(".fake/skills/shell");
+        let link = work.join(".fake/skills/kanban");
         assert!(
             std::fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()),
-            "user scope must symlink the shell skill into the agent's global skill dir"
+            "user scope must symlink the kanban skill into the agent's global skill dir"
         );
         assert!(
             !work.join(".skills").exists(),
@@ -367,7 +352,7 @@ fn scope_matrix_lands_artifacts_in_the_right_place() {
         let global_mcp = work.join(".fake/mcp.json");
         assert!(
             global_mcp.is_file()
-                && read_json(&global_mcp)["mcpServers"]["shelltool"]["command"] == "shelltool",
+                && read_json(&global_mcp)["mcpServers"]["kanban"]["command"] == "kanban",
             "user scope must register MCP in the agent's global config"
         );
         assert!(

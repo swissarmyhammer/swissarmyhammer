@@ -1,7 +1,7 @@
 //! Shared lifecycle-CLI scaffolding for SwissArmyHammer tool CLIs.
 //!
 //! Every standalone tool CLI built on the `Operation` trait (`code-context`,
-//! `shelltool`, `kanban`) wraps its schema-driven `noun → verb` operation tree
+//! `kanban`) wraps its schema-driven `noun → verb` operation tree
 //! in the same fixed set of lifecycle subcommands — `serve`, `init`, `deinit`,
 //! `doctor`, and `completion` — plus the shared `[TARGET]` install argument and
 //! a `completion` dispatcher. Before this module each binary carried a

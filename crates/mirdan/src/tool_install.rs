@@ -1,10 +1,10 @@
 //! The shared install lifecycle for single-server tool CLIs.
 //!
-//! `kanban`, `code-context`, and `shelltool` install the same shape: one
+//! `kanban` and `code-context` install the same shape: one
 //! `<name> serve` MCP server, a selection of builtin skills, and a small set of
 //! genuine tool-lifecycle components (a `.code-context/` directory, the
-//! `.kanban/` git merge drivers, a `Bash` denial). None of them varies that
-//! shape by [`InitScope`].
+//! `.kanban/` git merge drivers). Neither varies that shape by
+//! [`InitScope`].
 //!
 //! Each CLI implements [`ToolInstall`] on a marker type in its registry module
 //! and states only what differs — its server name, its skill selection, and its

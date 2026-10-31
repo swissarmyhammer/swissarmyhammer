@@ -5,7 +5,7 @@
 //! the detected agents, dispatches to the right [`strategy::AgentConfigStrategy`]
 //! via [`strategy::strategy_for`], applies the change, and emits reporter
 //! events. They take a `swissarmyhammer_common` [`InitScope`] + [`InitReporter`]
-//! so the same implementation serves the shell tool, `sah`, and `shelltool`.
+//! so the same implementation serves `sah` and every tool CLI.
 
 use swissarmyhammer_common::lifecycle::{InitResult, InitScope};
 use swissarmyhammer_common::reporter::{InitEvent, InitReporter};

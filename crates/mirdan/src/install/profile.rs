@@ -239,16 +239,22 @@ pub struct Profile {
     /// and inert on hosts that don't read that key (see
     /// [`apply_profile_edit_redirect`]).
     pub edit_redirect: bool,
+    /// MCP server names that older installs registered and this profile no
+    /// longer does. [`init_profile`] and [`deinit_profile`] both remove each
+    /// name from every detected agent's MCP config, so a stale entry never
+    /// points at a binary that is gone. A name that is not registered is
+    /// left alone.
+    pub legacy_mcp_servers: Vec<String>,
 }
 
 impl Profile {
     /// The shape every tool CLI installs: its own `<name> serve` MCP server
     /// plus a skill selection, and nothing else.
     ///
-    /// Companion to [`ProfileMcpServer::serve`]. kanban, code-context, and
-    /// shelltool differ only in the server name and which skills they deploy,
-    /// so they declare that pair rather than respelling the whole struct and
-    /// drifting apart. sah is not a tool profile — it also carries agents,
+    /// Companion to [`ProfileMcpServer::serve`]. kanban and code-context
+    /// differ only in the server name and which skills they deploy, so they
+    /// declare that pair rather than respelling the whole struct and drifting
+    /// apart. sah is not a tool profile — it also carries agents,
     /// validators, the statusline, and the edit redirect — so it builds its
     /// own value.
     pub fn tool(server_name: impl Into<String>, skills: Selector) -> Self {
@@ -945,6 +951,13 @@ pub const SUPERSEDED_NATIVE_DENY_TOOLS: &[&str] = &["Edit", "Read", "Write"];
 /// on install and on removal, so old settings files are cleaned up.
 pub const LEGACY_BASH_DENY_TOOL: &str = "Bash";
 
+/// The `shelltool` MCP server name that older installs wrote.
+///
+/// The `shelltool` binary no longer exists. A profile lists this name in
+/// [`Profile::legacy_mcp_servers`] so that init and deinit remove the old
+/// entry from agent MCP configs.
+pub const LEGACY_SHELLTOOL_MCP_SERVER: &str = "shelltool";
+
 /// The installable Claude Code settings fragment that closes the superseded
 /// surface.
 ///
@@ -1164,7 +1177,8 @@ fn apply_mcp_operation_at(
 /// 2. render the selected builtin skills with Liquid + the partial library and
 ///    deploy them via store + symlink,
 /// 3. render and deploy the selected builtin agents the same way,
-/// 4. apply the statusline when the profile sets that flag.
+/// 4. apply the statusline when the profile sets that flag,
+/// 5. remove each legacy MCP server the profile lists.
 ///
 /// `root` makes the whole operation CWD-free: project-scope skill/agent stores,
 /// agent directories, and MCP configs are resolved against `root` instead of the
@@ -1250,14 +1264,17 @@ pub fn init_profile(
         ));
     }
 
+    results.extend(remove_legacy_mcp_servers(profile, scope, root, reporter));
+
     results
 }
 
 /// Remove everything a [`Profile`] declares, mirroring [`init_profile`].
 ///
 /// Unregisters the MCP server, removes the selected skills/agents from detected
-/// agents, and strips the statusline block when the profile declared it. `root`
-/// roots project-scope paths so deinit is CWD-free.
+/// agents, and strips the statusline block when the profile declared it. It
+/// also removes each legacy MCP server the profile lists. `root` roots
+/// project-scope paths so deinit is CWD-free.
 ///
 /// # Version coupling
 ///
@@ -1347,7 +1364,28 @@ pub fn deinit_profile(
         ));
     }
 
+    results.extend(remove_legacy_mcp_servers(profile, scope, root, reporter));
+
     results
+}
+
+/// Remove each MCP server the profile lists in
+/// [`Profile::legacy_mcp_servers`] from every detected agent.
+///
+/// Runs on install and on removal, like the legacy `Bash` deny cleanup.
+/// Strategy-aware without `root`, root-explicit with it, the same as
+/// [`unregister_named_mcp_server`].
+fn remove_legacy_mcp_servers(
+    profile: &Profile,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    profile
+        .legacy_mcp_servers
+        .iter()
+        .flat_map(|name| unregister_named_mcp_server(name, scope, root, reporter))
+        .collect()
 }
 
 /// Run one profile item installer and record its outcome on `results`.
@@ -1379,9 +1417,23 @@ fn deinit_profile_mcp(
     root: Option<&Path>,
     reporter: &dyn InitReporter,
 ) -> Vec<InitResult> {
+    unregister_named_mcp_server(&server.name, scope, root, reporter)
+}
+
+/// Unregister the MCP server called `name`, strategy-aware without `root` or
+/// root-explicit with it.
+///
+/// The single dispatch behind [`deinit_profile_mcp`] and
+/// [`remove_legacy_mcp_servers`].
+fn unregister_named_mcp_server(
+    name: &str,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
     match root {
-        None => unregister_mcp_server(scope, &server.name, reporter),
-        Some(root) => unregister_mcp_server_at(root, &ToolName::new(&server.name), scope, reporter),
+        None => unregister_mcp_server(scope, name, reporter),
+        Some(root) => unregister_mcp_server_at(root, &ToolName::new(name), scope, reporter),
     }
 }
 

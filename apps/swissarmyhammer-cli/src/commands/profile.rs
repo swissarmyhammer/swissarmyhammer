@@ -13,7 +13,7 @@
 //! `.kanban/` merge drivers — remain as the `Initializable` components
 //! registered by [`super::registry::register_all`].
 
-use mirdan::install::{Profile, ProfileMcpServer, Selector};
+use mirdan::install::{Profile, ProfileMcpServer, Selector, LEGACY_SHELLTOOL_MCP_SERVER};
 
 /// Build sah's install profile.
 ///
@@ -26,6 +26,8 @@ use mirdan::install::{Profile, ProfileMcpServer, Selector};
 ///   mutation flows through the served `files` MCP replacement; the deny alone
 ///   closes the write surface (no `PreToolUse` hook), so diagnostics ride every
 ///   mutation.
+/// - `legacy_mcp_servers`: remove the `shelltool` MCP entry that an older
+///   install wrote.
 ///
 /// Kept in sync with mirdan's cross-CLI consistency tests
 /// (`mirdan::install::profile_consistency_tests::sah_profile`), which
@@ -40,6 +42,7 @@ pub fn sah_profile() -> Profile {
         validators: Some(Selector::All),
         statusline: true,
         edit_redirect: true,
+        legacy_mcp_servers: vec![LEGACY_SHELLTOOL_MCP_SERVER.to_string()],
     }
 }
 
@@ -65,5 +68,9 @@ mod tests {
         assert_eq!(profile.validators, Some(Selector::All));
         assert!(profile.statusline);
         assert!(profile.edit_redirect);
+        assert_eq!(
+            profile.legacy_mcp_servers,
+            vec![LEGACY_SHELLTOOL_MCP_SERVER.to_string()]
+        );
     }
 }

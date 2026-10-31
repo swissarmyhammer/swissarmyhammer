@@ -12,7 +12,7 @@ use serial_test::serial;
 use swissarmyhammer_common::reporter::NullReporter;
 use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
-use crate::test_support::MirdanConfigGuard;
+use crate::test_support::{assert_no_init_error, MirdanConfigGuard};
 
 /// Write a synthetic single-agent config that detects `project_dir` and
 /// declares a relative skill dir (`.fake/skills`), agent dir (`.fake/agents`),
@@ -53,6 +53,7 @@ fn sample_profile() -> Profile {
         validators: None,
         statusline: false,
         edit_redirect: false,
+        legacy_mcp_servers: Vec::new(),
     }
 }
 
@@ -441,6 +442,111 @@ fn deinit_profile_removes_a_legacy_bash_deny() {
     );
 }
 
+/// Write the project `.mcp.json` under `root` with one entry for each name in
+/// `servers`.
+fn seed_mcp_servers(root: &Path, servers: &[&str]) {
+    let entries: serde_json::Map<String, serde_json::Value> = servers
+        .iter()
+        .map(|name| {
+            (
+                (*name).to_string(),
+                serde_json::json!({ "command": name, "args": ["serve"] }),
+            )
+        })
+        .collect();
+    std::fs::write(
+        root.join(".mcp.json"),
+        serde_json::json!({ "mcpServers": entries }).to_string(),
+    )
+    .unwrap();
+}
+
+/// Read the MCP server names registered in the project `.mcp.json` under `root`.
+fn registered_mcp_servers(root: &Path) -> Vec<String> {
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join(".mcp.json")).unwrap()).unwrap();
+    config["mcpServers"]
+        .as_object()
+        .map(|servers| servers.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// A profile that declares only the legacy `shelltool` MCP server for cleanup.
+fn legacy_shelltool_profile() -> Profile {
+    Profile {
+        legacy_mcp_servers: vec![LEGACY_SHELLTOOL_MCP_SERVER.to_string()],
+        ..Profile::default()
+    }
+}
+
+/// A real `init_profile` removes the `shelltool` MCP entry that an older
+/// install wrote, and leaves the other entries registered.
+#[test]
+#[serial]
+fn init_profile_removes_a_legacy_shelltool_mcp_entry() {
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path().canonicalize().unwrap();
+    let _cwd = CurrentDirGuard::new(&root).unwrap();
+    let _mirdan = MirdanConfigGuard::set(write_profile_agents_config(&root));
+    seed_mcp_servers(&root, &[LEGACY_SHELLTOOL_MCP_SERVER, "kanban"]);
+
+    let results = init_profile(
+        &legacy_shelltool_profile(),
+        InitScope::Project,
+        Some(&root),
+        &NullReporter,
+    );
+
+    assert_no_init_error("legacy MCP cleanup", &results);
+    assert_eq!(registered_mcp_servers(&root), vec!["kanban".to_string()]);
+}
+
+/// A real `deinit_profile` removes the `shelltool` MCP entry that an older
+/// install wrote, and leaves the other entries registered.
+#[test]
+#[serial]
+fn deinit_profile_removes_a_legacy_shelltool_mcp_entry() {
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path().canonicalize().unwrap();
+    let _cwd = CurrentDirGuard::new(&root).unwrap();
+    let _mirdan = MirdanConfigGuard::set(write_profile_agents_config(&root));
+    seed_mcp_servers(&root, &[LEGACY_SHELLTOOL_MCP_SERVER, "kanban"]);
+
+    let results = deinit_profile(
+        &legacy_shelltool_profile(),
+        InitScope::Project,
+        Some(&root),
+        &NullReporter,
+    );
+
+    assert_no_init_error("legacy MCP cleanup", &results);
+    assert_eq!(registered_mcp_servers(&root), vec!["kanban".to_string()]);
+}
+
+/// A profile that declares no legacy MCP servers leaves a `shelltool` entry
+/// alone: the cleanup is driven by the profile, not by a hard-coded name.
+#[test]
+#[serial]
+fn init_profile_without_legacy_mcp_servers_keeps_every_entry() {
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path().canonicalize().unwrap();
+    let _cwd = CurrentDirGuard::new(&root).unwrap();
+    let _mirdan = MirdanConfigGuard::set(write_profile_agents_config(&root));
+    seed_mcp_servers(&root, &[LEGACY_SHELLTOOL_MCP_SERVER]);
+
+    init_profile(
+        &Profile::default(),
+        InitScope::Project,
+        Some(&root),
+        &NullReporter,
+    );
+
+    assert_eq!(
+        registered_mcp_servers(&root),
+        vec![LEGACY_SHELLTOOL_MCP_SERVER.to_string()]
+    );
+}
+
 /// `Selector::Named` resolves in source order, skipping unknown names.
 #[test]
 fn selector_named_resolves_known_and_skips_unknown() {
@@ -468,9 +574,9 @@ fn selector_single_unknown_is_empty() {
 /// the binary registers under its own name and runs `<name> serve`.
 #[test]
 fn profile_mcp_server_serve_builds_self_launching_triple() {
-    let server = ProfileMcpServer::serve("shelltool");
-    assert_eq!(server.name, "shelltool");
-    assert_eq!(server.command, "shelltool");
+    let server = ProfileMcpServer::serve("kanban");
+    assert_eq!(server.name, "kanban");
+    assert_eq!(server.command, "kanban");
     assert_eq!(server.args, vec!["serve".to_string()]);
 }
 
