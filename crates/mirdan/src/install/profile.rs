@@ -912,12 +912,26 @@ pub(crate) fn apply_statusline_at(path: &Path, install: bool) -> Result<bool, Re
     if !install && !path.exists() {
         return Ok(false);
     }
+    edit_settings_file(path, |settings| {
+        if install {
+            settings::set_object(settings, STATUSLINE_KEY, desired_statusline_value())
+        } else {
+            settings::remove_key(settings, STATUSLINE_KEY)
+        }
+    })
+}
+
+/// Read the settings file at `path`, apply `mutate`, and write the file back
+/// only when `mutate` reports a change.
+///
+/// The one read-modify-write rule behind every settings edit of the profile
+/// installer. Returns `Ok(true)` when the file changed.
+fn edit_settings_file(
+    path: &Path,
+    mutate: impl FnOnce(&mut serde_json::Value) -> bool,
+) -> Result<bool, RegistryError> {
     let mut settings = settings::read_json(path)?;
-    let changed = if install {
-        settings::set_object(&mut settings, STATUSLINE_KEY, desired_statusline_value())
-    } else {
-        settings::remove_key(&mut settings, STATUSLINE_KEY)
-    };
+    let changed = mutate(&mut settings);
     if changed {
         settings::write_json(path, &settings)?;
     }
@@ -978,16 +992,13 @@ pub(crate) fn remove_legacy_native_denies_at(
     }
 
     let pointer = permissions_deny_pointer();
-    let mut settings = settings::read_json(path)?;
-    let mut changed = false;
-    for tool in LEGACY_NATIVE_DENY_TOOLS {
-        changed |= settings::remove_from_array(&mut settings, &pointer, &serde_json::json!(tool));
-    }
-
-    if changed {
-        settings::write_json(path, &settings)?;
-    }
-    Ok(changed)
+    edit_settings_file(path, |settings| {
+        let mut changed = false;
+        for tool in LEGACY_NATIVE_DENY_TOOLS {
+            changed |= settings::remove_from_array(settings, &pointer, &serde_json::json!(tool));
+        }
+        changed
+    })
 }
 
 /// Register the profile's MCP server across detected agents.
@@ -1206,25 +1217,9 @@ pub fn init_profile(
         );
     }
 
-    if profile.statusline {
-        results.extend(apply_profile_settings_fragment(
-            true,
-            scope,
-            root,
-            reporter,
-            &STATUSLINE_FRAGMENT,
-        ));
-    }
-
-    results.extend(apply_profile_settings_fragment(
-        false,
-        scope,
-        root,
-        reporter,
-        &LEGACY_DENY_CLEANUP_FRAGMENT,
+    results.extend(profile_settings_tail_results(
+        profile, true, scope, root, reporter,
     ));
-
-    results.extend(remove_legacy_mcp_servers(profile, scope, root, reporter));
 
     results
 }
@@ -1305,27 +1300,61 @@ pub fn deinit_profile(
         prune_store_readme_at(store::validators_store_dir, global, root, reporter);
     }
 
-    if profile.statusline {
-        results.extend(apply_profile_settings_fragment(
-            false,
-            scope,
-            root,
-            reporter,
-            &STATUSLINE_FRAGMENT,
-        ));
-    }
-
-    results.extend(apply_profile_settings_fragment(
-        false,
-        scope,
-        root,
-        reporter,
-        &LEGACY_DENY_CLEANUP_FRAGMENT,
+    results.extend(profile_settings_tail_results(
+        profile, false, scope, root, reporter,
     ));
 
-    results.extend(remove_legacy_mcp_servers(profile, scope, root, reporter));
-
     results
+}
+
+/// Run the closing steps that [`init_profile`] and [`deinit_profile`] share, in
+/// order: the statusline step, the legacy deny cleanup, and the legacy MCP
+/// server removal.
+///
+/// `install` selects the statusline direction. The deny cleanup and the legacy
+/// MCP removal run the same way in both directions.
+fn profile_settings_tail_results(
+    profile: &Profile,
+    install: bool,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    let mut results = profile_statusline_results(profile, install, scope, root, reporter);
+    results.extend(legacy_deny_cleanup_results(scope, root, reporter));
+    results.extend(remove_legacy_mcp_servers(profile, scope, root, reporter));
+    results
+}
+
+/// Apply or strip the statusline block for a profile that declares one.
+///
+/// `install` selects the direction: `true` merges the block, `false` removes
+/// it. A profile without the statusline flag yields no result. The single
+/// statusline step behind [`init_profile`] and [`deinit_profile`].
+fn profile_statusline_results(
+    profile: &Profile,
+    install: bool,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    if !profile.statusline {
+        return Vec::new();
+    }
+    apply_profile_settings_fragment(install, scope, root, reporter, &STATUSLINE_FRAGMENT)
+}
+
+/// Remove every [`LEGACY_NATIVE_DENY_TOOLS`] entry from the settings file of
+/// `scope`.
+///
+/// The cleanup runs the same way in both directions and for every profile, so
+/// [`init_profile`] and [`deinit_profile`] share this one step.
+fn legacy_deny_cleanup_results(
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    apply_profile_settings_fragment(false, scope, root, reporter, &LEGACY_DENY_CLEANUP_FRAGMENT)
 }
 
 /// Remove each MCP server the profile lists in

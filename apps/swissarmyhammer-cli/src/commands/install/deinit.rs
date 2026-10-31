@@ -29,49 +29,20 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mirdan::install::LEGACY_NATIVE_DENY_TOOLS;
+    use mirdan::test_support::{deny_entries, legacy_deny_settings, read_json, UNRELATED_DENY};
     use std::path::{Path, PathBuf};
     use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
-    /// A deny entry that belongs to the user, not to sah. Deinit must keep it.
-    const UNRELATED_DENY: &str = "WebFetch";
-
-    /// Write `<home>/.claude/<file_name>` with a `permissions.deny` array that
-    /// holds the whole [`LEGACY_NATIVE_DENY_TOOLS`] roster plus one unrelated
-    /// entry, and return the path of that file.
-    ///
-    /// The fixture reads the roster from the constant instead of spelling the
-    /// tool names out, so a tool added to the constant is seeded here too.
+    /// Write `<home>/.claude/<file_name>` with the shared legacy deny fixture
+    /// (the whole legacy roster plus one unrelated entry), and return the path
+    /// of that file.
     fn seed_legacy_deny(home: &Path, file_name: &str) -> PathBuf {
         let settings = home.join(".claude").join(file_name);
         std::fs::create_dir_all(settings.parent().expect("settings path has a parent"))
             .expect("create the agent settings directory");
-        let mut deny: Vec<&str> = LEGACY_NATIVE_DENY_TOOLS.to_vec();
-        deny.push(UNRELATED_DENY);
-        let seeded = serde_json::json!({ "permissions": { "deny": deny } });
-        std::fs::write(&settings, seeded.to_string()).expect("seed the settings file");
+        std::fs::write(&settings, legacy_deny_settings().to_string())
+            .expect("seed the settings file");
         settings
-    }
-
-    /// Read the `permissions.deny` entries of the settings file at `path` back
-    /// as plain strings. A missing file, a missing key, and a non-array value
-    /// all read as no entries.
-    fn deny_entries(path: &Path) -> Vec<String> {
-        let Ok(content) = std::fs::read_to_string(path) else {
-            return Vec::new();
-        };
-        let parsed: serde_json::Value =
-            serde_json::from_str(&content).expect("the settings file holds valid JSON");
-        parsed
-            .pointer("/permissions/deny")
-            .and_then(|deny| deny.as_array())
-            .map(|entries| {
-                entries
-                    .iter()
-                    .filter_map(|entry| entry.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default()
     }
 
     /// Guard: `sah deinit` removes every legacy native tool deny (`Bash`,
@@ -87,7 +58,7 @@ mod tests {
         uninstall(InstallTarget::User, false).expect("user-scope deinit must succeed");
 
         assert_eq!(
-            deny_entries(&global_settings),
+            deny_entries(&read_json(&global_settings)),
             [UNRELATED_DENY],
             "deinit must strip every legacy native tool deny and keep the unrelated one"
         );

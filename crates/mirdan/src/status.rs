@@ -629,6 +629,26 @@ mod tests {
     use crate::agents::{DetectMethod, SymlinkPolicy};
     use tempfile::TempDir;
 
+    /// The user-scope skills directory every synthetic status fixture uses.
+    const USER_SKILLS_PATH: &str = "/Users/test/.claude/skills";
+
+    /// The project-scope skills directory every synthetic status fixture uses.
+    const PROJECT_SKILLS_PATH: &str = "/work/repo/.claude/skills";
+
+    /// The agent id of every synthetic status fixture.
+    const SYNTHETIC_AGENT_ID: &str = "claude-code";
+
+    /// The display name of the agent of every synthetic status fixture.
+    const SYNTHETIC_AGENT_NAME: &str = "Claude Code";
+
+    /// The check name `statuses_to_checks` gives the project-scope skills row of
+    /// the synthetic agent.
+    const PROJECT_SKILLS_CHECK_NAME: &str = "Claude Code · project · Skills";
+
+    /// The check name `statuses_to_checks` gives the user-scope skills row of
+    /// the synthetic agent.
+    const USER_SKILLS_CHECK_NAME: &str = "Claude Code · user · Skills";
+
     /// Build an `AgentDef` whose every path field points inside `dir`.
     ///
     /// The agent is `claude-code` so it is the fallback detected agent, and its
@@ -1294,7 +1314,7 @@ mod tests {
         };
         ComponentStatus {
             agent_id: agent_id.to_string(),
-            agent_name: "Claude Code".to_string(),
+            agent_name: SYNTHETIC_AGENT_NAME.to_string(),
             component,
             scope,
             path,
@@ -1305,18 +1325,18 @@ mod tests {
 
     #[test]
     fn test_statuses_to_checks_demotes_project_missing_when_user_installed() {
-        let user_path = PathBuf::from("/Users/test/.claude/skills");
-        let project_path = PathBuf::from("/work/repo/.claude/skills");
+        let user_path = PathBuf::from(USER_SKILLS_PATH);
+        let project_path = PathBuf::from(PROJECT_SKILLS_PATH);
         let statuses = vec![
             synthetic_status(
-                "claude-code",
+                SYNTHETIC_AGENT_ID,
                 Component::Skills,
                 InitScope::Project,
                 ComponentState::Missing,
                 Some(project_path.clone()),
             ),
             synthetic_status(
-                "claude-code",
+                SYNTHETIC_AGENT_ID,
                 Component::Skills,
                 InitScope::User,
                 ComponentState::Installed,
@@ -1329,7 +1349,7 @@ mod tests {
 
         let project_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · project · Skills")
+            .find(|c| c.name == PROJECT_SKILLS_CHECK_NAME)
             .expect("project skills row");
         assert_eq!(
             project_check.status,
@@ -1355,7 +1375,7 @@ mod tests {
 
         let user_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · user · Skills")
+            .find(|c| c.name == USER_SKILLS_CHECK_NAME)
             .expect("user skills row");
         assert_eq!(user_check.status, CheckStatus::Ok);
         assert!(user_check.fix.is_none());
@@ -1363,18 +1383,18 @@ mod tests {
 
     #[test]
     fn test_statuses_to_checks_demotes_user_missing_when_project_installed() {
-        let user_path = PathBuf::from("/Users/test/.claude/skills");
-        let project_path = PathBuf::from("/work/repo/.claude/skills");
+        let user_path = PathBuf::from(USER_SKILLS_PATH);
+        let project_path = PathBuf::from(PROJECT_SKILLS_PATH);
         let statuses = vec![
             synthetic_status(
-                "claude-code",
+                SYNTHETIC_AGENT_ID,
                 Component::Skills,
                 InitScope::Project,
                 ComponentState::Installed,
                 Some(project_path.clone()),
             ),
             synthetic_status(
-                "claude-code",
+                SYNTHETIC_AGENT_ID,
                 Component::Skills,
                 InitScope::User,
                 ComponentState::Missing,
@@ -1385,7 +1405,7 @@ mod tests {
         let checks = statuses_to_checks(&statuses);
         let user_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · user · Skills")
+            .find(|c| c.name == USER_SKILLS_CHECK_NAME)
             .expect("user skills row");
         assert_eq!(
             user_check.status,
@@ -1411,18 +1431,18 @@ mod tests {
     fn test_statuses_to_checks_both_missing_stays_warning() {
         let statuses = vec![
             synthetic_status(
-                "claude-code",
+                SYNTHETIC_AGENT_ID,
                 Component::Skills,
                 InitScope::Project,
                 ComponentState::Missing,
-                Some(PathBuf::from("/work/repo/.claude/skills")),
+                Some(PathBuf::from(PROJECT_SKILLS_PATH)),
             ),
             synthetic_status(
-                "claude-code",
+                SYNTHETIC_AGENT_ID,
                 Component::Skills,
                 InitScope::User,
                 ComponentState::Missing,
-                Some(PathBuf::from("/Users/test/.claude/skills")),
+                Some(PathBuf::from(USER_SKILLS_PATH)),
             ),
         ];
 
@@ -1431,7 +1451,7 @@ mod tests {
 
         let project_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · project · Skills")
+            .find(|c| c.name == PROJECT_SKILLS_CHECK_NAME)
             .unwrap();
         assert_eq!(project_check.status, CheckStatus::Warning);
         let project_fix = project_check
@@ -1443,7 +1463,7 @@ mod tests {
 
         let user_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · user · Skills")
+            .find(|c| c.name == USER_SKILLS_CHECK_NAME)
             .unwrap();
         assert_eq!(user_check.status, CheckStatus::Warning);
         assert!(user_check
@@ -1457,18 +1477,18 @@ mod tests {
     fn test_statuses_to_checks_both_installed_stays_ok() {
         let statuses = vec![
             synthetic_status(
-                "claude-code",
+                SYNTHETIC_AGENT_ID,
                 Component::Skills,
                 InitScope::Project,
                 ComponentState::Installed,
-                Some(PathBuf::from("/work/repo/.claude/skills")),
+                Some(PathBuf::from(PROJECT_SKILLS_PATH)),
             ),
             synthetic_status(
-                "claude-code",
+                SYNTHETIC_AGENT_ID,
                 Component::Skills,
                 InitScope::User,
                 ComponentState::Installed,
-                Some(PathBuf::from("/Users/test/.claude/skills")),
+                Some(PathBuf::from(USER_SKILLS_PATH)),
             ),
         ];
 
@@ -1484,25 +1504,25 @@ mod tests {
     fn test_statuses_to_checks_filters_not_applicable() {
         let statuses = vec![
             synthetic_status(
-                "claude-code",
+                SYNTHETIC_AGENT_ID,
                 Component::Mcp,
                 InitScope::Project,
                 ComponentState::NotApplicable,
                 None,
             ),
             synthetic_status(
-                "claude-code",
+                SYNTHETIC_AGENT_ID,
                 Component::Mcp,
                 InitScope::User,
                 ComponentState::NotApplicable,
                 None,
             ),
             synthetic_status(
-                "claude-code",
+                SYNTHETIC_AGENT_ID,
                 Component::Skills,
                 InitScope::Project,
                 ComponentState::Missing,
-                Some(PathBuf::from("/work/repo/.claude/skills")),
+                Some(PathBuf::from(PROJECT_SKILLS_PATH)),
             ),
         ];
 
@@ -1512,7 +1532,7 @@ mod tests {
             1,
             "NotApplicable statuses should produce no checks"
         );
-        assert_eq!(checks[0].name, "Claude Code · project · Skills");
+        assert_eq!(checks[0].name, PROJECT_SKILLS_CHECK_NAME);
     }
 
     #[test]

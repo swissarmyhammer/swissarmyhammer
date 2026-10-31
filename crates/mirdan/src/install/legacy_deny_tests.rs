@@ -16,16 +16,17 @@ use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironmen
 
 use super::profile_consistency_tests::{code_context_profile, kanban_profile, sah_profile};
 use super::*;
-use crate::test_support::{assert_no_init_error, write_single_agent_config, MirdanConfigGuard};
+use crate::strategy::claude_settings::permissions_deny_pointer;
+use crate::test_support::{
+    assert_no_init_error, deny_entries, legacy_deny_settings, write_single_agent_config,
+    MirdanConfigGuard, UNRELATED_DENY,
+};
 
 /// Every scope the installer runs at, in the order the CLI lists them.
 const ALL_SCOPES: [InitScope; 3] = [InitScope::User, InitScope::Project, InitScope::Local];
 
 /// The four native tools an older sah denied.
 const LEGACY_DENIES: [&str; 4] = ["Bash", "Edit", "Read", "Write"];
-
-/// A deny entry that belongs to the user, not to sah. Cleanup must keep it.
-const UNRELATED_DENY: &str = "WebFetch";
 
 /// The two installer entry points the tests drive.
 #[derive(Debug, Clone, Copy)]
@@ -92,9 +93,14 @@ impl Sandbox {
 
     /// Write `settings` as the settings file of `scope`.
     fn seed(&self, scope: InitScope, settings: &Value) {
+        self.seed_raw(scope, &settings.to_string());
+    }
+
+    /// Write `text` byte for byte as the settings file of `scope`.
+    fn seed_raw(&self, scope: InitScope, text: &str) {
         let path = self.settings_file(scope);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, settings.to_string()).unwrap();
+        std::fs::write(path, text).unwrap();
     }
 
     /// Run the real installer `step` for `profile` at `scope` and assert no
@@ -123,35 +129,12 @@ impl Sandbox {
     }
 }
 
-/// The `permissions.deny` strings of a parsed settings value. A missing key
-/// reads as no entries.
-fn deny_entries(settings: &Value) -> Vec<String> {
-    settings
-        .pointer("/permissions/deny")
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| entry.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// A settings value whose deny list holds every legacy entry plus one entry
-/// that belongs to the user.
-fn legacy_settings() -> Value {
-    let mut deny: Vec<&str> = LEGACY_DENIES.to_vec();
-    deny.push(UNRELATED_DENY);
-    json!({ "permissions": { "deny": deny } })
-}
-
 /// Seed every legacy deny plus the unrelated one at `scope`, run `step` for
 /// `profile`, and assert that the settings file of `scope` keeps only the
 /// unrelated deny and that no settings file of any scope holds a legacy deny.
 fn assert_step_strips_legacy_denies(step: Step, label: &str, profile: &Profile, scope: InitScope) {
     let sandbox = Sandbox::new();
-    sandbox.seed(scope, &legacy_settings());
+    sandbox.seed(scope, &legacy_deny_settings());
 
     sandbox.run(step, profile, scope);
 
@@ -194,7 +177,7 @@ fn assert_fresh_install_writes_no_deny(label: &str, profile: &Profile) {
         for checked in ALL_SCOPES {
             let settings = sandbox.settings(checked);
             assert!(
-                settings.pointer("/permissions/deny").is_none(),
+                settings.pointer(&permissions_deny_pointer()).is_none(),
                 "{label} fresh init at {scope:?} wrote a deny into the {checked:?} \
                  settings file: {settings}"
             );
@@ -270,11 +253,11 @@ fn deinit_strips_legacy_denies_at_local_scope() {
 #[serial]
 fn local_init_leaves_the_project_settings_file_alone() {
     let sandbox = Sandbox::new();
-    sandbox.seed(InitScope::Project, &legacy_settings());
+    sandbox.seed(InitScope::Project, &legacy_deny_settings());
 
     sandbox.run(Step::Init, &mirdan(), InitScope::Local);
 
-    assert_eq!(sandbox.settings(InitScope::Project), legacy_settings());
+    assert_eq!(sandbox.settings(InitScope::Project), legacy_deny_settings());
 }
 
 /// Cleanup keeps every unrelated key and every unrelated deny entry.
@@ -322,9 +305,8 @@ fn cleanup_keeps_unrelated_keys() {
 fn cleanup_does_not_rewrite_a_clean_settings_file() {
     let sandbox = Sandbox::new();
     let path = sandbox.settings_file(InitScope::Project);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let original = format!("{{\n    \"permissions\": {{\"deny\": [\"{UNRELATED_DENY}\"]}}\n}}\n");
-    std::fs::write(&path, &original).unwrap();
+    sandbox.seed_raw(InitScope::Project, &original);
 
     sandbox.run(Step::Init, &mirdan(), InitScope::Project);
 

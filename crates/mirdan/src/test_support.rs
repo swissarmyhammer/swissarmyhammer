@@ -19,7 +19,8 @@ use swissarmyhammer_common::reporter::NullReporter;
 use swissarmyhammer_common::test_utils::{CurrentDirGuard, EnvVarGuard, IsolatedTestEnvironment};
 
 use crate::agents::AGENTS_CONFIG_ENV;
-use crate::install::Selector;
+use crate::install::{Selector, LEGACY_NATIVE_DENY_TOOLS};
+use crate::strategy::claude_settings::permissions_deny_pointer;
 use crate::tool_install::ToolInstall;
 
 /// RAII guard that points mirdan's agent detection at a specific `agents.yaml`
@@ -97,6 +98,36 @@ pub fn assert_no_init_error(phase: &str, results: &[InitResult]) {
 /// Read a JSON file into a [`serde_json::Value`], panicking on any failure.
 pub fn read_json(path: &Path) -> serde_json::Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// A deny entry that belongs to the user, not to sah. The legacy deny cleanup
+/// must keep it.
+pub const UNRELATED_DENY: &str = "WebFetch";
+
+/// The `permissions.deny` strings of a parsed settings value. A missing key,
+/// and a value that is not an array, read as no entries.
+pub fn deny_entries(settings: &serde_json::Value) -> Vec<String> {
+    settings
+        .pointer(&permissions_deny_pointer())
+        .and_then(serde_json::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A settings value whose deny list holds the whole
+/// [`LEGACY_NATIVE_DENY_TOOLS`] roster plus [`UNRELATED_DENY`].
+///
+/// The roster comes from the constant, so a tool added to the constant is
+/// seeded by every test that uses this fixture.
+pub fn legacy_deny_settings() -> serde_json::Value {
+    let mut deny: Vec<&str> = LEGACY_NATIVE_DENY_TOOLS.to_vec();
+    deny.push(UNRELATED_DENY);
+    serde_json::json!({ "permissions": { "deny": deny } })
 }
 
 /// Assertions for a `User`-scope (global) profile install against an isolated
