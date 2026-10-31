@@ -219,6 +219,7 @@
 //! ```
 
 mod context;
+mod newtypes;
 mod registration;
 mod registry;
 mod tool;

@@ -1,9 +1,21 @@
 //! Tool doubles shared by the tool registry test modules.
 
+use crate::mcp::tool_handlers::ToolHandlers;
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext};
 use crate::{impl_default_doctorable, impl_empty_initializable};
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
+use std::sync::Arc;
+
+/// Build a bare `ToolContext` with default handlers, no git state and the
+/// default agent config.
+pub(super) fn new_context() -> ToolContext {
+    ToolContext::new(
+        Arc::new(ToolHandlers::new()),
+        Arc::new(tokio::sync::Mutex::new(None)),
+        Arc::new(swissarmyhammer_config::model::ChatModelConfig::default()),
+    )
+}
 
 /// Mock tool for testing
 pub(super) struct MockTool {

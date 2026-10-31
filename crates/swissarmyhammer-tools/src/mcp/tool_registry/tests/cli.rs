@@ -322,3 +322,9 @@ fn test_validate_cli_requirements_hidden_tool_skipped() {
     let errors = registry.validate_cli_requirements_for_tool(&tool);
     assert!(errors.is_empty());
 }
+
+#[test]
+fn test_cli_newtypes_display_their_contents() {
+    assert_eq!(CliCategory("git").to_string(), "git");
+    assert_eq!(CliName("status").to_string(), "status");
+}

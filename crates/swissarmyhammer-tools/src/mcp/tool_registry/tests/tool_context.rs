@@ -1,7 +1,6 @@
 //! `ToolContext` builders, `call_tool` and MCP log notifications.
 
-use super::fixtures::MockTool;
-use crate::mcp::tool_handlers::ToolHandlers;
+use super::fixtures::{new_context, MockTool};
 use crate::mcp::tool_registry::*;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -24,16 +23,6 @@ fn echo_tool_registry() -> ToolRegistry {
         description: "Echoes input",
     });
     registry
-}
-
-/// Build a bare `ToolContext` with default handlers, no git state and the
-/// default agent config.
-fn new_context() -> ToolContext {
-    ToolContext::new(
-        Arc::new(ToolHandlers::new()),
-        Arc::new(tokio::sync::Mutex::new(None)),
-        Arc::new(swissarmyhammer_config::model::ChatModelConfig::default()),
-    )
 }
 
 // --- ToolContext builder method tests ---
@@ -243,4 +232,9 @@ async fn test_tool_context_with_peer_sets_peer() {
         .as_ref()
         .expect("the peer is stored after with_peer");
     assert!(Arc::ptr_eq(stored, &peer));
+}
+
+#[test]
+fn test_logger_name_displays_its_contents() {
+    assert_eq!(LoggerName("files").to_string(), "files");
 }

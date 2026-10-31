@@ -1,12 +1,12 @@
 //! Registration, lookup, execution, categories and base tool helpers.
 
-use super::fixtures::MockTool;
-use crate::mcp::tool_handlers::ToolHandlers;
+use super::fixtures::{new_context, MockTool};
 use crate::mcp::tool_registry::*;
 use rmcp::model::RawContent;
 use rmcp::ErrorData as McpError;
-use std::sync::Arc;
-use swissarmyhammer_config::model::ChatModelConfig;
+
+/// The `count` value the argument parsing test sends and expects back.
+const PARSED_COUNT: i32 = 42;
 
 #[test]
 fn test_tool_registry_creation() {
@@ -76,17 +76,7 @@ fn test_multiple_tool_registration() {
 
 #[tokio::test]
 async fn test_tool_execution() {
-    use swissarmyhammer_git::GitOperations;
-    use tokio::sync::Mutex;
-
-    // Create temporary directory for test
-    let _temp_dir = tempfile::tempdir().unwrap();
-
-    // Create mock storage and handlers for context
-    let git_ops: Arc<Mutex<Option<GitOperations>>> = Arc::new(Mutex::new(None));
-    let tool_handlers = Arc::new(ToolHandlers::new());
-    let agent_config = Arc::new(ChatModelConfig::default());
-    let context = ToolContext::new(tool_handlers, git_ops, agent_config);
+    let context = new_context();
 
     let tool = MockTool {
         name: "exec_test",
@@ -118,12 +108,12 @@ fn test_base_tool_impl_parse_arguments() {
     );
     args.insert(
         "count".to_string(),
-        serde_json::Value::Number(serde_json::Number::from(42)),
+        serde_json::Value::Number(serde_json::Number::from(PARSED_COUNT)),
     );
 
     let parsed: TestArgs = BaseToolImpl::parse_arguments(args).unwrap();
     assert_eq!(parsed.name, "test");
-    assert_eq!(parsed.count, Some(42));
+    assert_eq!(parsed.count, Some(PARSED_COUNT));
 }
 
 #[test]

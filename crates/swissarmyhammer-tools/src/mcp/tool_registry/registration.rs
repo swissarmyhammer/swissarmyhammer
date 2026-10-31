@@ -1,6 +1,7 @@
 //! Registration helpers that populate a `ToolRegistry`.
 
 use super::context::ToolContext;
+use super::newtypes::str_newtype;
 use super::registry::ToolRegistry;
 use rmcp::model::{LoggingLevel, LoggingMessageNotification, LoggingMessageNotificationParam};
 
@@ -18,17 +19,12 @@ macro_rules! register_tool_category {
     };
 }
 
-/// The name of the logger a tool reports MCP log notifications under.
-///
-/// A distinct type so a logger name cannot be swapped with the message text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LoggerName<'a>(pub &'a str);
-
-impl AsRef<str> for LoggerName<'_> {
-    fn as_ref(&self) -> &str {
-        self.0
-    }
-}
+str_newtype!(
+    /// The name of the logger a tool reports MCP log notifications under.
+    ///
+    /// A distinct type so a logger name cannot be swapped with the message text.
+    LoggerName
+);
 
 /// Send an MCP LoggingMessageNotification via the peer (fire-and-forget).
 ///

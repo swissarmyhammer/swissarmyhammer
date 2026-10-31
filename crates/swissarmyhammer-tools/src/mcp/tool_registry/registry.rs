@@ -1,5 +1,6 @@
 //! The `ToolRegistry` that stores and dispatches registered tools.
 
+use super::newtypes::str_newtype;
 use super::tool::McpTool;
 use super::validation::{
     SchemaValidator, ToolValidationError, ToolValidationReport, ToolValidationSeverity,
@@ -8,29 +9,19 @@ use super::validation::{
 use rmcp::model::{Meta, Tool};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-/// The CLI category of a tool, the `<category>` in `sah tool <category> <name>`.
-///
-/// A distinct type so a category cannot be passed where a CLI name belongs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CliCategory<'a>(pub &'a str);
+str_newtype!(
+    /// The CLI category of a tool, the `<category>` in `sah tool <category> <name>`.
+    ///
+    /// A distinct type so a category cannot be passed where a CLI name belongs.
+    CliCategory
+);
 
-impl AsRef<str> for CliCategory<'_> {
-    fn as_ref(&self) -> &str {
-        self.0
-    }
-}
-
-/// The CLI command name of a tool, the `<name>` in `sah tool <category> <name>`.
-///
-/// A distinct type so a CLI name cannot be passed where a category belongs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CliName<'a>(pub &'a str);
-
-impl AsRef<str> for CliName<'_> {
-    fn as_ref(&self) -> &str {
-        self.0
-    }
-}
+str_newtype!(
+    /// The CLI command name of a tool, the `<name>` in `sah tool <category> <name>`.
+    ///
+    /// A distinct type so a CLI name cannot be passed where a category belongs.
+    CliName
+);
 
 /// Registry for managing MCP tools
 ///
