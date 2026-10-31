@@ -1532,10 +1532,12 @@ mod tests {
             "user scope must not create a .shell/ dir"
         );
 
+        // Re-seed the legacy deny so deinit has work to do.
+        seed_legacy_bash_deny(&global_settings);
         let _ = Initializable::deinit(&tool, &InitScope::User, &reporter);
         assert!(
             !bash_denied(&global_settings),
-            "Bash must stay allowed at user scope after deinit"
+            "deinit must remove a legacy Bash deny at user scope"
         );
         let global_after: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&global_mcp).unwrap()).unwrap();
@@ -1577,10 +1579,12 @@ mod tests {
             "Bash must not be denied at local scope after init"
         );
 
+        // Re-seed the legacy deny so deinit has work to do.
+        seed_legacy_bash_deny(&local_settings);
         let _ = Initializable::deinit(&tool, &InitScope::Local, &reporter);
         assert!(
             !bash_denied(&local_settings),
-            "Bash must stay allowed at local scope after deinit"
+            "deinit must remove a legacy Bash deny at local scope"
         );
     }
 
@@ -1619,5 +1623,13 @@ mod tests {
 
         let config_yaml = project.join(".shell").join("config.yaml");
         assert!(config_yaml.exists(), ".shell/config.yaml should be created");
+
+        // Re-seed the legacy deny so deinit has work to do.
+        seed_legacy_bash_deny(&project_settings);
+        let _ = Initializable::deinit(&tool, &InitScope::Project, &reporter);
+        assert!(
+            !bash_denied(&project_settings),
+            "deinit must remove a legacy Bash deny at project scope"
+        );
     }
 }
