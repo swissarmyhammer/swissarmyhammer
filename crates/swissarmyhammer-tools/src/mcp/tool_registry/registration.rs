@@ -18,6 +18,18 @@ macro_rules! register_tool_category {
     };
 }
 
+/// The name of the logger a tool reports MCP log notifications under.
+///
+/// A distinct type so a logger name cannot be swapped with the message text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LoggerName<'a>(pub &'a str);
+
+impl AsRef<str> for LoggerName<'_> {
+    fn as_ref(&self) -> &str {
+        self.0
+    }
+}
+
 /// Send an MCP LoggingMessageNotification via the peer (fire-and-forget).
 ///
 /// Shared helper for all tools that need to send log notifications to the MCP client.
@@ -25,13 +37,13 @@ macro_rules! register_tool_category {
 pub async fn send_mcp_log(
     context: &ToolContext,
     level: LoggingLevel,
-    logger: &str,
-    message: String,
+    logger: LoggerName<'_>,
+    message: &str,
 ) {
     if let Some(peer) = &context.peer {
         let param = LoggingMessageNotificationParam {
             level,
-            logger: Some(logger.to_string()),
+            logger: Some(logger.as_ref().to_string()),
             data: serde_json::json!(message),
         };
         let _ = peer
@@ -40,11 +52,11 @@ pub async fn send_mcp_log(
     }
 }
 
-/// Register all file-related tools with the registry
-pub fn register_file_tools(registry: &mut ToolRegistry) {
-    use crate::mcp::tools::files;
-    files::register_file_tools(registry);
-}
+register_tool_category!(
+    register_file_tools,
+    files,
+    "Register all file-related tools with the registry"
+);
 
 register_tool_category!(
     register_git_tools,

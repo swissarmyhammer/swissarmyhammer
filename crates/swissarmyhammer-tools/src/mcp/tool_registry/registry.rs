@@ -6,7 +6,31 @@ use super::validation::{
     ToolValidationWarning,
 };
 use rmcp::model::{Meta, Tool};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+/// The CLI category of a tool, the `<category>` in `sah tool <category> <name>`.
+///
+/// A distinct type so a category cannot be passed where a CLI name belongs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CliCategory<'a>(pub &'a str);
+
+impl AsRef<str> for CliCategory<'_> {
+    fn as_ref(&self) -> &str {
+        self.0
+    }
+}
+
+/// The CLI command name of a tool, the `<name>` in `sah tool <category> <name>`.
+///
+/// A distinct type so a CLI name cannot be passed where a category belongs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CliName<'a>(pub &'a str);
+
+impl AsRef<str> for CliName<'_> {
+    fn as_ref(&self) -> &str {
+        self.0
+    }
+}
 
 /// Registry for managing MCP tools
 ///
@@ -85,7 +109,7 @@ impl ToolRegistry {
     /// Callers that need to bypass the disabled filter should access `self.tools` directly
     /// (available within this module).
     pub fn get_tool(&self, name: &str) -> Option<&dyn McpTool> {
-        if self.disabled_tools.contains(name) {
+        if !self.is_tool_enabled(name) {
             return None;
         }
         self.tools.get(name).map(|tool| tool.as_ref())
@@ -109,12 +133,12 @@ impl ToolRegistry {
     pub(super) fn matches_cli_criteria(
         &self,
         tool: &dyn McpTool,
-        category: &str,
-        cli_name: &str,
+        category: CliCategory<'_>,
+        cli_name: CliName<'_>,
     ) -> bool {
-        !tool.hidden_from_cli()
-            && tool.cli_category() == Some(category)
-            && tool.cli_name() == cli_name
+        self.is_cli_visible(tool)
+            && tool.cli_category() == Some(category.as_ref())
+            && tool.cli_name() == cli_name.as_ref()
     }
 
     /// Get a tool by category and CLI name
@@ -131,7 +155,11 @@ impl ToolRegistry {
     ///
     /// * `Some(&dyn McpTool)` - The tool if found
     /// * `None` - If no tool matches the category and CLI name
-    pub fn get_tool_by_cli_name(&self, category: &str, cli_name: &str) -> Option<&dyn McpTool> {
+    pub fn get_tool_by_cli_name(
+        &self,
+        category: CliCategory<'_>,
+        cli_name: CliName<'_>,
+    ) -> Option<&dyn McpTool> {
         self.tools
             .values()
             .find(|tool| self.matches_cli_criteria(tool.as_ref(), category, cli_name))
@@ -140,10 +168,8 @@ impl ToolRegistry {
 
     /// List all registered tool names that are currently enabled.
     pub fn list_tool_names(&self) -> Vec<String> {
-        self.tools
-            .keys()
-            .filter(|name| !self.disabled_tools.contains(*name))
-            .cloned()
+        self.iter_tools()
+            .map(|tool| McpTool::name(tool).to_string())
             .collect()
     }
 
@@ -185,13 +211,7 @@ impl ToolRegistry {
     where
         F: Fn(&dyn McpTool) -> bool,
     {
-        let mut tools: Vec<&dyn McpTool> = self
-            .tools
-            .values()
-            .map(|tool| tool.as_ref())
-            .filter(|tool| !self.disabled_tools.contains(McpTool::name(*tool)))
-            .filter(|tool| keep(*tool))
-            .collect();
+        let mut tools: Vec<&dyn McpTool> = self.iter_tools().filter(|tool| keep(*tool)).collect();
         tools.sort_unstable_by_key(|tool| McpTool::name(*tool));
 
         tools
@@ -239,7 +259,7 @@ impl ToolRegistry {
     pub fn iter_tools(&self) -> impl Iterator<Item = &dyn McpTool> {
         self.tools
             .values()
-            .filter(|tool| !self.disabled_tools.contains(McpTool::name(tool.as_ref())))
+            .filter(|tool| self.is_tool_enabled(McpTool::name(tool.as_ref())))
             .map(|tool| tool.as_ref())
     }
 
@@ -294,7 +314,7 @@ impl ToolRegistry {
     /// Every CLI-facing accessor funnels through this one predicate, so the
     /// listing and the lookup can never disagree.
     fn is_cli_visible(&self, tool: &dyn McpTool) -> bool {
-        !tool.hidden_from_cli() && !self.disabled_tools.contains(McpTool::name(tool))
+        !tool.hidden_from_cli() && self.is_tool_enabled(McpTool::name(tool))
     }
 
     /// Get unique CLI categories from all registered tools
@@ -306,19 +326,13 @@ impl ToolRegistry {
     ///
     /// * `Vec<String>` - Sorted list of unique category names
     pub fn get_cli_categories(&self) -> Vec<String> {
-        use std::collections::BTreeSet;
-
-        let mut categories = BTreeSet::new();
-
-        for tool in self.tools.values() {
-            if self.is_cli_visible(tool.as_ref()) {
-                if let Some(category) = tool.cli_category() {
-                    categories.insert(category.to_string());
-                }
-            }
-        }
-
-        categories.into_iter().collect()
+        self.get_cli_tools()
+            .into_iter()
+            .filter_map(|tool| tool.cli_category())
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     /// Filter CLI tools using a custom predicate
@@ -407,16 +421,25 @@ impl ToolRegistry {
     ///
     /// * `Vec<ToolValidationError>` - List of all validation errors found
     fn collect_all_validation_errors(&self) -> Vec<ToolValidationError> {
-        let mut errors = Vec::new();
+        self.validation_outcomes()
+            .flat_map(|(_, errors)| errors)
+            .collect()
+    }
 
-        // Validate all tools, not just CLI tools, to catch missing category errors
-        for tool in self.tools.values() {
-            if let Err(validation_errors) = self.validate_tool(tool.as_ref()) {
-                errors.extend(validation_errors);
-            }
-        }
-
-        errors
+    /// Validate every registered tool, pairing each tool with the errors it
+    /// produced (empty when the tool is valid).
+    ///
+    /// Validates all tools, not just CLI tools, to catch missing category
+    /// errors. This is the one per-tool validation pass that
+    /// [`Self::collect_all_validation_errors`], [`Self::validate_all_tools`]
+    /// and [`Self::get_tool_validation_warnings`] all build on.
+    fn validation_outcomes(
+        &self,
+    ) -> impl Iterator<Item = (&dyn McpTool, Vec<ToolValidationError>)> {
+        self.tools.values().map(|tool| {
+            let tool = tool.as_ref();
+            (tool, self.validate_tool(tool).err().unwrap_or_default())
+        })
     }
 
     /// Report validation errors
@@ -542,20 +565,14 @@ impl ToolRegistry {
     pub fn validate_all_tools(&self) -> ToolValidationReport {
         let mut report = ToolValidationReport::new();
 
-        for tool in self.tools.values() {
-            let _tool_name = <dyn McpTool as McpTool>::name(tool.as_ref());
+        for (_, errors) in self.validation_outcomes() {
             report.total_tools += 1;
 
-            match self.validate_tool(tool.as_ref()) {
-                Ok(()) => {
-                    report.valid_tools += 1;
-                }
-                Err(errors) => {
-                    report.invalid_tools += 1;
-                    for error in errors {
-                        report.errors.push(error);
-                    }
-                }
+            if errors.is_empty() {
+                report.valid_tools += 1;
+            } else {
+                report.invalid_tools += 1;
+                report.errors.extend(errors);
             }
         }
 
@@ -572,20 +589,14 @@ impl ToolRegistry {
     ///
     /// `Vec<ToolValidationWarning>` - List of validation warnings
     pub fn get_tool_validation_warnings(&self) -> Vec<ToolValidationWarning> {
-        let mut warnings = Vec::new();
-
-        for tool in self.tools.values() {
-            if let Err(errors) = self.validate_tool(tool.as_ref()) {
-                for error in errors {
-                    warnings.push(ToolValidationWarning {
-                        tool_name: <dyn McpTool as McpTool>::name(tool.as_ref()).to_string(),
-                        error,
-                        severity: ToolValidationSeverity::Warning,
-                    });
-                }
-            }
-        }
-
-        warnings
+        self.validation_outcomes()
+            .flat_map(|(tool, errors)| {
+                errors.into_iter().map(move |error| ToolValidationWarning {
+                    tool_name: <dyn McpTool as McpTool>::name(tool).to_string(),
+                    error,
+                    severity: ToolValidationSeverity::Warning,
+                })
+            })
+            .collect()
     }
 }

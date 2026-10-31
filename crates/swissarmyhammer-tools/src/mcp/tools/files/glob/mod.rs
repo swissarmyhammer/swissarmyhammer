@@ -2,7 +2,7 @@
 //!
 //! This module provides the GlobFileTool for fast file pattern matching with advanced filtering.
 
-use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
+use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, LoggerName, ToolContext};
 use crate::mcp::tools::files::shared_utils::{reject_filesystem_root, FilePathValidator};
 use ignore::WalkBuilder;
 use rmcp::model::{CallToolResult, LoggingLevel};
@@ -132,8 +132,8 @@ pub async fn execute_glob(
     send_mcp_log(
         context,
         LoggingLevel::Info,
-        "glob",
-        format!("Matching pattern: {}", request.pattern),
+        LoggerName("glob"),
+        &format!("Matching pattern: {}", request.pattern),
     )
     .await;
 
@@ -149,8 +149,8 @@ pub async fn execute_glob(
             send_mcp_log(
                 context,
                 LoggingLevel::Error,
-                "glob",
-                format!("Failed: {}", e),
+                LoggerName("glob"),
+                &format!("Failed: {}", e),
             )
             .await;
             return Err(e);
@@ -173,8 +173,8 @@ pub async fn execute_glob(
     send_mcp_log(
         context,
         LoggingLevel::Info,
-        "glob",
-        format!("Found {} files in {}ms", file_count, duration_ms),
+        LoggerName("glob"),
+        &format!("Found {} files in {}ms", file_count, duration_ms),
     )
     .await;
 

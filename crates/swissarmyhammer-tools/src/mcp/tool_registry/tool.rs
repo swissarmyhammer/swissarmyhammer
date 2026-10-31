@@ -177,18 +177,10 @@ pub trait McpTool:
         // Extract category from tool name by taking prefix before first underscore
         let name = <Self as McpTool>::name(self);
         let prefix = name.split('_').next()?;
-        match prefix {
-            "memo" => Some("memo"),
-            "file" | "files" => Some("file"),
-            "web" => Some("web"),
-            "outline" => Some("outline"),
-            "notify" => Some("notify"),
-            "kanban" => Some("kanban"),
-
-            "git" => Some("git"),
-            "cel" => Some("cel"),
-            _ => None,
-        }
+        CLI_CATEGORY_TABLE
+            .iter()
+            .find(|(known_prefix, _)| *known_prefix == prefix)
+            .map(|(_, category)| *category)
     }
 
     /// Get the CLI command name within its category
@@ -205,11 +197,7 @@ pub trait McpTool:
     fn cli_name(&self) -> &'static str {
         // Extract action from tool name by taking suffix after first underscore
         let name = <Self as McpTool>::name(self);
-        if let Some(underscore_pos) = name.find('_') {
-            &name[underscore_pos + 1..]
-        } else {
-            name
-        }
+        name.split_once('_').map_or(name, |(_, action)| action)
     }
 
     /// Get brief CLI help text for the command
@@ -313,9 +301,10 @@ pub trait McpTool:
 ///   named native host tool. `native` is the host tool it replaces (e.g. `files`
 ///   replaces `Edit`). A replacement is an agent capability *and* signals that the
 ///   host's native tool of that name should defer to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum ToolCategory {
     /// Domain capability available to every host. The default.
+    #[default]
     Shared,
     /// Base agent capability mounted for hosts that lack it natively.
     Agent,
@@ -324,6 +313,27 @@ pub enum ToolCategory {
         /// The native host tool this capability replaces (e.g. `"Bash"`).
         native: &'static str,
     },
+}
+
+/// Shared body of [`impl_default_doctorable!`] and [`impl_empty_initializable!`].
+///
+/// Both traits expose the same two identity methods: `name()` delegates to the
+/// tool's [`McpTool::name`] and `category()` is `"tools"`. Each public macro
+/// passes its trait path here so the body is written once.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! impl_tool_identity {
+    ($trait_path:path, $tool_type:ty) => {
+        impl $trait_path for $tool_type {
+            fn name(&self) -> &str {
+                <Self as $crate::mcp::tool_registry::McpTool>::name(self)
+            }
+
+            fn category(&self) -> &str {
+                "tools"
+            }
+        }
+    };
 }
 
 /// Macro to implement Doctorable for tools that don't have special health checks
@@ -342,15 +352,7 @@ pub enum ToolCategory {
 #[macro_export]
 macro_rules! impl_default_doctorable {
     ($tool_type:ty) => {
-        impl swissarmyhammer_common::health::Doctorable for $tool_type {
-            fn name(&self) -> &str {
-                <Self as $crate::mcp::tool_registry::McpTool>::name(self)
-            }
-
-            fn category(&self) -> &str {
-                "tools"
-            }
-        }
+        $crate::impl_tool_identity!(swissarmyhammer_common::health::Doctorable, $tool_type);
     };
 }
 
@@ -367,17 +369,24 @@ macro_rules! impl_default_doctorable {
 #[macro_export]
 macro_rules! impl_empty_initializable {
     ($tool_type:ty) => {
-        impl swissarmyhammer_common::lifecycle::Initializable for $tool_type {
-            fn name(&self) -> &str {
-                <Self as $crate::mcp::tool_registry::McpTool>::name(self)
-            }
-
-            fn category(&self) -> &str {
-                "tools"
-            }
-        }
+        $crate::impl_tool_identity!(swissarmyhammer_common::lifecycle::Initializable, $tool_type);
     };
 }
+
+/// Rows of (tool name prefix, CLI category) read by the default
+/// [`McpTool::cli_category`]. The prefix is the part of the tool name before
+/// the first underscore. A new category is one new row.
+const CLI_CATEGORY_TABLE: &[(&str, &str)] = &[
+    ("memo", "memo"),
+    ("file", "file"),
+    ("files", "file"),
+    ("web", "web"),
+    ("outline", "outline"),
+    ("notify", "notify"),
+    ("kanban", "kanban"),
+    ("git", "git"),
+    ("cel", "cel"),
+];
 
 /// True when `line` is nothing but an XML-style tag, such as
 /// `<skills_instructions>` or `</skills_instructions>`.

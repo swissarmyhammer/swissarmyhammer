@@ -1,6 +1,6 @@
 //! SearchUrl operation — delegates to swissarmyhammer-web search pipeline
 
-use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
+use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, LoggerName, ToolContext};
 use rmcp::model::{CallToolResult, LoggingLevel};
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
@@ -96,8 +96,8 @@ pub async fn execute_search(
     send_mcp_log(
         context,
         LoggingLevel::Info,
-        "web_search",
-        format!("Starting search: {}", request.query),
+        LoggerName("web_search"),
+        &format!("Starting search: {}", request.query),
     )
     .await;
 
@@ -107,8 +107,8 @@ pub async fn execute_search(
     send_mcp_log(
         context,
         LoggingLevel::Info,
-        "web_search",
-        "Executing search...".into(),
+        LoggerName("web_search"),
+        "Executing search...",
     )
     .await;
 
@@ -120,8 +120,8 @@ pub async fn execute_search(
             send_mcp_log(
                 context,
                 LoggingLevel::Warning,
-                "web_search",
-                "No results found".into(),
+                LoggerName("web_search"),
+                "No results found",
             )
             .await;
 
@@ -145,8 +145,8 @@ pub async fn execute_search(
             send_mcp_log(
                 context,
                 LoggingLevel::Error,
-                "web_search",
-                format!("Failed: {}", e),
+                LoggerName("web_search"),
+                &format!("Failed: {}", e),
             )
             .await;
 
@@ -170,8 +170,8 @@ pub async fn execute_search(
     send_mcp_log(
         context,
         LoggingLevel::Info,
-        "web_search",
-        "Processing results...".into(),
+        LoggerName("web_search"),
+        "Processing results...",
     )
     .await;
 
@@ -220,8 +220,8 @@ pub async fn execute_search(
     send_mcp_log(
         context,
         LoggingLevel::Info,
-        "web_search",
-        format!("Complete: {} results", response.results.len()),
+        LoggerName("web_search"),
+        &format!("Complete: {} results", response.results.len()),
     )
     .await;
 

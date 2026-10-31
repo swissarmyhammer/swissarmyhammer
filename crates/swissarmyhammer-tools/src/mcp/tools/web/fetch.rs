@@ -1,6 +1,6 @@
 //! FetchUrl operation — delegates to swissarmyhammer-web fetch pipeline
 
-use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
+use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, LoggerName, ToolContext};
 use rmcp::model::{CallToolResult, LoggingLevel};
 use rmcp::ErrorData as McpError;
 use serde::Deserialize;
@@ -69,8 +69,8 @@ pub async fn execute_fetch(
     send_mcp_log(
         context,
         LoggingLevel::Info,
-        "web_fetch",
-        format!("Fetching: {}", request.url),
+        LoggerName("web_fetch"),
+        &format!("Fetching: {}", request.url),
     )
     .await;
 
@@ -81,8 +81,8 @@ pub async fn execute_fetch(
             send_mcp_log(
                 context,
                 LoggingLevel::Info,
-                "web_fetch",
-                format!("Complete: {} chars", result.markdown.len()),
+                LoggerName("web_fetch"),
+                &format!("Complete: {} chars", result.markdown.len()),
             )
             .await;
 
@@ -108,8 +108,8 @@ pub async fn execute_fetch(
             send_mcp_log(
                 context,
                 LoggingLevel::Error,
-                "web_fetch",
-                format!("Failed: {}", e),
+                LoggerName("web_fetch"),
+                &format!("Failed: {}", e),
             )
             .await;
 

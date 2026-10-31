@@ -189,6 +189,13 @@ pub struct ToolContext {
     pub progress_sink: Option<tokio::sync::mpsc::UnboundedSender<ProgressNotificationParam>>,
 }
 
+// `ToolContext` is shared across async tasks. A field that is not `Send + Sync`
+// must fail the build here, not at a distant `tokio::spawn` call site.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<ToolContext>();
+};
+
 impl ToolContext {
     /// Create a new tool context
     pub fn new(
@@ -337,8 +344,8 @@ impl ToolContext {
     /// # Returns
     ///
     /// A new `ToolContext` with the working directory set
-    pub fn with_working_dir(mut self, working_dir: PathBuf) -> Self {
-        self.working_dir = Some(working_dir);
+    pub fn with_working_dir(mut self, working_dir: impl Into<PathBuf>) -> Self {
+        self.working_dir = Some(working_dir.into());
         self
     }
 

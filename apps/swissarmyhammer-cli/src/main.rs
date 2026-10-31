@@ -739,7 +739,10 @@ async fn lookup_tool_by_cli_name(
         }
     } else {
         // Legacy category-based lookup
-        match registry.get_tool_by_cli_name(category, tool_name) {
+        match registry.get_tool_by_cli_name(
+            swissarmyhammer_tools::mcp::tool_registry::CliCategory(category),
+            swissarmyhammer_tools::mcp::tool_registry::CliName(tool_name),
+        ) {
             Some(tool) => Ok(<dyn swissarmyhammer_tools::mcp::tool_registry::McpTool as swissarmyhammer_tools::mcp::tool_registry::McpTool>::name(tool).to_string()),
             None => {
                 let available_tools: Vec<String> = registry

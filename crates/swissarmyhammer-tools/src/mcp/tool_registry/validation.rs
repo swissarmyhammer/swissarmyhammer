@@ -6,6 +6,7 @@ use rmcp::ErrorData as McpError;
 use swissarmyhammer_common::{ErrorSeverity, Severity};
 
 /// Base implementation providing common utility methods for MCP tools
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct BaseToolImpl;
 
 impl BaseToolImpl {
@@ -62,7 +63,7 @@ impl BaseToolImpl {
 }
 
 /// Errors that can occur during tool validation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ToolValidationError {
     /// Tool schema validation failed
     SchemaValidation {
@@ -154,7 +155,17 @@ impl std::fmt::Display for ToolValidationError {
     }
 }
 
-impl std::error::Error for ToolValidationError {}
+impl std::error::Error for ToolValidationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ToolValidationError::SchemaValidation { error, .. } => Some(error),
+            ToolValidationError::MissingCliCategory { .. }
+            | ToolValidationError::InvalidCliName { .. }
+            | ToolValidationError::InvalidDescription { .. }
+            | ToolValidationError::NameConflict { .. } => None,
+        }
+    }
+}
 
 impl Severity for ToolValidationError {
     fn severity(&self) -> ErrorSeverity {
@@ -172,7 +183,7 @@ impl Severity for ToolValidationError {
 }
 
 /// Validation warning for tools
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ToolValidationWarning {
     /// Name of the tool with a validation issue
     pub tool_name: String,
@@ -183,7 +194,7 @@ pub struct ToolValidationWarning {
 }
 
 /// Severity levels for tool validation issues
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ToolValidationSeverity {
     /// Warning level issue that doesn't prevent functionality
     Warning,
@@ -194,7 +205,7 @@ pub enum ToolValidationSeverity {
 }
 
 /// Comprehensive validation report for all tools
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolValidationReport {
     /// Total number of tools validated
     pub total_tools: usize,
@@ -241,7 +252,7 @@ use serde_json::Value;
 // For now, let's define a simple ValidationError type here
 // In a real implementation, this would be imported from the schema validation module
 /// Errors that can occur during schema validation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ValidationError {
     /// Schema type is not supported for CLI generation
     UnsupportedSchemaType {
@@ -331,7 +342,9 @@ impl SchemaValidator {
     fn validate_properties(schema: &Value) -> Result<(), ValidationError> {
         let schema_obj = schema.as_object().unwrap();
         let Some(properties) = schema_obj.get("properties").and_then(|p| p.as_object()) else {
-            return Ok(());
+            return Err(ValidationError::InvalidSchema {
+                message: "'properties' must be a JSON object".to_string(),
+            });
         };
 
         for (prop_name, prop_schema) in properties {
@@ -343,7 +356,9 @@ impl SchemaValidator {
 
     fn validate_property_type(prop_name: &str, prop_schema: &Value) -> Result<(), ValidationError> {
         let Some(prop_obj) = prop_schema.as_object() else {
-            return Ok(());
+            return Err(ValidationError::InvalidSchema {
+                message: format!("property '{prop_name}' must be a JSON object schema"),
+            });
         };
         let Some(prop_type) = prop_obj.get("type").and_then(|t| t.as_str()) else {
             return Ok(());
@@ -351,12 +366,8 @@ impl SchemaValidator {
 
         match prop_type {
             "string" | "integer" | "number" | "boolean" | "array" => Ok(()),
-            "object" => Err(ValidationError::UnsupportedSchemaType {
-                schema_type: prop_type.to_string(),
-                parameter: prop_name.to_string(),
-            }),
-            unknown => Err(ValidationError::UnsupportedSchemaType {
-                schema_type: unknown.to_string(),
+            unsupported => Err(ValidationError::UnsupportedSchemaType {
+                schema_type: unsupported.to_string(),
                 parameter: prop_name.to_string(),
             }),
         }

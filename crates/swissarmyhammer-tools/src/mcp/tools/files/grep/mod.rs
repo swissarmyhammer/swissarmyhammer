@@ -1,7 +1,7 @@
 // sah rule ignore acp/capability-enforcement
 //! Content-based search tool using ripgrep library
 
-use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, ToolContext};
+use crate::mcp::tool_registry::{send_mcp_log, BaseToolImpl, LoggerName, ToolContext};
 use crate::mcp::tools::files::shared_utils::{reject_filesystem_root, FilePathValidator};
 use grep::regex::RegexMatcher;
 use grep::searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
@@ -244,8 +244,8 @@ pub async fn execute_grep(
     send_mcp_log(
         context,
         LoggingLevel::Info,
-        "grep",
-        format!("Searching: {}", request.pattern),
+        LoggerName("grep"),
+        &format!("Searching: {}", request.pattern),
     )
     .await;
 
@@ -427,8 +427,8 @@ pub async fn execute_grep(
     send_mcp_log(
         context,
         LoggingLevel::Info,
-        "grep",
-        format!(
+        LoggerName("grep"),
+        &format!(
             "Complete: {} matches in {}ms",
             match_count, results.search_time_ms
         ),
