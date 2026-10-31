@@ -15,14 +15,12 @@ use swissarmyhammer_common::lifecycle::InitScope;
 use swissarmyhammer_doctor::{Check, CheckStatus};
 
 use crate::agents::{
-    self, agent_global_agent_dir, agent_global_mcp_config, agent_global_settings_file,
-    agent_global_skill_dir, agent_project_agent_dir, agent_project_mcp_config,
-    agent_project_settings_file, agent_project_skill_dir, AgentDef, AgentsConfig,
+    self, agent_global_agent_dir, agent_global_mcp_config, agent_global_skill_dir,
+    agent_project_agent_dir, agent_project_mcp_config, agent_project_skill_dir, AgentDef,
+    AgentsConfig,
 };
-use crate::install::SUPERSEDED_NATIVE_DENY_TOOLS;
 use crate::merge::merge_unique;
 use crate::registry::RegistryError;
-use crate::strategy::claude_settings::{POINTER_KEY_DENY, POINTER_KEY_PERMISSIONS};
 use crate::table;
 
 /// How many variants [`Component`] has, and so how many entries
@@ -30,7 +28,7 @@ use crate::table;
 ///
 /// Named so the array length in `all`'s signature and the enum stay in step:
 /// adding a variant without raising this fails to compile.
-const COMPONENT_COUNT: usize = 4;
+const COMPONENT_COUNT: usize = 3;
 
 /// A sah-managed component that can be installed into an agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,8 +39,6 @@ pub enum Component {
     Skills,
     /// The sah subagents deployed to the agent's agent directory.
     Agents,
-    /// The sah permission entries in the agent's settings file.
-    Permissions,
 }
 
 impl Component {
@@ -52,18 +48,12 @@ impl Component {
             Component::Mcp => "MCP server",
             Component::Skills => "Skills",
             Component::Agents => "Subagents",
-            Component::Permissions => "Permissions",
         }
     }
 
     /// All components, in display order.
     pub fn all() -> [Component; COMPONENT_COUNT] {
-        [
-            Component::Mcp,
-            Component::Skills,
-            Component::Agents,
-            Component::Permissions,
-        ]
+        [Component::Mcp, Component::Skills, Component::Agents]
     }
 }
 
@@ -142,13 +132,6 @@ pub fn component_path(agent: &AgentDef, component: Component, scope: InitScope) 
                 agent_project_agent_dir(agent)
             }
         }
-        Component::Permissions => {
-            if is_user {
-                agent_global_settings_file(agent)
-            } else {
-                agent_project_settings_file(agent)
-            }
-        }
     }
 }
 
@@ -204,7 +187,6 @@ fn detect_component(
     let installed = match component {
         Component::Mcp => mcp_server_installed(path, servers_key),
         Component::Skills | Component::Agents => dir_non_empty(path),
-        Component::Permissions => permissions_present(path),
     };
 
     let detail = if installed {
@@ -220,7 +202,7 @@ fn detect_component(
     (state, detail)
 }
 
-/// Check all four components for one agent at one scope.
+/// Check all three components for one agent at one scope.
 pub fn check_agent(agent: &AgentDef, scope: InitScope) -> Vec<ComponentStatus> {
     Component::all()
         .into_iter()
@@ -618,40 +600,6 @@ fn dir_non_empty(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// True when the settings JSON at `path` denies **every** superseded native
-/// under `permissions.deny`.
-///
-/// This is the **single source of truth** for "is the sah deny permission
-/// installed at this path?" and is consumed by both `mirdan::status` and the
-/// sah-cli install layer so detection and installation cannot drift. The roster
-/// is [`SUPERSEDED_NATIVE_DENY_TOOLS`] — the same constant the installer writes
-/// — so a partially written deny reads as missing, not as installed.
-pub fn permissions_present(path: &Path) -> bool {
-    let Some(root) = read_json(path) else {
-        return false;
-    };
-    let Some(deny) = root
-        .get(POINTER_KEY_PERMISSIONS)
-        .and_then(|p| p.get(POINTER_KEY_DENY))
-        .and_then(|d| d.as_array())
-    else {
-        return false;
-    };
-    let denied: Vec<&str> = deny.iter().filter_map(|v| v.as_str()).collect();
-    SUPERSEDED_NATIVE_DENY_TOOLS
-        .iter()
-        .all(|tool| denied.contains(tool))
-}
-
-/// Read and parse JSON at `path`, returning `None` on any error or missing file.
-///
-/// Accepts JSONC (comments and trailing commas) so detection of an agent's
-/// installed components mirrors the lenient input format we accept on install.
-fn read_json(path: &Path) -> Option<serde_json::Value> {
-    let content = std::fs::read_to_string(path).ok()?;
-    crate::parse_jsonc(&content).ok()
-}
-
 /// Read and parse an MCP config document at `path` as a `serde_json::Value`.
 ///
 /// Picks the parser from the file extension: `.toml` paths are parsed as TOML
@@ -932,100 +880,17 @@ mod tests {
     }
 
     #[test]
-    fn test_permissions_missing_then_installed() {
-        let dir = TempDir::new().unwrap();
-        let agent = temp_agent(dir.path());
-        assert_eq!(
-            state_of(&agent, Component::Permissions),
-            ComponentState::Missing
-        );
-
-        let settings = dir.path().join("settings.json");
-        std::fs::write(&settings, r#"{"permissions": {"deny": ["Other"]}}"#).unwrap();
-        assert_eq!(
-            state_of(&agent, Component::Permissions),
-            ComponentState::Missing
-        );
-
-        let full_deny: Vec<&str> = SUPERSEDED_NATIVE_DENY_TOOLS
-            .iter()
-            .copied()
-            .chain(std::iter::once("WebFetch"))
-            .collect();
-        std::fs::write(
-            &settings,
-            serde_json::json!({ "permissions": { "deny": full_deny } }).to_string(),
-        )
-        .unwrap();
-        assert_eq!(
-            state_of(&agent, Component::Permissions),
-            ComponentState::Installed
-        );
-    }
-
-    /// The probe is all-or-nothing over the superseded-native roster: a settings
-    /// file that denies only part of the set is not installed. Each iteration
-    /// leaves exactly one tool out.
-    #[test]
-    fn permissions_present_false_when_deny_set_is_partial() {
-        let dir = TempDir::new().unwrap();
-        let settings = dir.path().join("settings.json");
-
-        for omitted in SUPERSEDED_NATIVE_DENY_TOOLS {
-            let partial: Vec<&str> = SUPERSEDED_NATIVE_DENY_TOOLS
-                .iter()
-                .copied()
-                .filter(|tool| tool != omitted)
-                .collect();
-            std::fs::write(
-                &settings,
-                serde_json::json!({ "permissions": { "deny": partial } }).to_string(),
-            )
-            .unwrap();
-
-            assert!(
-                !permissions_present(&settings),
-                "a deny set missing {omitted} must not read as installed"
-            );
-        }
-    }
-
-    /// A project-scope settings file that denies the whole roster reports the
-    /// Permissions component as installed — the doctor row a correct `sah init`
-    /// must produce.
-    #[test]
-    fn project_permissions_state_is_installed_after_full_deny() {
-        let dir = TempDir::new().unwrap();
-        let agent = temp_agent(dir.path());
-        let settings = component_path(&agent, Component::Permissions, InitScope::Project)
-            .expect("the agent defines a project settings path");
-        std::fs::write(
-            &settings,
-            serde_json::json!({ "permissions": { "deny": SUPERSEDED_NATIVE_DENY_TOOLS } })
-                .to_string(),
-        )
-        .unwrap();
-
-        let status = check_component(&agent, Component::Permissions, InitScope::Project);
-        assert_eq!(status.state, ComponentState::Installed);
-    }
-
-    #[test]
     fn test_not_applicable_when_path_field_none() {
         let dir = TempDir::new().unwrap();
         let agent = bare_agent(dir.path());
         // Skills always resolves a path (project_path/global_path are required),
-        // so the remaining three are NotApplicable when the field is None.
+        // so the remaining two are NotApplicable when the field is None.
         assert_eq!(
             state_of(&agent, Component::Mcp),
             ComponentState::NotApplicable
         );
         assert_eq!(
             state_of(&agent, Component::Agents),
-            ComponentState::NotApplicable
-        );
-        assert_eq!(
-            state_of(&agent, Component::Permissions),
             ComponentState::NotApplicable
         );
     }
@@ -1440,19 +1305,19 @@ mod tests {
 
     #[test]
     fn test_statuses_to_checks_demotes_project_missing_when_user_installed() {
-        let user_path = PathBuf::from("/Users/test/.claude/settings.json");
-        let project_path = PathBuf::from("/work/repo/.claude/settings.json");
+        let user_path = PathBuf::from("/Users/test/.claude/skills");
+        let project_path = PathBuf::from("/work/repo/.claude/skills");
         let statuses = vec![
             synthetic_status(
                 "claude-code",
-                Component::Permissions,
+                Component::Skills,
                 InitScope::Project,
                 ComponentState::Missing,
                 Some(project_path.clone()),
             ),
             synthetic_status(
                 "claude-code",
-                Component::Permissions,
+                Component::Skills,
                 InitScope::User,
                 ComponentState::Installed,
                 Some(user_path.clone()),
@@ -1464,8 +1329,8 @@ mod tests {
 
         let project_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · project · Permissions")
-            .expect("project permissions row");
+            .find(|c| c.name == "Claude Code · project · Skills")
+            .expect("project skills row");
         assert_eq!(
             project_check.status,
             CheckStatus::Ok,
@@ -1490,27 +1355,27 @@ mod tests {
 
         let user_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · user · Permissions")
-            .expect("user permissions row");
+            .find(|c| c.name == "Claude Code · user · Skills")
+            .expect("user skills row");
         assert_eq!(user_check.status, CheckStatus::Ok);
         assert!(user_check.fix.is_none());
     }
 
     #[test]
     fn test_statuses_to_checks_demotes_user_missing_when_project_installed() {
-        let user_path = PathBuf::from("/Users/test/.claude/settings.json");
-        let project_path = PathBuf::from("/work/repo/.claude/settings.json");
+        let user_path = PathBuf::from("/Users/test/.claude/skills");
+        let project_path = PathBuf::from("/work/repo/.claude/skills");
         let statuses = vec![
             synthetic_status(
                 "claude-code",
-                Component::Permissions,
+                Component::Skills,
                 InitScope::Project,
                 ComponentState::Installed,
                 Some(project_path.clone()),
             ),
             synthetic_status(
                 "claude-code",
-                Component::Permissions,
+                Component::Skills,
                 InitScope::User,
                 ComponentState::Missing,
                 Some(user_path.clone()),
@@ -1520,8 +1385,8 @@ mod tests {
         let checks = statuses_to_checks(&statuses);
         let user_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · user · Permissions")
-            .expect("user permissions row");
+            .find(|c| c.name == "Claude Code · user · Skills")
+            .expect("user skills row");
         assert_eq!(
             user_check.status,
             CheckStatus::Ok,
@@ -1547,17 +1412,17 @@ mod tests {
         let statuses = vec![
             synthetic_status(
                 "claude-code",
-                Component::Permissions,
+                Component::Skills,
                 InitScope::Project,
                 ComponentState::Missing,
-                Some(PathBuf::from("/work/repo/.claude/settings.json")),
+                Some(PathBuf::from("/work/repo/.claude/skills")),
             ),
             synthetic_status(
                 "claude-code",
-                Component::Permissions,
+                Component::Skills,
                 InitScope::User,
                 ComponentState::Missing,
-                Some(PathBuf::from("/Users/test/.claude/settings.json")),
+                Some(PathBuf::from("/Users/test/.claude/skills")),
             ),
         ];
 
@@ -1566,7 +1431,7 @@ mod tests {
 
         let project_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · project · Permissions")
+            .find(|c| c.name == "Claude Code · project · Skills")
             .unwrap();
         assert_eq!(project_check.status, CheckStatus::Warning);
         let project_fix = project_check
@@ -1578,7 +1443,7 @@ mod tests {
 
         let user_check = checks
             .iter()
-            .find(|c| c.name == "Claude Code · user · Permissions")
+            .find(|c| c.name == "Claude Code · user · Skills")
             .unwrap();
         assert_eq!(user_check.status, CheckStatus::Warning);
         assert!(user_check
@@ -1593,17 +1458,17 @@ mod tests {
         let statuses = vec![
             synthetic_status(
                 "claude-code",
-                Component::Permissions,
+                Component::Skills,
                 InitScope::Project,
                 ComponentState::Installed,
-                Some(PathBuf::from("/work/repo/.claude/settings.json")),
+                Some(PathBuf::from("/work/repo/.claude/skills")),
             ),
             synthetic_status(
                 "claude-code",
-                Component::Permissions,
+                Component::Skills,
                 InitScope::User,
                 ComponentState::Installed,
-                Some(PathBuf::from("/Users/test/.claude/settings.json")),
+                Some(PathBuf::from("/Users/test/.claude/skills")),
             ),
         ];
 
@@ -1634,10 +1499,10 @@ mod tests {
             ),
             synthetic_status(
                 "claude-code",
-                Component::Permissions,
+                Component::Skills,
                 InitScope::Project,
                 ComponentState::Missing,
-                Some(PathBuf::from("/work/repo/.claude/settings.json")),
+                Some(PathBuf::from("/work/repo/.claude/skills")),
             ),
         ];
 
@@ -1647,7 +1512,7 @@ mod tests {
             1,
             "NotApplicable statuses should produce no checks"
         );
-        assert_eq!(checks[0].name, "Claude Code · project · Permissions");
+        assert_eq!(checks[0].name, "Claude Code · project · Skills");
     }
 
     #[test]

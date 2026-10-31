@@ -67,21 +67,20 @@ struct CliProfile {
 
 /// sah's profile — the "bigger profile": all builtin skills + all builtin
 /// agents + statusline (`apps/swissarmyhammer-cli/.../profile.rs`).
-fn sah_profile(_scope: InitScope) -> Profile {
+pub(super) fn sah_profile(_scope: InitScope) -> Profile {
     Profile {
         mcp_server: Some(ProfileMcpServer::serve("sah")),
         skills: Some(Selector::All),
         agents: Some(Selector::All),
         validators: Some(Selector::All),
         statusline: true,
-        edit_redirect: true,
         legacy_mcp_servers: vec![LEGACY_SHELLTOOL_MCP_SERVER.to_string()],
     }
 }
 
 /// kanban-cli's profile — `kanban serve` + every builtin skill, deployed at
 /// every scope (`apps/kanban-cli/.../registry.rs`).
-fn kanban_profile(_scope: InitScope) -> Profile {
+pub(super) fn kanban_profile(_scope: InitScope) -> Profile {
     Profile {
         mcp_server: Some(ProfileMcpServer::serve("kanban")),
         skills: Some(Selector::All),
@@ -92,7 +91,7 @@ fn kanban_profile(_scope: InitScope) -> Profile {
 /// code-context's profile — `code-context serve` + the named
 /// `code-context` + `explore` + `lsp` + `detected-projects` skills, deployed
 /// at every scope (`apps/code-context-cli/.../registry.rs`).
-fn code_context_profile(_scope: InitScope) -> Profile {
+pub(super) fn code_context_profile(_scope: InitScope) -> Profile {
     Profile {
         mcp_server: Some(ProfileMcpServer::serve("code-context")),
         skills: Some(Selector::All),

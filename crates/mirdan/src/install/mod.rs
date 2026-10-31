@@ -25,7 +25,7 @@ pub use profile::*;
 pub use uninstall::*;
 
 #[cfg(test)]
-mod edit_redirect_tests;
+mod legacy_deny_tests;
 #[cfg(test)]
 mod profile_consistency_tests;
 #[cfg(test)]

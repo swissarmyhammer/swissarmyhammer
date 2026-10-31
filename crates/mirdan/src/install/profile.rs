@@ -25,9 +25,8 @@ use crate::package_type::PackageType;
 use crate::registry::RegistryError;
 use crate::settings;
 use crate::store;
-use crate::strategy::claude_settings::{
-    permissions_deny_pointer, POINTER_KEY_DENY, POINTER_KEY_PERMISSIONS,
-};
+use crate::strategy::claude_settings::permissions_deny_pointer;
+use crate::strategy::local_settings_sibling;
 
 use super::applier::{
     for_each_detected_agent, register_mcp_server, scope_is_global, unregister_mcp_server,
@@ -110,6 +109,9 @@ pub(crate) const PROFILE_AGENTS_COMPONENT: &str = "profile-agents";
 
 /// The component name the validator step of a profile reports under.
 pub(crate) const PROFILE_VALIDATORS_COMPONENT: &str = "profile-validators";
+
+/// The component name the legacy native tool deny cleanup reports under.
+pub(crate) const PROFILE_LEGACY_DENY_CLEANUP_COMPONENT: &str = "profile-legacy-deny-cleanup";
 
 /// The reporter label for one builtin skill.
 const SKILL_ITEM_LABEL: &str = "skill";
@@ -231,14 +233,6 @@ pub struct Profile {
     pub validators: Option<Selector>,
     /// Whether to install the Claude Code statusline (`sah statusline`).
     pub statusline: bool,
-    /// Whether to install the edit-surface redirect fragment: a
-    /// `permissions.deny` on the native `Edit`/`Write` tools so every
-    /// mutation flows through the served `files` MCP replacement (the
-    /// diagnostics-instrumented path).
-    /// The deny alone closes the surface — no `PreToolUse` hook. Claude-shaped
-    /// and inert on hosts that don't read that key (see
-    /// [`apply_profile_edit_redirect`]).
-    pub edit_redirect: bool,
     /// MCP server names that older installs registered and this profile no
     /// longer does. [`init_profile`] and [`deinit_profile`] both remove each
     /// name from every detected agent's MCP config, so a stale entry never
@@ -255,7 +249,7 @@ impl Profile {
     /// differ only in the server name and which skills they deploy, so they
     /// declare that pair rather than respelling the whole struct and drifting
     /// apart. sah is not a tool profile — it also carries agents,
-    /// validators, the statusline, and the edit redirect — so it builds its
+    /// validators, and the statusline — so it builds its
     /// own value.
     pub fn tool(server_name: impl Into<String>, skills: Selector) -> Self {
         Self {
@@ -836,6 +830,9 @@ struct SettingsFragment {
     subject: &'static str,
     /// Merge (install) or strip (remove) the fragment in one settings file.
     apply_at: fn(&Path, bool) -> Result<bool, RegistryError>,
+    /// Pick the settings file this fragment lives in at `scope`, given the
+    /// agent's settings file for that scope.
+    locate: fn(PathBuf, InitScope) -> PathBuf,
 }
 
 /// The statusline settings fragment.
@@ -843,21 +840,25 @@ const STATUSLINE_FRAGMENT: SettingsFragment = SettingsFragment {
     component: "profile-statusline",
     subject: "statusline",
     apply_at: apply_statusline_at,
+    locate: same_settings_file_at_every_scope,
 };
 
-/// The edit-surface redirect settings fragment.
-const EDIT_REDIRECT_FRAGMENT: SettingsFragment = SettingsFragment {
-    component: "profile-edit-redirect",
-    subject: "edit-surface redirect",
-    apply_at: apply_edit_redirect_at,
+/// The settings fragment that removes the legacy native tool deny.
+///
+/// Run it with `install` set to `false` in both directions: it never writes.
+const LEGACY_DENY_CLEANUP_FRAGMENT: SettingsFragment = SettingsFragment {
+    component: PROFILE_LEGACY_DENY_CLEANUP_COMPONENT,
+    subject: "legacy native tool deny",
+    apply_at: remove_legacy_native_denies_at,
+    locate: scope_settings_file,
 };
 
 /// Merge one settings fragment into every detected agent's settings file, or
 /// strip it when `install` is false. Root-aware so project-scope settings
 /// files resolve against `root` instead of `current_dir()`.
 ///
-/// The single driver behind the statusline and edit-redirect steps: the two
-/// differ only in their [`SettingsFragment`] constants.
+/// The single driver behind the statusline and legacy deny cleanup steps: the
+/// two differ only in their [`SettingsFragment`] constants.
 fn apply_profile_settings_fragment(
     install: bool,
     scope: InitScope,
@@ -868,6 +869,7 @@ fn apply_profile_settings_fragment(
     let component = ComponentName::new(fragment.component);
     let subject = fragment.subject;
     let apply_at = fragment.apply_at;
+    let locate = fragment.locate;
     let verb = if install {
         VERB_INSTALLED
     } else {
@@ -886,6 +888,7 @@ fn apply_profile_settings_fragment(
             ) else {
                 return Ok(None);
             };
+            let path = locate(path, scope);
             Ok(apply_at(&path, install)?.then(|| AgentAction {
                 verb: verb.to_string(),
                 message: format!("{subject} for {} ({})", agent.name, path.display()),
@@ -921,35 +924,19 @@ pub(crate) fn apply_statusline_at(path: &Path, install: bool) -> Result<bool, Re
     Ok(changed)
 }
 
-// ── Edit-surface redirect (close the superseded-native surface) ──────
+// ── Legacy native tool deny (cleanup only) ───────────────────────────
 //
-// An MCP server cannot disable a host's *native* built-in tools, so closing
-// the surface sah supersedes — forcing every file operation through the served
-// `files` tool, so diagnostics always ride the result — ships as an installable
-// Claude Code
-// settings fragment that `permissions.deny`s those natives. The deny alone
-// closes the surface: the model is steered to the served replacements, and no
-// redirect hook is needed. (An earlier version also installed a `PreToolUse`
-// redirect hook; it was redundant once `files` is served as the replacement,
-// and it dead-ended wherever that replacement isn't mounted — so it was
-// dropped.)
-//
-// The deny is a plain Claude-shaped settings key, harmless on agents that don't
-// read it — so the fragment is a no-op there rather than an error.
+// Older sah versions wrote `Bash`, `Edit`, `Read` and `Write` into
+// `permissions.deny` so that every file and shell action flowed through sah's
+// own tools. sah no longer denies any native tool. The installer never writes
+// those entries; it only removes them, on install and on removal, at every
+// scope.
 
-/// The native Claude Code tools sah supersedes, denied by the redirect fragment.
+/// The native tool deny entries that older sah versions wrote.
 ///
-/// The deny forces `Read`/`Edit`/`Write` to the served `files` tool. Kept as
-/// data (not spelled into control flow) so the installer that writes the deny
-/// and the [`permissions_present`](crate::status::permissions_present) detector
-/// that reads it back derive from one source and cannot drift.
-pub const SUPERSEDED_NATIVE_DENY_TOOLS: &[&str] = &["Edit", "Read", "Write"];
-
-/// The `Bash` deny entry that older sah versions wrote.
-///
-/// sah no longer denies `Bash`. The edit-redirect step only removes this entry,
-/// on install and on removal, so old settings files are cleaned up.
-pub const LEGACY_BASH_DENY_TOOL: &str = "Bash";
+/// [`init_profile`] and [`deinit_profile`] remove each entry from the agent's
+/// `permissions.deny` array at every scope. No code writes one.
+pub const LEGACY_NATIVE_DENY_TOOLS: &[&str] = &["Bash", "Edit", "Read", "Write"];
 
 /// The `shelltool` MCP server name that older installs wrote.
 ///
@@ -958,67 +945,44 @@ pub const LEGACY_BASH_DENY_TOOL: &str = "Bash";
 /// entry from agent MCP configs.
 pub const LEGACY_SHELLTOOL_MCP_SERVER: &str = "shelltool";
 
-/// The installable Claude Code settings fragment that closes the superseded
-/// surface.
-///
-/// Denies the natives in [`SUPERSEDED_NATIVE_DENY_TOOLS`] — and nothing else.
-/// The model is steered to the served `files` MCP replacement. The
-/// deny alone closes the surface; a `PreToolUse` redirect would be redundant and
-/// breaks wherever the replacement isn't mounted (the host's own write attempts,
-/// nested contexts). This is the single source of truth for the fragment's
-/// shape; [`apply_edit_redirect_at`] merges its parts into a real settings file
-/// without clobbering unrelated keys.
-pub(crate) fn desired_edit_redirect_fragment() -> serde_json::Value {
-    serde_json::json!({
-        POINTER_KEY_PERMISSIONS: {
-            POINTER_KEY_DENY: SUPERSEDED_NATIVE_DENY_TOOLS,
-        }
-    })
+/// Keep the agent's settings file for every scope as given.
+fn same_settings_file_at_every_scope(path: PathBuf, _scope: InitScope) -> PathBuf {
+    path
 }
 
-/// Merge the edit-redirect fragment into the settings file at `path`, or strip
-/// it when `install` is false.
+/// Map the agent's project settings file to the file `scope` reads.
 ///
-/// On install, every deny entry of [`SUPERSEDED_NATIVE_DENY_TOOLS`] is added
-/// idempotently (existing unrelated deny entries are preserved, and re-running
-/// adds nothing). On removal, exactly those entries are taken back out and
-/// unrelated keys are left intact. In both directions the legacy
-/// [`LEGACY_BASH_DENY_TOOL`] entry is removed, never written. A missing
-/// file is created on install and a no-op on removal. Returns `Ok(true)` when the
-/// file changed.
-pub(crate) fn apply_edit_redirect_at(path: &Path, install: bool) -> Result<bool, RegistryError> {
-    if !install && !path.exists() {
+/// `Local` scope lives in the `settings.local.json` sibling of the project
+/// settings file. `User` and `Project` scope use the file as given.
+fn scope_settings_file(path: PathBuf, scope: InitScope) -> PathBuf {
+    match scope {
+        InitScope::Local => local_settings_sibling(path),
+        InitScope::User | InitScope::Project => path,
+    }
+}
+
+/// Remove every [`LEGACY_NATIVE_DENY_TOOLS`] entry from the settings file at
+/// `path`.
+///
+/// Unrelated keys and unrelated deny entries stay. A missing file is a no-op:
+/// the cleanup never creates a settings file. A file with nothing to remove is
+/// not rewritten. The `_install` flag only fits the [`SettingsFragment`]
+/// signature; the cleanup runs the same way in both directions. Returns
+/// `Ok(true)` when the file changed.
+pub(crate) fn remove_legacy_native_denies_at(
+    path: &Path,
+    _install: bool,
+) -> Result<bool, RegistryError> {
+    if !path.exists() {
         return Ok(false);
     }
-
-    // Derive the exact pieces to merge from the canonical fragment, so the
-    // fragment validated by tests is the same shape written to disk — there is
-    // one source of truth for what "the edit-redirect" is.
-    let fragment = desired_edit_redirect_fragment();
-    let deny_entries = fragment[POINTER_KEY_PERMISSIONS][POINTER_KEY_DENY]
-        .as_array()
-        .unwrap_or_else(|| {
-            panic!("fragment {POINTER_KEY_PERMISSIONS}.{POINTER_KEY_DENY} is an array")
-        });
 
     let pointer = permissions_deny_pointer();
     let mut settings = settings::read_json(path)?;
     let mut changed = false;
-    for entry in deny_entries {
-        let one = if install {
-            settings::ensure_array_contains(&mut settings, &pointer, entry)
-        } else {
-            settings::remove_from_array(&mut settings, &pointer, entry)
-        };
-        changed |= one;
+    for tool in LEGACY_NATIVE_DENY_TOOLS {
+        changed |= settings::remove_from_array(&mut settings, &pointer, &serde_json::json!(tool));
     }
-
-    // Old sah versions denied `Bash`. Clean that entry up in both directions.
-    changed |= settings::remove_from_array(
-        &mut settings,
-        &pointer,
-        &serde_json::json!(LEGACY_BASH_DENY_TOOL),
-    );
 
     if changed {
         settings::write_json(path, &settings)?;
@@ -1026,11 +990,6 @@ pub(crate) fn apply_edit_redirect_at(path: &Path, install: bool) -> Result<bool,
     Ok(changed)
 }
 
-/// Install the edit-redirect fragment into every detected agent's settings file,
-/// or strip it when `install` is false. Root-aware so project-scope settings
-/// files resolve against `root` instead of `current_dir()`. Mirrors
-/// [`apply_profile_statusline`]: the fragment is Claude-shaped and inert on
-/// agents that do not read those keys.
 /// Register the profile's MCP server across detected agents.
 ///
 /// With no explicit `root`, dispatches through the strategy-aware
@@ -1171,14 +1130,17 @@ fn apply_mcp_operation_at(
 
 /// Install everything a [`Profile`] declares, in priority order.
 ///
-/// Steps, each a no-op when the profile does not declare it:
+/// Steps, each a no-op when the profile does not declare it, except the
+/// legacy deny cleanup, which runs for every profile:
 /// 1. register the `mcp_server` across detected agents (strategy-aware, or
 ///    root-explicit when `root` is `Some`),
 /// 2. render the selected builtin skills with Liquid + the partial library and
 ///    deploy them via store + symlink,
 /// 3. render and deploy the selected builtin agents the same way,
 /// 4. apply the statusline when the profile sets that flag,
-/// 5. remove each legacy MCP server the profile lists.
+/// 5. remove every [`LEGACY_NATIVE_DENY_TOOLS`] entry from the settings file of
+///    `scope` (the cleanup never writes a deny),
+/// 6. remove each legacy MCP server the profile lists.
 ///
 /// `root` makes the whole operation CWD-free: project-scope skill/agent stores,
 /// agent directories, and MCP configs are resolved against `root` instead of the
@@ -1254,15 +1216,13 @@ pub fn init_profile(
         ));
     }
 
-    if profile.edit_redirect {
-        results.extend(apply_profile_settings_fragment(
-            true,
-            scope,
-            root,
-            reporter,
-            &EDIT_REDIRECT_FRAGMENT,
-        ));
-    }
+    results.extend(apply_profile_settings_fragment(
+        false,
+        scope,
+        root,
+        reporter,
+        &LEGACY_DENY_CLEANUP_FRAGMENT,
+    ));
 
     results.extend(remove_legacy_mcp_servers(profile, scope, root, reporter));
 
@@ -1273,8 +1233,9 @@ pub fn init_profile(
 ///
 /// Unregisters the MCP server, removes the selected skills/agents from detected
 /// agents, and strips the statusline block when the profile declared it. It
-/// also removes each legacy MCP server the profile lists. `root` roots
-/// project-scope paths so deinit is CWD-free.
+/// also removes every [`LEGACY_NATIVE_DENY_TOOLS`] entry from the settings file
+/// of `scope`, for every profile, and each legacy MCP server the profile lists.
+/// `root` roots project-scope paths so deinit is CWD-free.
 ///
 /// # Version coupling
 ///
@@ -1354,15 +1315,13 @@ pub fn deinit_profile(
         ));
     }
 
-    if profile.edit_redirect {
-        results.extend(apply_profile_settings_fragment(
-            false,
-            scope,
-            root,
-            reporter,
-            &EDIT_REDIRECT_FRAGMENT,
-        ));
-    }
+    results.extend(apply_profile_settings_fragment(
+        false,
+        scope,
+        root,
+        reporter,
+        &LEGACY_DENY_CLEANUP_FRAGMENT,
+    ));
 
     results.extend(remove_legacy_mcp_servers(profile, scope, root, reporter));
 

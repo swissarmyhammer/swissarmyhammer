@@ -5,7 +5,8 @@ use swissarmyhammer_common::reporter::InitReporter;
 
 use super::applier::APPLIER_COMPONENT;
 use super::profile::{
-    PROFILE_AGENTS_COMPONENT, PROFILE_SKILLS_COMPONENT, PROFILE_VALIDATORS_COMPONENT,
+    PROFILE_AGENTS_COMPONENT, PROFILE_LEGACY_DENY_CLEANUP_COMPONENT, PROFILE_SKILLS_COMPONENT,
+    PROFILE_VALIDATORS_COMPONENT,
 };
 use super::*;
 use serial_test::serial;
@@ -52,7 +53,6 @@ fn sample_profile() -> Profile {
         agents: Some(Selector::Single("reviewer".to_string())),
         validators: None,
         statusline: false,
-        edit_redirect: false,
         legacy_mcp_servers: Vec::new(),
     }
 }
@@ -233,212 +233,6 @@ fn init_profile_statusline_install_and_deinit() {
     assert!(
         settings.get("statusLine").is_none(),
         "statusLine must be removed on deinit"
-    );
-}
-
-/// `init_profile` with `edit_redirect: true` merges the superseded-native deny
-/// into the detected agent's settings file (no `PreToolUse` redirect hook),
-/// preserving unrelated keys; `deinit_profile` strips the deny back out.
-#[test]
-#[serial]
-fn init_profile_installs_edit_redirect_and_deinit_removes() {
-    let root_dir = tempfile::tempdir().unwrap();
-    let root = root_dir.path().canonicalize().unwrap();
-    let cwd_dir = tempfile::tempdir().unwrap();
-    let cwd = cwd_dir.path().canonicalize().unwrap();
-    let _cwd = CurrentDirGuard::new(&cwd).unwrap();
-
-    let config_path = write_profile_agents_config(&root);
-    let _mirdan = MirdanConfigGuard::set(&config_path);
-
-    // Pre-existing unrelated settings the install must not clobber.
-    let settings_path = root.join(".fake/settings.json");
-    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-    std::fs::write(
-        &settings_path,
-        serde_json::to_string_pretty(&serde_json::json!({ "model": "opus" })).unwrap(),
-    )
-    .unwrap();
-
-    let profile = Profile {
-        edit_redirect: true,
-        ..Profile::default()
-    };
-    let reporter = NullReporter;
-    let results = init_profile(&profile, InitScope::Project, Some(&root), &reporter);
-    assert!(
-        results
-            .iter()
-            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
-        "edit-redirect init must not error: {results:?}"
-    );
-
-    let settings: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
-    // Unrelated key preserved.
-    assert_eq!(settings["model"], serde_json::json!("opus"));
-    // Every superseded native denied.
-    let deny = settings["permissions"]["deny"].as_array().unwrap();
-    for tool in SUPERSEDED_NATIVE_DENY_TOOLS {
-        assert!(
-            deny.iter().any(|v| v == &serde_json::json!(tool)),
-            "{tool} must be denied; got {deny:?}"
-        );
-    }
-    // No PreToolUse redirect hook installed — the deny is the whole mechanism.
-    assert!(
-        settings.get("hooks").is_none(),
-        "edit-redirect must not install any hooks; got {settings:?}"
-    );
-
-    // Nothing leaked into the CWD.
-    assert!(
-        !cwd.join(".fake").exists(),
-        "edit-redirect must not touch CWD"
-    );
-
-    // Deinit strips the deny + redirect but keeps the unrelated key.
-    let results = deinit_profile(&profile, InitScope::Project, Some(&root), &reporter);
-    assert!(results
-        .iter()
-        .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error));
-    let settings: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
-    assert_eq!(settings["model"], serde_json::json!("opus"));
-    let deny = settings["permissions"]["deny"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    for tool in SUPERSEDED_NATIVE_DENY_TOOLS {
-        assert!(
-            !deny.iter().any(|v| v == &serde_json::json!(tool)),
-            "{tool} deny must be removed on deinit"
-        );
-    }
-    // No hooks were ever installed, so none should appear.
-    assert!(
-        settings.get("hooks").is_none(),
-        "no hooks must be present after deinit; got {settings:?}"
-    );
-}
-
-/// Read the `permissions.deny` strings of the agent settings file under `root`.
-fn fake_agent_deny(root: &Path) -> Vec<String> {
-    let settings: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(root.join(".fake/settings.json")).unwrap())
-            .unwrap();
-    settings["permissions"]["deny"]
-        .as_array()
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Write the agent settings file under `root` with the given deny entries.
-fn seed_fake_agent_deny(root: &Path, entries: &[&str]) {
-    let settings_path = root.join(".fake/settings.json");
-    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-    std::fs::write(
-        &settings_path,
-        serde_json::json!({ "permissions": { "deny": entries } }).to_string(),
-    )
-    .unwrap();
-}
-
-/// Run the real `init_profile` (`edit_redirect: true`, project scope, explicit
-/// `root`) against a fake agent rooted at `root`, then assert no step errored.
-fn init_edit_redirect(root: &Path) {
-    let profile = Profile {
-        edit_redirect: true,
-        ..Profile::default()
-    };
-    let results = init_profile(&profile, InitScope::Project, Some(root), &NullReporter);
-    assert!(
-        results
-            .iter()
-            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
-        "edit-redirect init must not error: {results:?}"
-    );
-}
-
-/// After a real `init_profile`, `Bash` is NOT denied; `Edit`/`Read`/`Write` are.
-#[test]
-#[serial]
-fn init_profile_does_not_deny_bash() {
-    let root_dir = tempfile::tempdir().unwrap();
-    let root = root_dir.path().canonicalize().unwrap();
-    let _cwd = CurrentDirGuard::new(&root).unwrap();
-    let _mirdan = MirdanConfigGuard::set(write_profile_agents_config(&root));
-
-    init_edit_redirect(&root);
-
-    let deny = fake_agent_deny(&root);
-    assert!(
-        !deny.iter().any(|v| v == LEGACY_BASH_DENY_TOOL),
-        "Bash must not be denied after init; got {deny:?}"
-    );
-    for tool in ["Edit", "Read", "Write"] {
-        assert!(
-            deny.iter().any(|v| v == tool),
-            "{tool} must be denied after init; got {deny:?}"
-        );
-    }
-}
-
-/// A settings file that an older sah wrote with `Bash` denied is cleaned by a
-/// real `init_profile`; unrelated and roster entries stay denied.
-#[test]
-#[serial]
-fn init_profile_removes_a_legacy_bash_deny() {
-    let root_dir = tempfile::tempdir().unwrap();
-    let root = root_dir.path().canonicalize().unwrap();
-    let _cwd = CurrentDirGuard::new(&root).unwrap();
-    let _mirdan = MirdanConfigGuard::set(write_profile_agents_config(&root));
-    seed_fake_agent_deny(&root, &["Bash", "Edit"]);
-
-    init_edit_redirect(&root);
-
-    let deny = fake_agent_deny(&root);
-    assert!(
-        !deny.iter().any(|v| v == LEGACY_BASH_DENY_TOOL),
-        "legacy Bash deny must be gone after init; got {deny:?}"
-    );
-    assert!(
-        deny.iter().any(|v| v == "Edit"),
-        "Edit must stay denied after init; got {deny:?}"
-    );
-}
-
-/// A real `deinit_profile` removes a legacy `Bash` deny that an older sah wrote.
-#[test]
-#[serial]
-fn deinit_profile_removes_a_legacy_bash_deny() {
-    let root_dir = tempfile::tempdir().unwrap();
-    let root = root_dir.path().canonicalize().unwrap();
-    let _cwd = CurrentDirGuard::new(&root).unwrap();
-    let _mirdan = MirdanConfigGuard::set(write_profile_agents_config(&root));
-    seed_fake_agent_deny(&root, &["Bash"]);
-
-    let profile = Profile {
-        edit_redirect: true,
-        ..Profile::default()
-    };
-    let results = deinit_profile(&profile, InitScope::Project, Some(&root), &NullReporter);
-    assert!(
-        results
-            .iter()
-            .all(|r| r.status != swissarmyhammer_common::lifecycle::InitStatus::Error),
-        "edit-redirect deinit must not error: {results:?}"
-    );
-
-    let deny = fake_agent_deny(&root);
-    assert!(
-        !deny.iter().any(|v| v == LEGACY_BASH_DENY_TOOL),
-        "legacy Bash deny must be gone after deinit; got {deny:?}"
     );
 }
 
@@ -782,7 +576,8 @@ fn deinit_profile_reports_validators_under_the_validators_component() {
     );
 }
 
-/// A profile with no skills/agents/mcp_server is a clean no-op.
+/// A profile with no skills/agents/mcp_server installs nothing. The only step
+/// that runs is the legacy deny cleanup, and it changes no file here.
 #[test]
 #[serial]
 fn empty_profile_is_noop() {
@@ -794,6 +589,12 @@ fn empty_profile_is_noop() {
 
     let reporter = NullReporter;
     let results = init_profile(&Profile::default(), InitScope::Project, None, &reporter);
-    assert!(results.is_empty(), "empty profile should do nothing");
+    assert!(
+        results
+            .iter()
+            .all(|r| r.name == PROFILE_LEGACY_DENY_CLEANUP_COMPONENT),
+        "empty profile should run only the legacy deny cleanup: {results:?}"
+    );
     assert!(!project.join(".skills").exists());
+    assert!(!project.join(".fake").exists());
 }

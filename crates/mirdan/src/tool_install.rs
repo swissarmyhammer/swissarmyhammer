@@ -11,8 +11,8 @@
 //! components. Building the profile, building the component registry, and
 //! sequencing install/uninstall happen here once instead of once per CLI.
 //!
-//! `sah` is not a tool CLI: it also installs agents, validators, the statusline,
-//! and the edit redirect, so it builds its own
+//! `sah` is not a tool CLI: it also installs agents, validators, and the
+//! statusline, so it builds its own
 //! [`Profile`](crate::install::Profile) directly.
 
 use std::path::Path;

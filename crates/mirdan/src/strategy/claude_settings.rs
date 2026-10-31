@@ -4,8 +4,8 @@
 //! settings file. That path is an external contract: it belongs to Claude
 //! Code, and only Claude Code decides what it is called. Two parts of this
 //! crate address it — [`crate::strategy::ClaudeCodeStrategy`] denies and
-//! allows one tool at a time, and [`crate::install::profile`] installs and
-//! strips the edit-redirect fragment — so the keys and the JSON pointer built
+//! allows one tool at a time, and [`crate::install::profile`] strips the
+//! legacy native tool deny entries — so the keys and the JSON pointer built
 //! from them live here, where each part reads the same declaration.
 //!
 //! The module sits in the strategy layer because that layer already owns every

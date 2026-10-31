@@ -409,7 +409,7 @@ fn check_single_lsp_server(spec: &swissarmyhammer_lsp::types::OwnedLspServerSpec
 /// doctor [`Check`] via [`mirdan::status::to_check`]. Only agents whose
 /// `AgentDef.doctor` is `true` (per `agents_default.yaml`) participate. The
 /// check name produced by `to_check` already encodes agent, scope, and
-/// component (e.g. `"Claude Code · user · Permissions"`), so project and user
+/// component (e.g. `"Claude Code · user · Skills"`), so project and user
 /// rows are distinct.
 ///
 /// [`ComponentState::NotApplicable`] statuses are skipped entirely rather than
@@ -815,8 +815,9 @@ mod tests {
 
     /// With an isolated HOME that contains a detectable Claude Code layout, the
     /// install stack must report both project and user rows per component, map a
-    /// deployed user-scope skill directory to Ok, and map a missing user-scope
-    /// permissions file to Warning.
+    /// deployed user-scope skill directory to Ok, map a missing user-scope
+    /// subagent directory to Warning, and report no Permissions row: sah
+    /// installs no deny, so the doctor checks none.
     #[test]
     #[serial_test::serial(cwd)]
     fn test_check_install_stack_user_scope_rows() {
@@ -830,8 +831,8 @@ mod tests {
         let claude_dir = home.join(".claude");
         fs::create_dir_all(&claude_dir).unwrap();
 
-        // Deploy a user-scope skill (Ok), leave user-scope permissions
-        // (`~/.claude/settings.json`) missing (Warning).
+        // Deploy a user-scope skill (Ok), leave the user-scope subagent
+        // directory (`~/.claude/agents`) missing (Warning).
         let user_skill_dir = claude_dir.join("skills");
         fs::create_dir_all(&user_skill_dir).unwrap();
         fs::write(user_skill_dir.join("a-skill"), "x").unwrap();
@@ -851,21 +852,27 @@ mod tests {
             user_skills.message
         );
 
-        // User-scope permissions are missing -> Warning with an actionable fix.
-        let user_permissions = checks
+        // User-scope subagents are missing -> Warning with an actionable fix.
+        let user_subagents = checks
             .iter()
-            .find(|c| c.name == "Claude Code · user · Permissions")
-            .expect("expected a user-scope Permissions row");
+            .find(|c| c.name == "Claude Code · user · Subagents")
+            .expect("expected a user-scope Subagents row");
         assert_eq!(
-            user_permissions.status,
+            user_subagents.status,
             CheckStatus::Warning,
-            "missing permissions should be a Warning"
+            "missing subagents should be a Warning"
         );
-        assert!(user_permissions
+        assert!(user_subagents
             .fix
             .as_ref()
             .expect("missing component should carry a fix")
             .contains("sah init user"));
+
+        // sah installs no deny, so no row reports one.
+        assert!(
+            checks.iter().all(|c| !c.name.ends_with("Permissions")),
+            "the doctor must not report a Permissions row"
+        );
 
         // Both project and user rows are present for the agent.
         let project_skills = checks

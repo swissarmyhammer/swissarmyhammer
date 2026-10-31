@@ -26,9 +26,10 @@
 //! project types; reading a rule's `install.commands` means parsing the
 //! validator stack, which the profile installer cannot do.
 //!
-//! There is no Bash-permission component: sah no longer denies Bash. The
-//! profile's `edit_redirect` step removes a legacy Bash deny that an older sah
-//! wrote.
+//! There is no permission component: sah denies no native tool. Every profile
+//! install and removal strips the legacy `Bash`, `Edit`, `Read` and `Write`
+//! deny entries that an older sah wrote (see
+//! [`mirdan::install::LEGACY_NATIVE_DENY_TOOLS`]).
 
 use swissarmyhammer_common::lifecycle::InitRegistry;
 

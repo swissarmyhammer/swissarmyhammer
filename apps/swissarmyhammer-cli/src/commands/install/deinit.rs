@@ -29,23 +29,26 @@ pub fn uninstall(target: InstallTarget, remove_directory: bool) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mirdan::install::SUPERSEDED_NATIVE_DENY_TOOLS;
+    use mirdan::install::LEGACY_NATIVE_DENY_TOOLS;
     use std::path::{Path, PathBuf};
     use swissarmyhammer_common::test_utils::IsolatedTestEnvironment;
 
+    /// A deny entry that belongs to the user, not to sah. Deinit must keep it.
+    const UNRELATED_DENY: &str = "WebFetch";
+
     /// Write `<home>/.claude/<file_name>` with a `permissions.deny` array that
-    /// holds the whole [`SUPERSEDED_NATIVE_DENY_TOOLS`] roster, and return the
-    /// path of that file.
+    /// holds the whole [`LEGACY_NATIVE_DENY_TOOLS`] roster plus one unrelated
+    /// entry, and return the path of that file.
     ///
     /// The fixture reads the roster from the constant instead of spelling the
     /// tool names out, so a tool added to the constant is seeded here too.
-    fn seed_superseded_deny(home: &Path, file_name: &str) -> PathBuf {
+    fn seed_legacy_deny(home: &Path, file_name: &str) -> PathBuf {
         let settings = home.join(".claude").join(file_name);
         std::fs::create_dir_all(settings.parent().expect("settings path has a parent"))
             .expect("create the agent settings directory");
-        let seeded = serde_json::json!({
-            "permissions": { "deny": SUPERSEDED_NATIVE_DENY_TOOLS }
-        });
+        let mut deny: Vec<&str> = LEGACY_NATIVE_DENY_TOOLS.to_vec();
+        deny.push(UNRELATED_DENY);
+        let seeded = serde_json::json!({ "permissions": { "deny": deny } });
         std::fs::write(&settings, seeded.to_string()).expect("seed the settings file");
         settings
     }
@@ -71,67 +74,22 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// Guard: `sah deinit` must NOT clean up the serve-applied denies.
-    ///
-    /// `sah init`/`sah deinit` manage the `SUPERSEDED_NATIVE_DENY_TOOLS`
-    /// roster (`mirdan::install::profile`) that sah's `edit_redirect` profile
-    /// fragment installs and removes in `permissions.deny` — but only in
-    /// `settings.json`
-    /// (`agent_project_settings_file` / `agent_global_settings_file`). The
-    /// serve path's deny is a separate mechanism: it targets
-    /// `InitScope::Local`, which resolves to the `settings.local.json` sibling
-    /// (see `mirdan::strategy::local_settings_sibling`), a file the profile
-    /// fragment never touches at any scope. Seed a pre-existing
-    /// `permissions.deny` roster into that sibling file (as the serve path
-    /// would have written) and run the full user-scope deinit flow; every
-    /// entry must survive untouched because deinit never opens that file.
+    /// Guard: `sah deinit` removes every legacy native tool deny (`Bash`,
+    /// `Edit`, `Read`, `Write`) from the user settings file through the public
+    /// entry point, and keeps an unrelated deny entry.
     #[test]
     #[serial_test::serial(home_env)]
-    fn test_deinit_does_not_reallow_superseded_natives() {
+    fn test_deinit_removes_legacy_native_denies_from_user_settings() {
         let env = IsolatedTestEnvironment::new().expect("isolated env");
 
-        // The serve-time deny lives beside the global settings file, in its
-        // settings.local.json sibling — never in settings.json itself.
-        let local_settings = seed_superseded_deny(&env.home_path(), "settings.local.json");
+        let global_settings = seed_legacy_deny(&env.home_path(), "settings.json");
 
-        // Run the full user-scope deinit through the public entry point.
-        let _ = uninstall(InstallTarget::User, false);
+        uninstall(InstallTarget::User, false).expect("user-scope deinit must succeed");
 
-        // Every deny must still be present: the profile's edit-redirect
-        // fragment only ever reads/writes settings.json, so a serve-applied
-        // deny in settings.local.json survives untouched.
-        let deny = deny_entries(&local_settings);
-        for tool in SUPERSEDED_NATIVE_DENY_TOOLS {
-            assert!(
-                deny.iter().any(|entry| entry == tool),
-                "{tool} must remain in settings.local.json's permissions.deny after deinit \
-                 (the serve-time deny is sticky), got {deny:?}"
-            );
-        }
-    }
-
-    /// Guard: `sah deinit` DOES remove every `SUPERSEDED_NATIVE_DENY_TOOLS`
-    /// entry from the profile-managed `settings.json`, `Read` included — the
-    /// roster is one constant shared by the installer and the doctor probe.
-    /// This is the mirror of
-    /// [`test_deinit_does_not_reallow_superseded_natives`]: that test guards
-    /// the file the profile never touches, this one guards the file it does.
-    #[test]
-    #[serial_test::serial(home_env)]
-    fn test_deinit_removes_superseded_natives_from_profile_managed_settings() {
-        let env = IsolatedTestEnvironment::new().expect("isolated env");
-
-        let global_settings = seed_superseded_deny(&env.home_path(), "settings.json");
-
-        let _ = uninstall(InstallTarget::User, false);
-
-        let deny = deny_entries(&global_settings);
-        for tool in SUPERSEDED_NATIVE_DENY_TOOLS {
-            assert!(
-                !deny.iter().any(|entry| entry == tool),
-                "{tool} must be removed from settings.json's permissions.deny by deinit \
-                 (it is part of SUPERSEDED_NATIVE_DENY_TOOLS), got {deny:?}"
-            );
-        }
+        assert_eq!(
+            deny_entries(&global_settings),
+            [UNRELATED_DENY],
+            "deinit must strip every legacy native tool deny and keep the unrelated one"
+        );
     }
 }

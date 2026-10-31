@@ -22,12 +22,12 @@ use mirdan::install::{Profile, ProfileMcpServer, Selector, LEGACY_SHELLTOOL_MCP_
 /// - `skills`: every builtin skill ([`Selector::All`]).
 /// - `agents`: every builtin agent ([`Selector::All`]).
 /// - `statusline`: install the `sah statusline` block.
-/// - `edit_redirect`: deny the native `Edit`/`Write` tools so every
-///   mutation flows through the served `files` MCP replacement; the deny alone
-///   closes the write surface (no `PreToolUse` hook), so diagnostics ride every
-///   mutation.
 /// - `legacy_mcp_servers`: remove the `shelltool` MCP entry that an older
 ///   install wrote.
+///
+/// The profile declares no native tool deny. Init and deinit remove the legacy
+/// deny entries of an older sah for every profile (see
+/// [`mirdan::install::LEGACY_NATIVE_DENY_TOOLS`]).
 ///
 /// Kept in sync with mirdan's cross-CLI consistency tests
 /// (`mirdan::install::profile_consistency_tests::sah_profile`), which
@@ -41,7 +41,6 @@ pub fn sah_profile() -> Profile {
         agents: Some(Selector::All),
         validators: Some(Selector::All),
         statusline: true,
-        edit_redirect: true,
         legacy_mcp_servers: vec![LEGACY_SHELLTOOL_MCP_SERVER.to_string()],
     }
 }
@@ -67,7 +66,6 @@ mod tests {
         assert_eq!(profile.agents, Some(Selector::All));
         assert_eq!(profile.validators, Some(Selector::All));
         assert!(profile.statusline);
-        assert!(profile.edit_redirect);
         assert_eq!(
             profile.legacy_mcp_servers,
             vec![LEGACY_SHELLTOOL_MCP_SERVER.to_string()]

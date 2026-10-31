@@ -1,0 +1,2 @@
+description: Remove the MCP files tool (read, write, edit, glob, grep) and everything that only exists for it. Agents use the host file tools instead.
+name: remove-files-tool

@@ -50,7 +50,9 @@ impl MirdanConfigGuard {
 /// settings, instructions). Returns the path to the written config.
 ///
 /// The project skill dir is `<root>/.fake/skills`; the global skill dir is
-/// `<home>/.fake/skills`; the global MCP config is `<home>/.fake/mcp.json`.
+/// `<home>/.fake/skills`; the global MCP config is `<home>/.fake/mcp.json`; the
+/// project settings file is `<root>/.fake/settings.json`; the global settings
+/// file is `<home>/.fake/settings.json`.
 /// These match the constants in [`AgentLayout`].
 pub fn write_single_agent_config(root: &Path, home: &Path) -> PathBuf {
     let agents_yaml = format!(
@@ -61,6 +63,7 @@ pub fn write_single_agent_config(root: &Path, home: &Path) -> PathBuf {
     global_path: "{home}/.fake/skills"
     agent_path: .fake/agents
     settings_path: .fake/settings.json
+    global_settings_path: "{home}/.fake/settings.json"
     instructions_path: .fake/CLAUDE.md
     detect:
       - dir: "{detect}"
@@ -199,7 +202,6 @@ pub fn assert_tool_profile<T: ToolInstall>(expected_skills: &Selector) {
     assert!(profile.agents.is_none());
     assert!(profile.validators.is_none());
     assert!(!profile.statusline);
-    assert!(!profile.edit_redirect);
 }
 
 /// Assert `T` registers exactly `expected` genuine tool-lifecycle components —
