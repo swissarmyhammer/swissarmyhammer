@@ -21,7 +21,7 @@ metadata:
 - Never run tests in a loop. No `for i in {1..N}`, no `--count=N`, no `--repeat`, no "run it 10 more times to be sure".
 - Never run the suite again to "confirm" a pass or a fail. One run is the confirmation.
 - When tests fail, work on the failures only. Run only the failing tests after each fix. Run the full suite one more time at the end.
-- Save the output of the run. Read the saved output (`get lines`, `grep history`). Do not run the tests again to see the output again.
+- Redirect the output of the run to a file in the scratchpad. Read or search that file. Do not run the tests again to see the output again.
 
 ## Unit and integration targets
 
@@ -90,7 +90,7 @@ Make one to get started.
 
 ### A single test hangs and the suite never finishes
 
-Test waits on something CI can't deliver (network, child process, file watcher, deadlock). Run with a hard per-test timeout and isolate the offender via the `shell` tool's `timeout`:
+Test waits on something CI can't deliver (network, child process, file watcher, deadlock). Run with a hard per-test timeout and isolate the offender with the shell `timeout` command:
 
 - Rust: `timeout 60 cargo nextest run --test-threads=1 <test_name>` — nextest has no `--timeout` flag; its per-test budget is config-only via `slow-timeout`/`terminate-after` in `.config/nextest.toml`, so wrap the invocation with the shell `timeout` to bound a single suspect test
 - Python: `pytest --timeout=60` (needs `pytest-timeout`)

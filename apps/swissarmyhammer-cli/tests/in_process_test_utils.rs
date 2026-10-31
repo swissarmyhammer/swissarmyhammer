@@ -4,12 +4,16 @@
 //! This module provides utilities to test CLI functionality without spawning
 //! external processes, significantly improving test performance.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use swissarmyhammer_cli::cli::{Cli, Commands};
 use swissarmyhammer_cli::validate;
 
+/// Exit code for a failure inside the test harness itself, not in the command under test.
+const EXIT_INTERNAL_ERROR: i32 = 125;
+
 /// Captures output from in-process CLI command execution
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapturedOutput {
     pub stdout: String,
     pub stderr: String,
@@ -45,7 +49,7 @@ fn validate_and_get_binary() -> Result<std::path::PathBuf, CapturedOutput> {
 
     if !binary_path_buf.exists() {
         return Err(capture_error(
-            format!("Binary not found at path: {}", binary_path),
+            format!("binary not found at path: {}", binary_path),
             127, // Command not found exit code
         ));
     }
@@ -58,18 +62,21 @@ fn log_subprocess_failure(
     binary: &str,
     args: &[&str],
     working_dir: &std::path::Path,
-    exit_code: i32,
-    stdout: &str,
-    stderr: &str,
+    output: &CapturedOutput,
 ) {
     eprintln!("DEBUG SUBPROCESS: command={} {:?}", binary, args);
     eprintln!("DEBUG SUBPROCESS: working_dir={:?}", working_dir);
-    eprintln!("DEBUG SUBPROCESS: exit_code={}", exit_code);
-    eprintln!("DEBUG SUBPROCESS: stderr={}", stderr);
-    eprintln!("DEBUG SUBPROCESS: stdout={}", stdout);
+    eprintln!("DEBUG SUBPROCESS: exit_code={}", output.exit_code);
+    eprintln!("DEBUG SUBPROCESS: stderr={}", output.stderr);
+    eprintln!("DEBUG SUBPROCESS: stdout={}", output.stdout);
 }
 
 /// Helper function to get the sah binary path
+///
+/// `tests/integration/sah_serve_integration.rs` and
+/// `tests/integration/sah_serve_tools_validation.rs` keep their own copies, because
+/// they build in a separate compilation unit. Change those copies to match any
+/// change made here.
 fn get_sah_binary_path() -> String {
     if let Ok(path) = std::env::var("CARGO_BIN_EXE_sah") {
         if std::path::Path::new(&path)
@@ -99,7 +106,7 @@ pub async fn run_sah_command_in_process_with_dir(
     Ok(result_to_captured(
         result,
         "Unexpected error in run_sah_command_in_process_with_dir",
-        125,
+        EXIT_INTERNAL_ERROR,
     ))
 }
 
@@ -107,12 +114,13 @@ pub async fn run_sah_command_in_process_with_dir(
 ///
 /// This is the single unified function all tests should use instead of spawning subprocesses
 pub async fn run_sah_command_in_process(args: &[&str]) -> Result<CapturedOutput> {
-    let current_dir = std::env::current_dir()?;
+    let current_dir = std::env::current_dir()
+        .context("failed to get the current directory for the in-process test command")?;
     let result = run_sah_command_in_process_inner_with_dir(args, &current_dir).await;
     Ok(result_to_captured(
         result,
         "Unexpected error in run_sah_command_in_process",
-        125,
+        EXIT_INTERNAL_ERROR,
     ))
 }
 
@@ -122,7 +130,7 @@ fn should_run_as_subprocess(args: &[&str]) -> bool {
     !args.is_empty()
         && matches!(
             args[0],
-            "todo" | "memo" | "shell" | "file" | "search" | "web-search" | "rule" | "tool"
+            "todo" | "memo" | "file" | "search" | "web-search" | "rule" | "tool"
         )
 }
 
@@ -170,25 +178,23 @@ async fn run_subprocess_with_output(
         Ok(output) => output,
         Err(e) => {
             return Ok(capture_error(
-                format!("Failed to execute subprocess {}: {}", binary_path, e),
+                format!("failed to execute subprocess {}: {}", binary_path, e),
                 126,
             ));
         }
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let exit_code = output.status.code().unwrap_or(1);
+    let captured = CapturedOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        exit_code: output.status.code().unwrap_or(1),
+    };
 
-    if exit_code != 0 {
-        log_subprocess_failure(binary_path, args, working_dir, exit_code, &stdout, &stderr);
+    if captured.exit_code != 0 {
+        log_subprocess_failure(binary_path, args, working_dir, &captured);
     }
 
-    Ok(CapturedOutput {
-        stdout,
-        stderr,
-        exit_code,
-    })
+    Ok(captured)
 }
 
 /// Execute subprocess command without timeout wrapper
@@ -220,7 +226,7 @@ async fn execute_via_subprocess(
     .await
     .unwrap_or_else(|_| {
         Ok(capture_error(
-            "Test command timed out after 60 seconds".to_string(),
+            "test command timed out after 60 seconds".to_string(),
             124,
         ))
     })?;

@@ -194,13 +194,19 @@ mod tests {
     use swissarmyhammer_common::reporter::NullReporter;
     use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
 
+    use std::collections::BTreeSet;
+    use swissarmyhammer_skills::SkillResolver;
+
     use crate::test_support::{
-        assert_tool_component_count, assert_tool_lifecycle_round_trip, assert_tool_profile,
-        write_single_agent_config, MirdanConfigGuard,
+        assert_no_init_error, assert_tool_component_count, assert_tool_lifecycle_round_trip,
+        assert_tool_profile, write_single_agent_config, MirdanConfigGuard,
     };
 
     /// The builtin skill [`FakeTool`] deploys.
-    const FAKE_SKILLS: &[&str] = &["shell"];
+    const FAKE_SKILLS: &[&str] = &["task"];
+
+    /// A builtin skill that was removed. No install deploys it.
+    const REMOVED_SKILL: &str = "shell";
 
     /// A stand-in tool CLI: one MCP server, one skill, one lifecycle component.
     struct FakeTool;
@@ -222,7 +228,7 @@ mod tests {
         const SERVER_NAME: &'static str = "faketool";
 
         fn skills() -> Selector {
-            Selector::Single("shell".to_string())
+            Selector::Single("task".to_string())
         }
 
         fn register_components(registry: &mut InitRegistry) {
@@ -230,11 +236,52 @@ mod tests {
         }
     }
 
+    /// A stand-in tool CLI that deploys every builtin skill.
+    struct FakeAllSkillsTool;
+
+    impl ToolInstall for FakeAllSkillsTool {
+        const SERVER_NAME: &'static str = "faketool";
+
+        fn skills() -> Selector {
+            Selector::All
+        }
+
+        fn register_components(_registry: &mut InitRegistry) {}
+    }
+
     /// The provided `profile()` builds the tool shape: the `<name> serve` MCP
     /// server and the declared skills, and nothing sah-only.
     #[test]
     fn profile_declares_the_server_and_skills_only() {
-        assert_tool_profile::<FakeTool>(&Selector::Single("shell".to_string()));
+        assert_tool_profile::<FakeTool>(&Selector::Single("task".to_string()));
+    }
+
+    /// An install of every builtin skill deploys exactly the builtin set, and
+    /// the removed `shell` skill is not part of it.
+    #[test]
+    #[serial_test::serial(cwd)]
+    fn all_skills_install_deploys_the_builtin_set_without_the_removed_skill() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+        let _cwd = CurrentDirGuard::new(&root).unwrap();
+        let config_path = write_single_agent_config(&root, &env.home_path());
+        let _mirdan = MirdanConfigGuard::set(&config_path);
+
+        let results =
+            FakeAllSkillsTool::init(InitScope::Project, Some(root.as_path()), &NullReporter);
+        assert_no_init_error("all skills init", &results);
+
+        let deployed: BTreeSet<String> = std::fs::read_dir(root.join(".fake/skills"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        let builtin: BTreeSet<String> = SkillResolver::new()
+            .resolve_builtins()
+            .into_keys()
+            .collect();
+        assert!(!deployed.contains(REMOVED_SKILL));
+        assert_eq!(deployed, builtin);
     }
 
     /// The provided `component_registry()` returns a registry holding exactly

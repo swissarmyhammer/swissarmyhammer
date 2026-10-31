@@ -22,7 +22,7 @@ At its core, SwissArmyHammer extends AI coding agents (like Claude Code) with a 
 
 1. **Skills** define *what to do* — plan, implement, test, review, commit. Each skill is a self-contained workflow that the agent can invoke.
 2. **Agents** (subagent modes) define *how to think* — a planner reasons differently than a tester. Agent modes shape the AI's behavior for specific roles.
-3. **Tools** provide *what to work with* — file operations, shell execution, code intelligence, kanban boards, git integration. These are the hands of the system.
+3. **Tools** provide *what to work with* — file operations, code intelligence, kanban boards, git integration. These are the hands of the system.
 4. **Validators** enforce *what's acceptable* — code quality rules, security checks, test integrity. These run as hooks, catching problems before they land.
 
 The agent orchestrates these pieces through a natural conversation interface. Say `/plan` and the system researches your codebase, decomposes work into kanban cards, and presents a plan. Say `/implement` and it picks up the next card, writes code, runs tests, and reports back. Say `/review` and a dedicated reviewer agent examines the changes with language-specific guidelines.

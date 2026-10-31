@@ -47,7 +47,7 @@ One row per language:
 **Servers missing**:
 1. List the missing servers + install commands
 2. Ask permission before installing
-3. Run approved installs via `shell`
+3. Run approved installs via Bash
 4. Re-run `lsp status` to confirm
 5. Show updated table
 

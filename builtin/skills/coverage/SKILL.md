@@ -38,7 +38,7 @@ Poor coverage means inherited code lacks proper TDD. Goal: backfill the tests th
    - **Explicit** (named files/dirs/crates/packages): coverage only for that scope; ignore branch changes.
    - **Default** ("coverage" with no target): files changed on current branch vs `main`, via `{"op": "get changes"}`.
 
-3. **Run with coverage** — commands from the guide, via the shell tool. Produce LCOV output. Install the tool from the guide if missing. If tests fail, note and continue with the passing ones — don't stop to fix.
+3. **Run with coverage** — commands from the guide, via Bash. Produce LCOV output. Install the tool from the guide if missing. If tests fail, note and continue with the passing ones — don't stop to fix.
 
 4. **Parse LCOV and identify gaps** from `lcov.info`:
    - `SF:<path>` — source file

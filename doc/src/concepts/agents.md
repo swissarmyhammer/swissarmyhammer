@@ -37,7 +37,7 @@ Parent conversation
   │    └─ spawns implementer subagent
   │         ├─ reads kanban card
   │         ├─ writes code (using file tools)
-  │         ├─ runs tests (using shell tool)
+  │         ├─ runs tests (using Bash)
   │         ├─ validators check each change
   │         └─ reports results back to parent
   │

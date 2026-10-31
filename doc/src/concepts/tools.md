@@ -4,7 +4,7 @@ Tools are the capabilities that agents use to interact with the outside world. T
 
 ## What a Tool Is
 
-A tool is an MCP endpoint with a defined schema (name, description, parameters) and an implementation. When the agent decides it needs to read a file or run a shell command, it invokes the appropriate tool. SwissArmyHammer's MCP server (`sah serve`) exposes all built-in tools to the connected agent.
+A tool is an MCP endpoint with a defined schema (name, description, parameters) and an implementation. When the agent decides it needs to read a file or update a kanban task, it invokes the appropriate tool. SwissArmyHammer's MCP server (`sah serve`) exposes all built-in tools to the connected agent.
 
 Tools are the lowest layer of the system. Skills and agents don't hard-code which tools to use — they make decisions based on the task and invoke tools as needed.
 
@@ -19,12 +19,6 @@ Tools are the lowest layer of the system. Skills and agents don't hard-code whic
 | **edit** | Surgical string replacement in files |
 | **glob** | Find files by pattern |
 | **grep** | Search file contents with regex |
-
-### Execution
-
-| Tool | Purpose |
-|------|---------|
-| **shell** | Execute shell commands with history and process management |
 
 ### Code Intelligence
 
@@ -71,7 +65,7 @@ Tools sit beneath skills and agents in the stack. Here's the relationship:
 
 - A **skill** (e.g., `/test`) defines the workflow.
 - An **agent mode** (e.g., tester) shapes how the AI approaches the task.
-- **Tools** (e.g., shell, files) are what the agent actually calls to do the work.
+- **Tools** (e.g., files, kanban) are what the agent actually calls to do the work.
 - **Validators** (e.g., code-security) check the changed files when the review pipeline runs.
 
 The agent has access to all tools and chooses which to use based on context. The skill and agent mode influence these choices through their instructions, but tools themselves are general-purpose.

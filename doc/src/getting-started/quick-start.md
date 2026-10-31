@@ -73,7 +73,6 @@ Creates clean, well-organized git commits from your staged changes.
 /deduplicate       # Find and refactor copy-paste code
 /double-check      # Verify recent work before moving on
 /code-context      # Explore codebase structure
-/shell             # Run shell commands with history
 ```
 
 ## Installing More Skills

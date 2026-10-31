@@ -56,9 +56,9 @@ the changed-set comparison). Confirm and report each real duplicate:
   finding. Read the two bodies. If each is a single call forwarding to a shared
   helper, there is nothing to report, whatever the row says.
 
-  Measured on 2026-08-12: `init` and `deinit` in
-  `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs` are 303 and 304
-  bytes and differ by 2 lines — the name and one enum variant. Both bodies are
+  Example: `init` and `deinit` in
+  `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs` differ in the name
+  and one spec constant (`INIT_SPEC` and `DEINIT_SPEC`). Both bodies are
   one call to the shared `run_lifecycle`. `Initializable`
   (`crates/swissarmyhammer-common/src/lifecycle.rs`) declares both with the
   same signature, so stopping the report means deleting a trait method. This

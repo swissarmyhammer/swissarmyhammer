@@ -15,7 +15,7 @@ SwissArmyHammer assembles four kinds of building blocks — skills, agents, tool
 │         (how to think — personas)            │
 ├─────────────────────────────────────────────┤
 │                  Tools                       │
-│   files  shell  git  kanban  code-context    │
+│   files  git  kanban  code-context           │
 │         (what to work with — capabilities)   │
 ├─────────────────────────────────────────────┤
 │                Validators                    │
@@ -24,7 +24,7 @@ SwissArmyHammer assembles four kinds of building blocks — skills, agents, tool
 └─────────────────────────────────────────────┘
 ```
 
-Each layer has a distinct responsibility, and the layers compose vertically. A skill like `/implement` activates the **implementer** agent mode, which uses **tools** (file editing, shell execution, code context) to write code, and the **validators** whose globs match the changed files — `code-hygiene`, `code-security` and their siblings — then judge that code when the review pipeline runs.
+Each layer has a distinct responsibility, and the layers compose vertically. A skill like `/implement` activates the **implementer** agent mode, which uses **tools** (file editing, code context) to write code, and the **validators** whose globs match the changed files — `code-hygiene`, `code-security` and their siblings — then judge that code when the review pipeline runs.
 
 ## A Concrete Example
 
@@ -32,7 +32,7 @@ Here's what happens when you type `/plan` in your AI coding agent:
 
 1. The **plan skill** activates. It defines the workflow: research the codebase, identify what needs to change, decompose work into discrete tasks.
 2. The **planner agent** mode shapes how the AI thinks. It's instructed to be thorough in research, conservative in scope, and to produce kanban cards as output.
-3. The planner uses **tools** to do the work: `code_context` to understand the codebase structure, `shell` to run analysis commands, and `kanban` to create task cards.
+3. The planner uses **tools** to do the work: `code_context` to understand the codebase structure and `kanban` to create task cards.
 4. **Validators** do not run during planning. They match changed files by glob, and planning writes only kanban cards — `.md` and `.jsonl` files that no shipped validator glob matches. The `code-security` set's `command-safety` rule reads the shell commands a diff embeds, not the commands the planner runs.
 
 The result: a kanban board with well-scoped cards, ready for `/implement` to pick up.
@@ -45,11 +45,11 @@ The skills form a natural development cycle:
 
 | Phase | Skill | Agent Mode | Primary Tools | Validators |
 |-------|-------|------------|---------------|------------|
-| **Plan** | `/plan` | planner | code-context, kanban, shell | none — planning changes no file a validator glob matches |
-| **Implement** | `/implement` | implementer | files, shell, code-context, kanban | every set whose globs match the changed files |
-| **Test** | `/test` | tester | shell, files | every set whose globs match the changed files |
+| **Plan** | `/plan` | planner | code-context, kanban | none — planning changes no file a validator glob matches |
+| **Implement** | `/implement` | implementer | files, code-context, kanban | every set whose globs match the changed files |
+| **Test** | `/test` | tester | files | every set whose globs match the changed files |
 | **Review** | `/review` | reviewer | files, git, code-context | every set whose globs match the changed files |
-| **Commit** | `/commit` | committer | git, shell | none — committing changes no file |
+| **Commit** | `/commit` | committer | git | none — committing changes no file |
 
 The Validators column names no set for the three middle phases, because the engine picks none by phase. A set runs when its `match.files` globs match a changed file, so the same phase reaches `rust` for a `.rs` change and `js-ts` for a `.tsx` one.
 
@@ -64,7 +64,6 @@ Beyond the core cycle, additional skills handle cross-cutting concerns:
 - **`/double-check`** — validates recent work before moving on
 - **`/implement-all`** — autonomously works through the entire kanban board
 - **`/code-context`** — explores codebase structure and symbol relationships
-- **`/shell`** — shell command execution with history and process management
 - **`/lsp`** — diagnoses and installs language servers for code intelligence
 
 ## How the Pieces Connect
@@ -79,7 +78,7 @@ Each agent mode is a markdown document that instructs the AI how to approach its
 
 ### Tools Provide Capabilities
 
-Tools are MCP (Model Context Protocol) endpoints that the agent calls to interact with the outside world. File operations, shell execution, code intelligence, kanban management — these are all tools. Skills and agents don't hard-code tool usage; they decide which tools to use based on the task at hand.
+Tools are MCP (Model Context Protocol) endpoints that the agent calls to interact with the outside world. File operations, code intelligence, kanban management — these are all tools. Skills and agents don't hard-code tool usage; they decide which tools to use based on the task at hand.
 
 ### Validators Run Over the Changed Files
 

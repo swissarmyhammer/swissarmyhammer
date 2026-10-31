@@ -2,7 +2,7 @@
 name: check-sah
 description: Monitor the performance of a sah /finish batch (the kanban implement→test→review→commit pipeline) running in a given project folder — locate the active finish session, report progress, scan for errors, quantify token usage by source, and surface sah tooling errors and behavior changes. Takes a project folder as its argument. Use when the user says "check sah", "watch the run", "monitor the finish run", "fire up the timer", "is the run healthy", "analyze token usage", or wants periodic status on a finish batch in a folder. Drives a self-paced 10-minute watch loop until the run completes.
 license: MIT OR Apache-2.0
-compatibility: Read-only observability skill. Requires the `shell` and `kanban` MCP tools (to read the board and run analysis over transcripts); reads Claude Code session transcripts under `~/.claude/projects/<slug>` derived from the given project folder.
+compatibility: Read-only observability skill. Requires the `kanban` MCP tool (to read the board) and Bash (to run analysis over transcripts); reads Claude Code session transcripts under `~/.claude/projects/<slug>` derived from the given project folder.
 metadata:
   author: swissarmyhammer
   version: "{{version}}"
@@ -12,7 +12,7 @@ metadata:
 
 Watch a running sah `/finish` batch from the *outside* — read its transcripts and kanban board, not its conversation — and report progress, errors, token cost, and the health of the review engine. Runs as a 10-minute self-paced loop (via `ScheduleWakeup`) until the board is clear or finish goes idle, then emits a final summary.
 
-**You are an observer.** Never edit the project's code, never touch the finish run's board, never spawn agents. Read-only: `mcp__sah__shell` (analysis scripts), `mcp__sah__kanban get board`, file reads.
+**You are an observer.** Never edit the project's code, never touch the finish run's board, never spawn agents. Read-only: Bash (analysis scripts), `mcp__sah__kanban get board`, file reads.
 
 ## Input: the project folder
 
@@ -63,7 +63,7 @@ done
 Run every wake-up (keep each shell command **< 4000 chars**; split into multiple calls; avoid escaped quotes inside `python3 -c`):
 
 1. **Liveness & progress** — `date +%H:%M:%S`; finish lines + mtime; **subagent mtimes** (the orchestrator file looks *stale* while blocked waiting on a subagent — judge liveness from `subagents/*.jsonl` mtimes, not just the orchestrator). `mcp__sah__kanban get board` for done/in-flight/blocked. Agent count + roles + tail → current task, review-fix loops, scope violations. **Confirm finish stays SEQUENTIAL** (flag parallel Agents or inline Edit/Write/test/commit by the orchestrator).
-2. **Error scan** — count `"is_error":true` across finish + subagents; count `security check failed` blocks. Classify new ones (see Benign patterns). Flag NEW/fatal.
+2. **Error scan** — count `"is_error":true` across finish + subagents. Classify new ones (see Benign patterns). Flag NEW/fatal.
 3. **Token quant** (below).
 4. **sah tool errors & behavior** (below).
 5. **Review-rule health** (below) — contradictions, invalid-code findings, declined/force-closed findings, churn, stuck tasks.
@@ -113,7 +113,6 @@ For each error report the **exact tool + op + input + result**, and decide: a **
 Known tooling issues to recognize (examples, not exhaustive):
 - **`code_context`** — `get callgraph`/`get blastradius`/`get symbol` failures surface as a misleading `-32603: invalid regex pattern`: `get callgraph {symbol:X}` on an unindexed symbol → `invalid regex pattern: symbol not found: X` (a plain not-found, mislabeled); `get blastradius {file_path:F}` on a file with no indexed symbols → `invalid regex pattern: no symbols found in file 'F' matching '*'` (real bug — the "all symbols" path compiles glob `*` as a regex).
 - **`kanban`** — `delete column: missing id` / `get task: missing id` (parse retries); `init board: already exists`.
-- **`shell`** — `security check failed` false-positives (see Benign patterns); `Unknown operation 'detect projects'` when `detect projects` is mis-routed to `shell` instead of `code_context`.
 
 ## Review-rule health (the agent should obey findings, not fight them)
 
@@ -135,11 +134,11 @@ STOP (do not reschedule) when the board is fully clear (all tasks `done`) **or**
 - All commits (`git -C "$REPO" log --oneline`).
 - Full error list (classified), review-fix loops, committer slowness, scope adherence.
 - **Review-rule health**: every force-closed/declined finding (the close + the open findings it skipped, quoted), candidate validator bugs (invalid-code / contract-fighting findings, naming the rule to fix in `builtin/validators/…`), true contradictions, churn/non-convergence, and stuck tasks correctly parked for a human rule-fix — classified as agent-disobedience vs validator-bug vs engine-instability.
-- **Standing token-saving recs**: (1) review-engine — cut per-round fan-out and tune `batch_size` so each per-commit `HEAD~1..HEAD` review packs files efficiently (the review is already commit-delta-scoped — there is no hash cache left to skip unchanged files, so the levers are fan-out width and batch packing, not re-review suppression); (2) orchestrator slimming (large fixed overhead); (3) committer — stop re-running clippy/nextest/fmt on an already-verified tree (commit inline); (4) test skill — empty suite ≠ failure, never author tests to force green; (5) `get-lines` — shell `execute` should inline small output instead of a mandatory 2nd call (median output ~13 lines; ~46% of shell calls were paging); (6) fix the security-guard false-positive (see below) and the `code_context` "invalid regex pattern" mislabel.
+- **Standing token-saving recs**: (1) review-engine — cut per-round fan-out and tune `batch_size` so each per-commit `HEAD~1..HEAD` review packs files efficiently (the review is already commit-delta-scoped — there is no hash cache left to skip unchanged files, so the levers are fan-out width and batch packing, not re-review suppression); (2) orchestrator slimming (large fixed overhead); (3) committer — stop re-running clippy/nextest/fmt on an already-verified tree (commit inline); (4) test skill — empty suite ≠ failure, never author tests to force green; (5) fix the `code_context` "invalid regex pattern" mislabel.
 
 ## Benign / known error patterns
 
-Recovered, not fatal: kanban `init board: already exists`; kanban `delete column: missing id` (column-reorder retry); shell `security check failed` on an **`eval`** substring when the project under test *is* an evaluator (e.g. `cargo test eval`) — the same guard also legitimately blocks real `rm -rf /tmp/...`; `Edit` "File has been modified since read" / "not been read yet" (re-read + retry); `detect projects` mis-routed as a `shell` op; `code_context` "invalid regex pattern" (above).
+Recovered, not fatal: kanban `init board: already exists`; kanban `delete column: missing id` (column-reorder retry); `Edit` "File has been modified since read" / "not been read yet" (re-read + retry); `code_context` "invalid regex pattern" (above).
 
 ## Scheduling
 
@@ -147,7 +146,6 @@ Self-pace with `ScheduleWakeup` at **600s** (10 min), passing this skill's monit
 
 ## Shell gotchas
 
-- **Never** put the literal `Dynamic code eval`+`uation` phrase in a command — the shell security guard false-positive-blocks any command containing it (it will block your own analysis command). Use `grep 'security check failed'` to count blocks.
 - Keep commands **< 4096 chars**; split long analyses; avoid escaped `\"` inside `python3 -c`.
 - Transcript timestamps are **UTC** (= local + 5h).
 - The board often resets to empty (`todo→doing→done`) between runs; the `review` column gets appended later and can momentarily land terminal — finish fixes the column order autonomously (benign).

@@ -24,7 +24,6 @@ SwissArmyHammer ships with skills covering the core development cycle:
 | **deduplicate** | Find and refactor duplicate code |
 | **double-check** | Verify recent work before proceeding |
 | **code-context** | Explore codebase structure and symbol relationships |
-| **shell** | Shell command execution with history and process management |
 | **kanban** | Execute the next task from the kanban board |
 | **lsp** | Diagnose and install language servers |
 

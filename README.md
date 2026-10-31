@@ -139,7 +139,6 @@ SwissArmyHammer is different. Every stage of the software development lifecycle 
 | **Commit** | Stage changes, write a conventional commit message | `/commit` |
 | **Explore** | Semantic code search and symbol lookup across 25+ languages | `/code-context` |
 | **Deduplicate** | Find near-duplicate code and refactor it | `/deduplicate` |
-| **Shell** | Execute commands with persistent, searchable output history | `/shell` |
 | **Double-check** | Verify recent work before moving on | `/double-check` |
 | **LSP** | Diagnose and install missing language servers | `/lsp` |
 
@@ -148,18 +147,6 @@ These tools connect into loops. `/plan` creates tasks. `/implement` works throug
 ## Context Management 
 
 The biggest bottleneck for AI agents isn't intelligence -- it's context. Long test output blows the context window. The agent can't find the function it needs. It re-reads files it already scanned. SwissArmyHammer solves this at every level.
-
-### Smart Shell (not just `bash -c`)
-
-The built-in shell isn't a thin wrapper around subprocess exec. It's a **virtual shell with persistent history, process management, and searchable output**:
-
-- **Every command's output is stored and indexed** -- even if the response was truncated to save tokens
-- **Semantic search across all output** -- ask "find the authentication error" and it matches "403 forbidden" and "login denied"
-- **Regex grep across history** -- `error\[E\d+\]` finds every Rust compiler error from every command you've run
-- **Line-range retrieval** -- output was truncated? Fetch lines 450-500 of command #3 without re-running it
-- **Configurable output limits** -- return 50 lines, 200, or zero (fire-and-forget). Full output is always saved for later
-
-This means your agent can run `cargo test` with 10,000 lines of output, get a 50-line summary, and then surgically search for the failure -- without burning context tokens on scrollback.
 
 ### Automatic Code Intelligence (tree-sitter + LSP)
 
@@ -186,7 +173,6 @@ The core. An MCP server that gives your agent everything it needs:
 |------|-------------|
 | **Files** | Read, write, edit, glob, grep -- with .gitignore support |
 | **Git** | Branch, commit, diff, status, PR workflows |
-| **Shell** | Safe command execution with security hardening |
 | **Kanban** | File-backed task boards -- tasks, subtasks, dependencies, tags |
 | **Code Search** | Tree-sitter powered semantic search across 25+ languages |
 | **Web** | Fetch pages and convert to markdown, search the web |
