@@ -596,7 +596,7 @@ pub async fn start_mcp_server(
 /// Start unified MCP server.
 ///
 /// The server registers the full tool union — shared domain tools plus the base
-/// agent capabilities (file editing, shell, grep, skills, etc.). Each tool
+/// agent capabilities (file editing, grep, skills, etc.). Each tool
 /// carries a structural [`category()`](crate::mcp::tool_registry::McpTool::category);
 /// composing a per-client tool surface from those categories is the
 /// responsibility of the serve boundary, not registration.
@@ -1926,7 +1926,6 @@ mod tests {
         // leaked a forbidden tool through the validator route. The former
         // split file tools are included — they must no longer be served.
         for forbidden in [
-            "shell",
             "git",
             "kanban",
             "web",

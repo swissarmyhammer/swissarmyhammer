@@ -636,7 +636,7 @@ the tool surface visible to AI agents.
 Examples:
   sah tools                          # List all tools with status
   sah tools disable                  # Disable all tools
-  sah tools enable shell git         # Enable specific tools
+  sah tools enable files git         # Enable specific tools
   sah tools disable kanban web       # Disable specific tools
   sah tools enable                   # Enable all tools
   sah tools --global disable web     # Disable web globally

@@ -30,7 +30,7 @@ async fn setup_isolated_context() -> (tempfile::TempDir, CliToolContext) {
 /// Creates a fully isolated test context backed by an `IsolatedTestEnvironment`.
 ///
 /// The full tool union is always registered, so agent-category tools (files,
-/// shell, skill) are available alongside the shared domain tools.
+/// skill) are available alongside the shared domain tools.
 async fn setup_agent_tool_test_context() -> (IsolatedTestEnvironment, CliToolContext) {
     let env = IsolatedTestEnvironment::new().unwrap();
     let temp_path = env.temp_dir();

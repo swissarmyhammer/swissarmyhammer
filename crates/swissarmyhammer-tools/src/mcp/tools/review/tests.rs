@@ -111,7 +111,7 @@ fn review_tool_debug_summarizes_factory_presence() {
 
 /// The FULL schema carries the heavy CLI-generation keys; the WIRE schema drops
 /// every one of them. Mirrors the post-`^4ez75dw` pattern used by
-/// `web/mod.rs` and `shell/mod.rs`.
+/// `web/mod.rs`.
 #[test]
 fn review_full_schema_carries_heavy_keys_wire_omits_them() {
     let tool = ReviewTool::new();

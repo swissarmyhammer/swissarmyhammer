@@ -20,7 +20,6 @@ sah serve
 Complete Tool Ecosystem:
 • File Operations - Read, write, edit, glob pattern matching
 • Todo Management - Track, create, update development tasks
-• Shell Integration - Execute commands and scripts
 • Web Capabilities - Fetch content and search the web
 • Workflow Execution - Run automated development workflows
 
@@ -111,7 +110,6 @@ Development Workflow:
 • todo_mark_complete - Todo completion
 
 Execution:
-• shell_execute - Run shell commands
 • workflow operations - Execute automated workflows
 
 Web Access:
@@ -154,8 +152,7 @@ Automated todo execution:
 # 1. List todos with todo_list
 # 2. Read todo details with todo_show
 # 3. Edit code with files (op: edit)
-# 4. Run tests with shell_execute
-# 5. Mark complete with todo_mark_complete
+# 4. Mark complete with todo_mark_complete
 ```
 
 ## Troubleshooting
@@ -182,7 +179,6 @@ Tools not working:
 
 The MCP server provides AI with direct access to:
 • File system (within project directory)
-• Shell command execution
 • Git operations
 • Web access
 

@@ -57,19 +57,19 @@ async fn test_mcp_server_creation() {
 
 #[tokio::test]
 #[serial(cwd)]
-async fn test_mcp_server_exposes_shell_tools() {
+async fn test_mcp_server_exposes_tools_capability() {
     // Create a test library and server
     let library = TemplateLibrary::new();
     let server = McpServer::new(library).await.unwrap();
 
-    // Test that server info includes shell tools capabilities
+    // Test that server info includes tools capabilities
     let info = server.get_info();
     assert!(
         info.capabilities.tools.is_some(),
         "Server should expose tools capability"
     );
 
-    // Test that we can get the shell execute tool specifically
+    // Test that we can get a specific tool
     // Note: Direct tool access test would require the full MCP request context,
     // so we test that the server is properly configured to expose tools.
     let tools_cap = info.capabilities.tools.unwrap();

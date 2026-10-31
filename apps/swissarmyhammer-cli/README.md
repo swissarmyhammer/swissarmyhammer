@@ -36,11 +36,6 @@ sah provides MCP tools organized by category:
 |------|-------------|
 | `git_changes` | View diffs, status, and branch information |
 
-### Shell
-| Tool | Description |
-|------|-------------|
-| `shell_execute` | Run shell commands with security hardening |
-
 ### Kanban
 | Tool | Description |
 |------|-------------|

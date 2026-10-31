@@ -359,9 +359,6 @@ impl swissarmyhammer_common::lifecycle::Initializable for KanbanTool {
     /// 2. Register `.kanban/` git merge drivers — the tool's own (non-agent)
     ///    config, only for Project and Local scopes (a User-scope install has
     ///    no project dir).
-    ///
-    /// Kanban is not a shell, so unlike `ShellExecuteTool` it does NOT deny the
-    /// `Bash` tool.
     fn init(&self, scope: &InitScope, reporter: &dyn InitReporter) -> Vec<InitResult> {
         self.run_lifecycle(&INIT_SPEC, scope, reporter)
     }
@@ -3378,9 +3375,8 @@ mod tests {
     // an isolated env. The synthetic agents.yaml injects a single Claude-like
     // agent whose MCP configs live under the project dir / isolated home.
     //
-    // Mirrors the shell-tool lifecycle tests in `shell/mod.rs`. Unlike the
-    // shell tool, kanban does NOT deny Bash, and its own-config step is git
-    // merge drivers in `.kanban/` rather than a `.shell/config.yaml`.
+    // Kanban does NOT deny Bash, and its own-config step is git merge drivers
+    // in `.kanban/`.
     // =========================================================================
 
     use mirdan::test_support::MirdanConfigGuard;

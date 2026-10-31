@@ -15,7 +15,7 @@
 //!    working dir points at a repo, and an unscoped grep must search the repo,
 //!    return promptly, and skip `target/`, `.git/`, and `.gitignore`d paths.
 //! 2. A **guard** test that statically forbids `std::env::current_dir()` in the
-//!    file/shell tool handlers, so the fix cannot silently regress.
+//!    file tool handlers, so the fix cannot silently regress.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -256,35 +256,23 @@ async fn glob_unscoped_refuses_filesystem_root() {
     );
 }
 
-/// Static guard: file and shell tool handlers must never call
+/// Static guard: file tool handlers must never call
 /// `std::env::current_dir()`. Default roots and relative-path resolution come
 /// from `ToolContext::session_root`, which is the single sanctioned place that
-/// fallback lives. Test modules (`#[cfg(test)]`) are excluded, and the shell
-/// command-history storage singleton (`shell/state.rs`) is exempt because its
-/// `.shell/` directory is a process-level storage concern with its own
-/// documented GUI-CWD-readonly fallback — not a per-tool-call operating root.
+/// fallback lives. Test modules (`#[cfg(test)]`) are excluded.
 #[test]
 fn tool_handlers_do_not_call_current_dir() {
     let crate_dir = env!("CARGO_MANIFEST_DIR");
     let tools_root = std::path::Path::new(crate_dir).join("src/mcp/tools");
 
     // Directories whose handlers resolve an operating root or relative paths.
-    let scanned_dirs = ["files", "shell"];
-    // Files exempt from the ban (with the reason captured above).
-    let exempt_files = ["state.rs"];
+    let scanned_dirs = ["files"];
 
     let mut offenders: Vec<String> = Vec::new();
 
     for dir in scanned_dirs {
         let dir_path = tools_root.join(dir);
         visit_rs_files(&dir_path, &mut |path| {
-            if exempt_files
-                .iter()
-                .any(|name| path.file_name().and_then(|n| n.to_str()) == Some(*name))
-            {
-                return;
-            }
-
             let src = std::fs::read_to_string(path).expect("read tool source");
 
             // Only scan the non-test portion of each file. Each handler module

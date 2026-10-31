@@ -30,17 +30,12 @@ async fn test_mcp_server_with_rmcp_client() {
 
     let tool_names: Vec<String> = tools.tools.iter().map(|t| t.name.to_string()).collect();
     // `tools/list` composes per connecting client. The default `test-client`
-    // name is an unknown host, served `Shared` tools only — neither the
-    // `Agent`-category `files` tool nor the `Replacement`-category `shell` tool
-    // (which is reserved for Claude). Both remain *callable*; composition gates
+    // name is an unknown host, served `Shared` tools only — not the
+    // `Agent`-category `files` tool. It remains *callable*; composition gates
     // only what is advertised.
     assert!(
         !tool_names.contains(&"files".to_string()),
         "unknown host must not be advertised the Agent-category files tool"
-    );
-    assert!(
-        !tool_names.contains(&"shell".to_string()),
-        "unknown host must not be advertised the Replacement-category shell tool"
     );
 
     // Test a simple tool call - files with glob op should work

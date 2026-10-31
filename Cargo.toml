@@ -62,7 +62,6 @@ members = [
     "crates/swissarmyhammer-commands",
     "benches/embedding_benchmark",
     "crates/swissarmyhammer-sem",
-    "apps/shelltool-cli",
     "apps/code-context-cli",
     "crates/swissarmyhammer-cli-completions",
     "crates/swissarmyhammer-hashline",

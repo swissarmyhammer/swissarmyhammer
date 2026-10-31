@@ -569,7 +569,7 @@ impl ToolContext {
     /// Resolve the session working directory — the root every tool operates against.
     ///
     /// The working directory of a board *is* the working directory of its agent
-    /// session, so all file tools (grep, glob, read, write, edit, shell) resolve
+    /// session, so all file tools (grep, glob, read, write, edit) resolve
     /// relative paths and default search roots from this value, never from the
     /// process current directory. For the bundled GUI app the process CWD is `/`
     /// (a read-only filesystem root); a single app process also hosts multiple
@@ -911,7 +911,6 @@ pub trait McpTool:
             "memo" => Some("memo"),
             "file" | "files" => Some("file"),
             "web" => Some("web"),
-            "shell" => Some("shell"),
             "outline" => Some("outline"),
             "notify" => Some("notify"),
             "kanban" => Some("kanban"),
@@ -1041,8 +1040,8 @@ pub trait McpTool:
 ///   (like Claude Code) already provide natively: file read/write/edit, glob,
 ///   grep, web, skills, subagent delegation. Mounted for hosts that lack it.
 /// - [`ToolCategory::Replacement`] — an agent capability that also supersedes a
-///   named native host tool. `native` is the host tool it replaces (e.g. `shell`
-///   replaces `Bash`). A replacement is an agent capability *and* signals that the
+///   named native host tool. `native` is the host tool it replaces (e.g. `files`
+///   replaces `Edit`). A replacement is an agent capability *and* signals that the
 ///   host's native tool of that name should defer to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolCategory {
@@ -1264,30 +1263,6 @@ impl ToolRegistry {
     /// without maintaining a separate registry per host.
     pub fn list_tools_for_host(&self, host: crate::mcp::host::Host) -> Vec<Tool> {
         self.list_tools_filtered(|tool| host.serves(McpTool::category(tool)))
-    }
-
-    /// Collect the native host tools superseded by the registry's
-    /// [`ToolCategory::Replacement`] tools.
-    ///
-    /// Each `Replacement { native }` tool declares the native host tool it
-    /// supersedes (e.g. `shell` supersedes `"Bash"`, `files` supersedes
-    /// `"Edit"`). This returns those `native` names — the single source of truth
-    /// for which native tools the serve boundary should suppress on a host that
-    /// receives the replacements. Deriving it from the category metadata keeps
-    /// the suppression tied to the served set rather than a hardcoded list, so it
-    /// grows automatically as more `Replacement` tools register. Names are
-    /// deduplicated; order is unspecified.
-    pub fn replacement_natives(&self) -> Vec<&'static str> {
-        let mut natives: Vec<&'static str> = self
-            .iter_tools()
-            .filter_map(|tool| match McpTool::category(tool) {
-                ToolCategory::Replacement { native } => Some(native),
-                _ => None,
-            })
-            .collect();
-        natives.sort_unstable();
-        natives.dedup();
-        natives
     }
 
     /// Build the MCP `Tool` objects for every enabled tool that satisfies
@@ -2114,11 +2089,6 @@ register_tool_category!(
     "Register all git-related tools with the registry"
 );
 register_tool_category!(
-    register_shell_tools,
-    shell,
-    "Register all shell-related tools with the registry"
-);
-register_tool_category!(
     register_kanban_tools,
     kanban,
     "Register all kanban board tools with the registry"
@@ -2164,7 +2134,6 @@ pub async fn create_fully_registered_tool_registry() -> ToolRegistry {
     // Register all tools exactly like McpServer does
     register_file_tools(&mut registry);
     register_git_tools(&mut registry);
-    register_shell_tools(&mut registry);
     register_kanban_tools(&mut registry);
     register_code_context_tools(&mut registry);
     register_web_tools(&mut registry);
@@ -2483,11 +2452,6 @@ mod tests {
         "web_search_and_fetch",
         "Search the web and fetch URL content"
     );
-    test_tool!(
-        ShellExecuteTool,
-        "shell",
-        "Execute shell commands with timeout controls"
-    );
     test_tool!(GitStatusTool, "git_status", "Show the working tree status");
     test_tool!(
         OutlineGenerateTool,
@@ -2511,7 +2475,6 @@ mod tests {
         // Test known categories
         assert_eq!(FilesTool.cli_category(), Some("file"));
         assert_eq!(WebTool.cli_category(), Some("web"));
-        assert_eq!(ShellExecuteTool.cli_category(), Some("shell"));
         assert_eq!(OutlineGenerateTool.cli_category(), Some("outline"));
 
         // Test unknown category
@@ -2526,7 +2489,6 @@ mod tests {
         // Test action extraction
         assert_eq!(FilesTool.cli_name(), "files");
         assert_eq!(WebTool.cli_name(), "search_and_fetch");
-        assert_eq!(ShellExecuteTool.cli_name(), "shell");
         assert_eq!(OutlineGenerateTool.cli_name(), "generate");
 
         // Test unknown category still extracts action
@@ -2912,10 +2874,10 @@ mod tests {
         // Fresh registry — no tools should be disabled
         let mut registry = ToolRegistry::new();
         registry.register(MockTool {
-            name: "shell",
-            description: "shell tool",
+            name: "git",
+            description: "git tool",
         });
-        assert!(registry.is_tool_enabled("shell"));
+        assert!(registry.is_tool_enabled("git"));
         assert!(registry.disabled_tools().is_empty());
         assert_eq!(registry.list_tools().len(), 1);
     }
@@ -2924,13 +2886,13 @@ mod tests {
     fn test_disabled_tool_excluded_from_list_tools() {
         let mut registry = ToolRegistry::new();
         registry.register(MockTool {
-            name: "shell",
-            description: "shell tool",
+            name: "git",
+            description: "git tool",
         });
 
-        registry.set_tool_enabled("shell", false);
+        registry.set_tool_enabled("git", false);
 
-        assert!(!registry.is_tool_enabled("shell"));
+        assert!(!registry.is_tool_enabled("git"));
         assert!(registry.list_tools().is_empty());
         assert!(registry.list_tool_names().is_empty());
         assert_eq!(registry.iter_tools().count(), 0);
@@ -2948,16 +2910,16 @@ mod tests {
     fn test_disabled_tool_excluded_from_cli_command_tree() {
         let mut registry = ToolRegistry::new();
         registry.register(MockTool {
-            name: "shell",
-            description: "shell tool",
+            name: "git",
+            description: "git tool",
         });
 
         // Enabled: it is a CLI command.
-        assert!(registry.get_cli_categories().contains(&"shell".to_string()));
-        assert_eq!(registry.get_tools_for_category("shell").len(), 1);
+        assert!(registry.get_cli_categories().contains(&"git".to_string()));
+        assert_eq!(registry.get_tools_for_category("git").len(), 1);
         assert_eq!(registry.get_cli_tools().len(), 1);
 
-        registry.set_tool_enabled("shell", false);
+        registry.set_tool_enabled("git", false);
 
         // Disabled: the command must be gone, matching `get_tool`.
         assert!(
@@ -2965,7 +2927,7 @@ mod tests {
             "a disabled tool must not contribute a `sah tool` category"
         );
         assert!(
-            registry.get_tools_for_category("shell").is_empty(),
+            registry.get_tools_for_category("git").is_empty(),
             "a disabled tool must not appear under its category"
         );
         assert!(
@@ -2973,7 +2935,7 @@ mod tests {
             "a disabled tool must not be listed as a CLI tool"
         );
         assert!(
-            registry.get_tool("shell").is_none(),
+            registry.get_tool("git").is_none(),
             "guards the premise: lookup already refuses a disabled tool"
         );
     }
@@ -2982,25 +2944,25 @@ mod tests {
     fn test_disabled_tool_blocked_from_get_tool() {
         let mut registry = ToolRegistry::new();
         registry.register(MockTool {
-            name: "shell",
-            description: "shell tool",
+            name: "git",
+            description: "git tool",
         });
 
-        assert!(registry.get_tool("shell").is_some());
-        registry.set_tool_enabled("shell", false);
-        assert!(registry.get_tool("shell").is_none());
+        assert!(registry.get_tool("git").is_some());
+        registry.set_tool_enabled("git", false);
+        assert!(registry.get_tool("git").is_none());
 
         // Re-enabling should restore access
-        registry.set_tool_enabled("shell", true);
-        assert!(registry.get_tool("shell").is_some());
+        registry.set_tool_enabled("git", true);
+        assert!(registry.get_tool("git").is_some());
     }
 
     #[test]
     fn test_set_all_disabled_then_enable_one() {
         let mut registry = ToolRegistry::new();
         registry.register(MockTool {
-            name: "shell",
-            description: "shell tool",
+            name: "git",
+            description: "git tool",
         });
         registry.register(MockTool {
             name: "kanban",
@@ -3011,11 +2973,11 @@ mod tests {
         registry.set_all_enabled(false);
         assert!(registry.list_tools().is_empty());
 
-        // Re-enable only shell
-        registry.set_tool_enabled("shell", true);
+        // Re-enable only git
+        registry.set_tool_enabled("git", true);
 
         let names = registry.list_tool_names();
-        assert!(names.contains(&"shell".to_string()));
+        assert!(names.contains(&"git".to_string()));
         assert!(!names.contains(&"kanban".to_string()));
         assert_eq!(registry.list_tools().len(), 1);
     }
@@ -3065,7 +3027,6 @@ mod tests {
         // Asserts exact ordered equality (not set-equality) so it fails under
         // HashMap iteration order / hash randomization.
         let names_in = [
-            "shell",
             "kanban",
             "git",
             "web",
@@ -3428,15 +3389,15 @@ mod tests {
 
     // --- create_fully_registered_tool_registry tests ---
     //
-    // `create_fully_registered_tool_registry` registers the real shell tool
-    // via `ShellExecuteTool::new()`, which roots its state under the process
-    // CWD — the crate directory under `cargo nextest`. A `CurrentDirGuard`
-    // pins the CWD to a throwaway temp dir for the call so these tests don't
-    // leave a `.shell` directory behind in the crate source tree.
+    // `create_fully_registered_tool_registry` registers the real tools, and a
+    // tool constructor may root state under the process CWD — the crate
+    // directory under `cargo nextest`. A `CurrentDirGuard` pins the CWD to a
+    // throwaway temp dir for the call so these tests don't leave stray
+    // directories behind in the crate source tree.
 
     #[tokio::test]
     async fn test_create_fully_registered_tool_registry_is_non_empty() {
-        let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+        let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated tool state");
         let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(cwd_dir.path())
             .expect("chdir guard");
         let registry = create_fully_registered_tool_registry().await;
@@ -3448,7 +3409,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_fully_registered_tool_registry_has_cli_tools() {
-        let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+        let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated tool state");
         let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(cwd_dir.path())
             .expect("chdir guard");
         let registry = create_fully_registered_tool_registry().await;
@@ -3461,7 +3422,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_fully_registered_tool_registry_validation() {
-        let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+        let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated tool state");
         let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(cwd_dir.path())
             .expect("chdir guard");
         let registry = create_fully_registered_tool_registry().await;
@@ -3478,7 +3439,7 @@ mod tests {
     /// nor the known-tool-name list may still carry it.
     #[tokio::test]
     async fn question_tool_is_not_registered() {
-        let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated shell state");
+        let cwd_dir = tempfile::TempDir::new().expect("temp dir for isolated tool state");
         let _guard = swissarmyhammer_common::test_utils::CurrentDirGuard::new(cwd_dir.path())
             .expect("chdir guard");
         let registry = create_fully_registered_tool_registry().await;
@@ -3530,8 +3491,7 @@ mod tests {
 
     /// Covers the derived `PartialEq`/`Ne` equality semantics of `ToolCategory`:
     /// two `Replacement` variants with the same native name compare equal, and a
-    /// `Replacement` is never equal to an `Agent`. The shell tool's actual
-    /// override is asserted in `shell::tests::test_category_is_replacement_for_bash`.
+    /// `Replacement` is never equal to an `Agent`.
     #[test]
     fn test_tool_category_equality_semantics() {
         assert_eq!(
@@ -3542,99 +3502,6 @@ mod tests {
             ToolCategory::Replacement { native: "Bash" },
             ToolCategory::Agent
         );
-    }
-
-    /// Mock tool reporting a `Replacement` category for a configurable native.
-    struct MockReplacementTool {
-        name: &'static str,
-        native: &'static str,
-    }
-    impl swissarmyhammer_common::health::Doctorable for MockReplacementTool {
-        fn name(&self) -> &str {
-            self.name
-        }
-        fn category(&self) -> &str {
-            "tools"
-        }
-        fn run_health_checks(&self) -> Vec<swissarmyhammer_common::health::HealthCheck> {
-            Vec::new()
-        }
-        fn is_applicable(&self) -> bool {
-            true
-        }
-    }
-    impl swissarmyhammer_common::lifecycle::Initializable for MockReplacementTool {
-        fn name(&self) -> &str {
-            self.name
-        }
-        fn category(&self) -> &str {
-            "tools"
-        }
-    }
-    #[async_trait::async_trait]
-    impl McpTool for MockReplacementTool {
-        fn name(&self) -> &'static str {
-            self.name
-        }
-        fn description(&self) -> &'static str {
-            "A replacement tool"
-        }
-        fn schema(&self) -> serde_json::Value {
-            serde_json::json!({"type": "object", "properties": {}})
-        }
-        async fn execute(
-            &self,
-            _args: serde_json::Map<String, serde_json::Value>,
-            _ctx: &ToolContext,
-        ) -> std::result::Result<CallToolResult, McpError> {
-            Ok(BaseToolImpl::create_success_response("replacement"))
-        }
-        fn category(&self) -> ToolCategory {
-            ToolCategory::Replacement {
-                native: self.native,
-            }
-        }
-    }
-
-    #[test]
-    fn test_replacement_natives_collects_only_replacement_natives() {
-        let mut registry = ToolRegistry::new();
-        // Shared and Agent tools contribute no natives.
-        registry.register(KanbanTool);
-        registry.register(MockAgentTool);
-        registry.register(MockReplacementTool {
-            name: "shell-mock",
-            native: "Bash",
-        });
-
-        assert_eq!(registry.replacement_natives(), vec!["Bash"]);
-    }
-
-    #[test]
-    fn test_replacement_natives_dedups_and_sorts() {
-        let mut registry = ToolRegistry::new();
-        registry.register(MockReplacementTool {
-            name: "z-tool",
-            native: "Zsh",
-        });
-        registry.register(MockReplacementTool {
-            name: "a-tool",
-            native: "Bash",
-        });
-        registry.register(MockReplacementTool {
-            name: "dup-tool",
-            native: "Bash",
-        });
-
-        // Sorted and deduplicated regardless of registration/name order.
-        assert_eq!(registry.replacement_natives(), vec!["Bash", "Zsh"]);
-    }
-
-    #[test]
-    fn test_replacement_natives_empty_when_no_replacements() {
-        let mut registry = ToolRegistry::new();
-        registry.register(KanbanTool);
-        assert!(registry.replacement_natives().is_empty());
     }
 
     // --- get_tool_by_cli_name tests ---

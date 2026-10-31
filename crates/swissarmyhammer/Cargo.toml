@@ -30,7 +30,6 @@ async-trait = { workspace = true }
 
 # SwissArmyHammer common functionality
 swissarmyhammer-common = { workspace = true }
-swissarmyhammer-shell = { workspace = true }
 swissarmyhammer-templating = { workspace = true }
 
 

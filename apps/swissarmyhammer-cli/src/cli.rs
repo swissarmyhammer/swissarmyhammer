@@ -223,7 +223,7 @@ the tool surface visible to AI agents.
 Examples:
   sah tools                          # List all tools with status
   sah tools disable                  # Disable all tools
-  sah tools enable shell git         # Enable specific tools
+  sah tools enable files git         # Enable specific tools
   sah tools disable kanban web       # Disable specific tools
   sah tools enable                   # Enable all tools
   sah tools --global disable web     # Disable web globally
@@ -673,7 +673,7 @@ mod tests {
     #[test]
     fn test_tools_enable_multiple_names() {
         let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "tools", "enable", "shell", "git"]);
+            Cli::try_parse_from_args(["swissarmyhammer", "tools", "enable", "files", "git"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -683,7 +683,7 @@ mod tests {
         }) = cli.command
         {
             assert!(!global);
-            assert_eq!(names, vec!["shell", "git"]);
+            assert_eq!(names, vec!["files", "git"]);
         } else {
             unreachable!("Expected Tools Enable command with names");
         }
@@ -710,7 +710,7 @@ mod tests {
     #[test]
     fn test_tools_global_flag_with_enable() {
         let result =
-            Cli::try_parse_from_args(["swissarmyhammer", "tools", "--global", "enable", "shell"]);
+            Cli::try_parse_from_args(["swissarmyhammer", "tools", "--global", "enable", "files"]);
         assert!(result.is_ok());
 
         let cli = result.unwrap();
@@ -720,7 +720,7 @@ mod tests {
         }) = cli.command
         {
             assert!(global);
-            assert_eq!(names, vec!["shell"]);
+            assert_eq!(names, vec!["files"]);
         } else {
             unreachable!("Expected Tools Enable command with global flag");
         }

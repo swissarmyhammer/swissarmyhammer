@@ -46,7 +46,7 @@ use super::tool_handlers::ToolHandlers;
 use super::tool_registry::{
     register_code_context_tools, register_diagnostics_tools, register_file_tools,
     register_git_tools, register_kanban_tools, register_ralph_tools, register_review_tools,
-    register_shell_tools, register_web_tools, ToolContext, ToolRegistry,
+    register_web_tools, ToolContext, ToolRegistry,
 };
 use super::tools::agent::register_agent_tools;
 use super::tools::skill::register_skill_tools;
@@ -341,7 +341,6 @@ impl McpServer {
         register_kanban_tools(tool_registry);
         register_web_tools(tool_registry);
         register_code_context_tools(tool_registry);
-        register_shell_tools(tool_registry);
         register_ralph_tools(tool_registry);
         register_agent_tools(tool_registry, agent_library, prompt_library.clone());
         register_file_tools(tool_registry);
@@ -673,8 +672,8 @@ mod tests {
         // boundary, not in registration.
         let tool_names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
         assert!(
-            tool_names.contains(&"shell".to_string()),
-            "shell tool should be registered, got: {:?}",
+            tool_names.contains(&"files".to_string()),
+            "files tool should be registered, got: {:?}",
             tool_names
         );
         assert!(
@@ -737,8 +736,8 @@ mod tests {
     async fn test_execute_tool_has_tool_check() {
         let server = McpServer::new(TemplateLibrary::default()).await.unwrap();
 
-        // "shell" is a non-agent tool, always available
-        assert!(server.has_tool("shell").await, "shell tool should exist");
+        // "kanban" is a non-agent tool, always available
+        assert!(server.has_tool("kanban").await, "kanban tool should exist");
         assert!(
             !server.has_tool("definitely_not_a_tool").await,
             "nonexistent tool should not exist"

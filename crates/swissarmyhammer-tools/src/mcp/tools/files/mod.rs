@@ -132,7 +132,7 @@ impl McpTool for FilesTool {
     fn category(&self) -> ToolCategory {
         // File read/write/edit/glob/grep supersedes the host's native edit
         // surface, so it is a `Replacement` for `Edit`: the primary per-client
-        // serve advertises it to Claude (mirroring how `shell` replaces `Bash`)
+        // serve advertises it to Claude
         // and serve-time deny closes the native `Edit` tool. The validator
         // surface serves the read-only variant of this same unified tool
         // ([`FilesTool::read_only`]) via the validator profile

@@ -11,9 +11,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::mcp::tool_registry::{
-    register_file_tools, register_shell_tools, register_web_tools, ToolRegistry,
-};
+use crate::mcp::tool_registry::{register_file_tools, register_web_tools, ToolRegistry};
 use crate::mcp::tools::agent::register_agent_tools;
 use crate::mcp::tools::skill::register_skill_tools;
 
@@ -75,7 +73,7 @@ impl McpServer {
     /// libraries, etc.) but has a separate `ToolRegistry` containing only the
     /// tools a base agent needs to be useful: the `Agent`-category tools
     /// (the unified `files` tool — read/write/edit/glob/grep — web, skill,
-    /// subagent) plus the shell `Replacement` tool. This is the set an ACP agent
+    /// subagent). This is the set an ACP agent
     /// with no native tools mounts in-process as its own built-ins, so the agent
     /// is fully tooled even when handed zero external MCP servers.
     ///
@@ -95,7 +93,7 @@ impl McpServer {
     /// verbatim — `compose_per_client` is `false`, just like the validator
     /// server.
     pub fn create_agent_tools_server(&self) -> McpServer {
-        // `register_file_tools`, `register_web_tools`, `register_shell_tools`,
+        // `register_file_tools`, `register_web_tools`,
         // `register_agent_tools`, and `register_skill_tools` are imported at
         // module scope.
         let mut agent_registry = ToolRegistry::new();
@@ -104,10 +102,6 @@ impl McpServer {
         // glob/grep for the agent.
         register_file_tools(&mut agent_registry);
         register_web_tools(&mut agent_registry);
-        // Shell is the `Replacement{native:"Bash"}` tool; an agent mounting this
-        // set gets its shell from here (and only here), satisfying the "shell
-        // appears exactly once" invariant.
-        register_shell_tools(&mut agent_registry);
         register_agent_tools(
             &mut agent_registry,
             self.agent_library.clone(),
@@ -211,10 +205,6 @@ mod tests {
         assert!(
             validator_tools.get_tool("kanban").is_none(),
             "Validator should NOT have 'kanban' tool"
-        );
-        assert!(
-            validator_tools.get_tool("shell").is_none(),
-            "Validator should NOT have 'shell' tool"
         );
         assert!(
             validator_tools.get_tool("git").is_none(),
@@ -486,10 +476,12 @@ mod tests {
         }
 
         // Should NOT be able to execute non-validator tools
-        let result = validator.execute_tool("shell", serde_json::json!({})).await;
+        let result = validator
+            .execute_tool("kanban", serde_json::json!({}))
+            .await;
         assert!(
             result.is_err(),
-            "Non-validator tool 'shell' should not be executable on validator server"
+            "Non-validator tool 'kanban' should not be executable on validator server"
         );
     }
 }

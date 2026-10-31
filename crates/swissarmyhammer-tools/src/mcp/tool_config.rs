@@ -11,7 +11,7 @@
 //! ```yaml
 //! # tools.yaml — tool enable/disable configuration
 //! # Unlisted tools default to enabled.
-//! shell:
+//! ralph:
 //!   enabled: true
 //! kanban:
 //!   enabled: false
@@ -35,7 +35,6 @@ pub const KNOWN_TOOL_NAMES: &[&str] = &[
     "git",
     "kanban",
     "ralph",
-    "shell",
     "skill",
     "web",
 ];
@@ -63,7 +62,7 @@ impl ToolEntry {
 ///
 /// Serializes/deserializes as a flat YAML mapping:
 /// ```yaml
-/// shell:
+/// ralph:
 ///   enabled: true
 /// kanban:
 ///   enabled: false
@@ -330,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_yaml_round_trip() {
-        let config = make_config(&[("shell", true), ("kanban", false)]);
+        let config = make_config(&[("ralph", true), ("kanban", false)]);
         let yaml = serde_yaml_ng::to_string(&config).expect("serialize");
         let decoded: ToolConfig = serde_yaml_ng::from_str(&yaml).expect("deserialize");
         assert_eq!(config, decoded);
@@ -338,16 +337,16 @@ mod tests {
 
     #[test]
     fn test_merge_project_overrides_global() {
-        // Global disables shell; project re-enables it.
-        let mut global = make_config(&[("shell", false)]);
-        let project = make_config(&[("shell", true)]);
+        // Global disables ralph; project re-enables it.
+        let mut global = make_config(&[("ralph", false)]);
+        let project = make_config(&[("ralph", true)]);
         global.merge(project);
-        assert!(global.entries()["shell"].is_enabled());
+        assert!(global.entries()["ralph"].is_enabled());
     }
 
     #[test]
     fn test_disabled_tools_extraction() {
-        let config = make_config(&[("shell", true), ("kanban", false), ("git", false)]);
+        let config = make_config(&[("ralph", true), ("kanban", false), ("git", false)]);
         let mut disabled = config.disabled_tools();
         disabled.sort();
         assert_eq!(disabled, vec!["git".to_string(), "kanban".to_string()]);
@@ -364,7 +363,7 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let path = dir.path().join("tools.yaml");
 
-        let original = make_config(&[("shell", true), ("kanban", false)]);
+        let original = make_config(&[("ralph", true), ("kanban", false)]);
         save_tool_config(&original, &path).expect("save");
 
         let loaded = load_tool_config_from_path(&path).expect("load");
@@ -376,44 +375,16 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let path = dir.path().join("nested").join("dir").join("tools.yaml");
 
-        let config = make_config(&[("shell", true)]);
+        let config = make_config(&[("ralph", true)]);
         save_tool_config(&config, &path).expect("save with nested dirs");
         assert!(path.exists());
     }
 
     #[test]
     fn test_merge_empty_other_leaves_self_unchanged() {
-        let mut config = make_config(&[("shell", false)]);
+        let mut config = make_config(&[("ralph", false)]);
         config.merge(ToolConfig::default());
-        assert!(!config.entries()["shell"].is_enabled());
-    }
-
-    /// Regression guard: `ShellExecuteTool::new_isolated()` — the constructor
-    /// this file's tests use in place of `ShellExecuteTool::new()` — must
-    /// never create `.shell` under the crate directory, even when the
-    /// process CWD is pinned there. That is exactly the CWD `cargo nextest`
-    /// gives every test binary in this crate, so this reproduces the
-    /// conditions that used to leave a stray `.shell/` in
-    /// `crates/swissarmyhammer-tools/` (see the removed calls to
-    /// `ShellExecuteTool::new()` this test replaces).
-    #[tokio::test]
-    #[serial_test::serial(cwd)]
-    async fn test_new_isolated_does_not_create_shell_dir_in_crate_directory() {
-        use swissarmyhammer_common::test_utils::CurrentDirGuard;
-
-        let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let shell_dir = crate_dir.join(".shell");
-        let existed_before = shell_dir.exists();
-
-        let _cwd = CurrentDirGuard::new(crate_dir).expect("chdir into crate dir");
-
-        let _tool = crate::mcp::tools::shell::ShellExecuteTool::new_isolated();
-
-        assert_eq!(
-            shell_dir.exists(),
-            existed_before,
-            "ShellExecuteTool::new_isolated() must not create `.shell` in the crate directory"
-        );
+        assert!(!config.entries()["ralph"].is_enabled());
     }
 
     /// Validate that every name in KNOWN_TOOL_NAMES exists in a fully-registered
@@ -421,7 +392,7 @@ mod tests {
     /// with the actual tool implementations.
     ///
     /// `#[tokio::test]` is required because several register helpers and tool
-    /// constructors internally touch async resources (e.g. ShellState, kanban
+    /// constructors internally touch async resources (e.g. kanban
     /// storage) that need a Tokio runtime to be present.
     #[tokio::test]
     async fn test_known_tool_names_matches_registry() {
@@ -436,11 +407,6 @@ mod tests {
         use crate::mcp::tools::{agent::register_agent_tools, skill::register_skill_tools};
 
         let mut registry = ToolRegistry::new();
-        // Isolated: this test only checks tool *names* against KNOWN_TOOL_NAMES,
-        // so an isolated ShellExecuteTool stands in for the real
-        // `register_shell_tools`, which would otherwise create `.shell` under
-        // the crate directory (nextest's CWD for this test binary).
-        registry.register(crate::mcp::tools::shell::ShellExecuteTool::new_isolated());
         register_file_tools(&mut registry);
         register_git_tools(&mut registry);
         register_kanban_tools(&mut registry);
@@ -470,9 +436,8 @@ mod tests {
 
     // NOTE: The watcher tests use `#[tokio::test]` even though `check_and_reload`
     // is a synchronous function.  This is required because
-    // `ShellExecuteTool::new_isolated()` internally accesses shared async state
-    // (ShellState) that requires a Tokio runtime to be active at construction
-    // time.
+    // Tool constructors may touch async state that requires a Tokio runtime to be
+    // active at construction time.
     //
     // Isolation requirements: tests that trigger an actual reload run
     // `load_merged_tool_config()`, which reads the *process-global* HOME (via
@@ -485,7 +450,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_watcher_detects_file_change() {
-        use crate::mcp::tool_registry::ToolRegistry;
+        use crate::mcp::tool_registry::{register_ralph_tools, ToolRegistry};
 
         let _env = IsolatedTestEnvironment::new().expect("isolated env");
         let cwd_dir = TempDir::new().expect("cwd temp dir");
@@ -494,8 +459,8 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let path = dir.path().join("tools.yaml");
 
-        // Create initial config with shell disabled
-        let config = make_config(&[("shell", false)]);
+        // Create initial config with ralph disabled
+        let config = make_config(&[("ralph", false)]);
         save_tool_config(&config, &path).expect("save");
 
         // Create a watcher pointing at our test file
@@ -508,30 +473,30 @@ mod tests {
 
         // Create a registry with a mock tool
         let mut registry = ToolRegistry::new();
-        registry.register(crate::mcp::tools::shell::ShellExecuteTool::new_isolated());
+        register_ralph_tools(&mut registry);
 
         // First check — mtimes match, no reload
         assert!(!watcher.check_and_reload(&mut registry));
 
-        // Modify the file (enable shell)
+        // Modify the file (enable ralph)
         std::thread::sleep(std::time::Duration::from_millis(50));
-        let new_config = make_config(&[("shell", true)]);
+        let new_config = make_config(&[("ralph", true)]);
         save_tool_config(&new_config, &path).expect("save updated");
 
         // Second check — mtime changed, should reload
         assert!(watcher.check_and_reload(&mut registry));
-        assert!(registry.is_tool_enabled("shell"));
+        assert!(registry.is_tool_enabled("ralph"));
     }
 
     // NOTE: #[tokio::test] is required here — see explanation on test_watcher_detects_file_change.
     #[tokio::test]
     async fn test_watcher_no_reload_when_unchanged() {
-        use crate::mcp::tool_registry::ToolRegistry;
+        use crate::mcp::tool_registry::{register_ralph_tools, ToolRegistry};
 
         let dir = TempDir::new().expect("temp dir");
         let path = dir.path().join("tools.yaml");
 
-        let config = make_config(&[("shell", false)]);
+        let config = make_config(&[("ralph", false)]);
         save_tool_config(&config, &path).expect("save");
 
         let mut watcher = ToolConfigWatcher {
@@ -542,7 +507,7 @@ mod tests {
         };
 
         let mut registry = ToolRegistry::new();
-        registry.register(crate::mcp::tools::shell::ShellExecuteTool::new_isolated());
+        register_ralph_tools(&mut registry);
 
         // Check twice with no file change — both should return false
         assert!(!watcher.check_and_reload(&mut registry));
@@ -551,14 +516,14 @@ mod tests {
 
     // NOTE: #[tokio::test] is required here — see explanation on test_watcher_detects_file_change.
     // Isolation: same constraint as test_watcher_detects_file_change. The
-    // assertion `is_tool_enabled("shell")` after reload would fail if the
+    // assertion `is_tool_enabled("ralph")` after reload would fail if the
     // process HOME or CWD pointed to a workspace whose merged config disabled
-    // shell, so we isolate HOME with IsolatedTestEnvironment and chdir into a
+    // ralph, so we isolate HOME with IsolatedTestEnvironment and chdir into a
     // clean temp dir under #[serial(cwd)].
     #[tokio::test]
     #[serial_test::serial(cwd)]
     async fn test_watcher_deleted_file_reverts_to_all_enabled() {
-        use crate::mcp::tool_registry::ToolRegistry;
+        use crate::mcp::tool_registry::{register_ralph_tools, ToolRegistry};
 
         let _env = IsolatedTestEnvironment::new().expect("isolated env");
         let cwd_dir = TempDir::new().expect("cwd temp dir");
@@ -567,8 +532,8 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let path = dir.path().join("tools.yaml");
 
-        // Create config disabling shell
-        let config = make_config(&[("shell", false)]);
+        // Create config disabling ralph
+        let config = make_config(&[("ralph", false)]);
         save_tool_config(&config, &path).expect("save");
 
         let mut watcher = ToolConfigWatcher {
@@ -579,17 +544,17 @@ mod tests {
         };
 
         let mut registry = ToolRegistry::new();
-        registry.register(crate::mcp::tools::shell::ShellExecuteTool::new_isolated());
+        register_ralph_tools(&mut registry);
 
         // Apply initial config
         apply_tool_config(&mut registry, &config);
-        assert!(!registry.is_tool_enabled("shell"));
+        assert!(!registry.is_tool_enabled("ralph"));
 
         // Delete the file
         std::fs::remove_file(&path).expect("delete");
 
         // Watcher should detect deletion (mtime goes from Some to None) and reload
         assert!(watcher.check_and_reload(&mut registry));
-        assert!(registry.is_tool_enabled("shell"));
+        assert!(registry.is_tool_enabled("ralph"));
     }
 }

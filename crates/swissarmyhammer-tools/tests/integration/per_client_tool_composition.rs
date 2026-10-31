@@ -7,8 +7,8 @@
 //! under different client identities, asserting the advertised set rather than
 //! calling the internal filter directly:
 //!
-//! - A **Claude** client is advertised `Shared` + `Replacement` tools — `shell`
-//!   and `files` are present, but `Agent`-category tools (web/skill/agent) are
+//! - A **Claude** client is advertised `Shared` + `Replacement` tools — `files`
+//!   is present, but `Agent`-category tools (web/skill/agent) are
 //!   not.
 //! - An **unknown** client gets the conservative default: `Shared` only — no
 //!   `Replacement`, no `Agent` tools.
@@ -23,10 +23,10 @@ use swissarmyhammer_tools::mcp::{
     unified_server::{start_mcp_server_with_options, McpServerHandle, McpServerMode},
 };
 
-/// `Replacement`-category tools: served only to Claude. `shell` replaces `Bash`
-/// and `files` replaces `Edit`; both supersede the host's native surface, so the
-/// primary per-client serve advertises them to Claude.
-const REPLACEMENT_TOOLS: &[&str] = &["shell", "files"];
+/// `Replacement`-category tools: served only to Claude. `files` replaces `Edit`
+/// and supersedes the host's native surface, so the primary per-client serve
+/// advertises it to Claude.
+const REPLACEMENT_TOOLS: &[&str] = &["files"];
 
 /// `Agent`-category tools: never advertised by SAH to any host.
 const AGENT_TOOLS: &[&str] = &["web", "skill", "agent"];
@@ -87,9 +87,9 @@ fn assert_all_present(names: &HashSet<String>, required: &[&str], context: &str)
 }
 
 /// A Claude client (`"claude-code"`) is advertised `Shared` + `Replacement`:
-/// `shell` and `files` are present, every `Agent` tool is absent.
+/// `files` is present, every `Agent` tool is absent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn claude_client_gets_shared_plus_shell_not_agent_tools() {
+async fn claude_client_gets_shared_plus_replacement_not_agent_tools() {
     let (mut server, _temp) = start_isolated_server().await;
 
     let names = advertised_tools(&server, "claude-code").await;

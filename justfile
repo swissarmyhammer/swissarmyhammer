@@ -7,7 +7,6 @@ install:
     cargo install --locked --path apps/swissarmyhammer-cli
     cargo install --locked --path apps/mirdan-cli
     cargo install --locked --path apps/kanban-cli
-    cargo install --locked --path apps/shelltool-cli
     cargo install --locked --path apps/code-context-cli
 
 sah:
@@ -18,9 +17,6 @@ kanban:
 
 mirdan:
     cargo install --locked --path apps/mirdan-cli
-
-shelltool:
-    cargo install --locked --path apps/shelltool-cli
 
 outdated:
     cargo install cargo-edit

@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_validate_tool_names_valid() {
-        assert!(validate_tool_names(&["shell".to_string(), "git".to_string()]).is_ok());
+        assert!(validate_tool_names(&["ralph".to_string(), "git".to_string()]).is_ok());
     }
 
     #[test]
@@ -220,7 +220,7 @@ mod tests {
     fn test_load_tool_config_for_edit_existing_file() {
         let dir = TempDir::new().expect("temp dir");
         let path = dir.path().join("tools.yaml");
-        let original = make_config(&[("shell", false)]);
+        let original = make_config(&[("ralph", false)]);
         save_tool_config(&original, &path).expect("save");
 
         let loaded = load_tool_config_for_edit(&path);
@@ -235,7 +235,7 @@ mod tests {
         let path = dir.path().join("tools.yaml");
 
         // Pre-populate with some disabled tools.
-        let initial = make_config(&[("shell", false), ("kanban", false)]);
+        let initial = make_config(&[("ralph", false), ("kanban", false)]);
         save_tool_config(&initial, &path).expect("save");
 
         let mut config = load_tool_config_for_edit(&path);
@@ -274,18 +274,18 @@ mod tests {
         let dir = TempDir::new().expect("temp dir");
         let path = dir.path().join("tools.yaml");
 
-        // Start with shell disabled.
-        let initial = make_config(&[("shell", false)]);
+        // Start with ralph disabled.
+        let initial = make_config(&[("ralph", false)]);
         save_tool_config(&initial, &path).expect("save");
 
-        // Re-enable shell.
+        // Re-enable ralph.
         let mut config = load_tool_config_for_edit(&path);
         config
             .entries_mut()
-            .insert("shell".to_string(), ToolEntry::new(true));
+            .insert("ralph".to_string(), ToolEntry::new(true));
         save_tool_config(&config, &path).expect("save");
 
         let reloaded = load_tool_config_for_edit(&path);
-        assert!(reloaded.entries()["shell"].is_enabled());
+        assert!(reloaded.entries()["ralph"].is_enabled());
     }
 }

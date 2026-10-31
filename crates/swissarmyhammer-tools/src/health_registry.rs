@@ -12,8 +12,7 @@ use swissarmyhammer_common::health::{Doctorable, HealthCheck};
 use crate::mcp::tool_registry::ToolRegistry;
 use crate::mcp::{
     register_code_context_tools, register_diagnostics_tools, register_file_tools,
-    register_git_tools, register_kanban_tools, register_ralph_tools, register_shell_tools,
-    register_web_tools,
+    register_git_tools, register_kanban_tools, register_ralph_tools, register_web_tools,
 };
 // The specialized `review` registration lives on the tool module, like
 // `register_review_tool_with_factories` the server wiring uses.
@@ -210,7 +209,6 @@ pub async fn collect_all_health_checks(workspace_root: &std::path::Path) -> Vec<
     // surfacing at least one OK line via the Doctorable default.
     register_file_tools(&mut tool_registry);
     register_git_tools(&mut tool_registry);
-    register_shell_tools(&mut tool_registry);
     register_kanban_tools(&mut tool_registry);
     register_web_tools(&mut tool_registry);
     register_code_context_tools(&mut tool_registry);
@@ -450,11 +448,10 @@ mod tests {
         );
     }
 
-    /// `collect_all_health_checks` calls `register_shell_tools`, which
-    /// registers the real `ShellExecuteTool::new()` — the constructor that
-    /// roots its state under the process CWD (the crate directory under
-    /// `cargo nextest`). A `CurrentDirGuard` pins the CWD to a throwaway
-    /// temp dir for the call so these tests don't leave a `.shell` directory
+    /// `collect_all_health_checks` registers the real tools, and a tool
+    /// constructor may root state under the process CWD (the crate directory
+    /// under `cargo nextest`). A `CurrentDirGuard` pins the CWD to a throwaway
+    /// temp dir for the call so these tests don't leave stray directories
     /// behind in the crate source tree. `#[serial_test::serial(cwd)]` keeps
     /// this in step with the other CWD-mutating tests in this file.
     #[tokio::test]
@@ -462,7 +459,7 @@ mod tests {
     async fn test_collect_all_health_checks() {
         use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
-        let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
+        let cwd_dir = TempDir::new().expect("temp dir for isolated tool state");
         let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
         let checks = collect_all_health_checks(cwd_dir.path()).await;
 
@@ -482,7 +479,7 @@ mod tests {
     async fn test_web_search_health_check_included() {
         use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
-        let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
+        let cwd_dir = TempDir::new().expect("temp dir for isolated tool state");
         let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
         let checks = collect_all_health_checks(cwd_dir.path()).await;
 
@@ -505,7 +502,7 @@ mod tests {
     async fn test_all_tool_groups_enumerated() {
         use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
-        let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
+        let cwd_dir = TempDir::new().expect("temp dir for isolated tool state");
         let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
         let checks = collect_all_health_checks(cwd_dir.path()).await;
 
@@ -546,7 +543,7 @@ mod tests {
     async fn test_review_validators_health_check_included() {
         use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
-        let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
+        let cwd_dir = TempDir::new().expect("temp dir for isolated tool state");
         let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
         let checks = collect_all_health_checks(cwd_dir.path()).await;
 
@@ -573,7 +570,7 @@ mod tests {
     async fn test_prompt_health_checks_included() {
         use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
-        let cwd_dir = TempDir::new().expect("temp dir for isolated shell state");
+        let cwd_dir = TempDir::new().expect("temp dir for isolated tool state");
         let _cwd_guard = CurrentDirGuard::new(cwd_dir.path()).expect("chdir guard");
         let checks = collect_all_health_checks(cwd_dir.path()).await;
 

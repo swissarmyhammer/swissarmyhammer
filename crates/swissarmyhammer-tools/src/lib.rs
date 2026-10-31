@@ -6,7 +6,6 @@
 //! the SwissArmyHammer prompt management library. It includes tools for:
 //!
 //! - File operations
-//! - Shell command execution
 //! - Todo list management
 //!
 //! ## Features
@@ -48,7 +47,6 @@
 //!
 //! // Register individual tool categories
 //! swissarmyhammer_tools::register_file_tools(&mut registry);
-//! swissarmyhammer_tools::register_shell_tools(&mut registry);
 //!
 //! // Access registered tools
 //! let tool_names: Vec<_> = registry.list_tools().iter()
@@ -74,7 +72,7 @@ pub use mcp::McpServer;
 pub use mcp::{
     register_agent_tools, register_code_context_tools, register_diagnostics_tools,
     register_file_tools, register_git_tools, register_kanban_tools, register_ralph_tools,
-    register_review_tools, register_shell_tools, register_skill_tools, register_web_tools,
+    register_review_tools, register_skill_tools, register_web_tools,
 };
 pub use mcp::{ToolContext, ToolRegistry};
 
