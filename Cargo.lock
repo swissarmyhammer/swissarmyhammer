@@ -6970,24 +6970,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "swissarmyhammer-shell"
-version = "0.20.3"
-dependencies = [
- "regex",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "swissarmyhammer-common",
- "swissarmyhammer-config",
- "swissarmyhammer-directory",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "tracing-test",
-]
-
-[[package]]
 name = "swissarmyhammer-skills"
 version = "0.20.3"
 dependencies = [

@@ -12,7 +12,6 @@ members = [
     "crates/swissarmyhammer-directory",
     "crates/swissarmyhammer-build",
     "crates/swissarmyhammer-git",
-    "crates/swissarmyhammer-shell",
     "crates/swissarmyhammer-templating",
 
     "crates/swissarmyhammer-agent",
@@ -298,7 +297,6 @@ swissarmyhammer-merge = { path = "crates/swissarmyhammer-merge" }
 swissarmyhammer-search = { path = "crates/swissarmyhammer-search" }
 swissarmyhammer-perspectives = { path = "crates/swissarmyhammer-perspectives" }
 swissarmyhammer-project-detection = { path = "crates/swissarmyhammer-project-detection" }
-swissarmyhammer-shell = { path = "crates/swissarmyhammer-shell" }
 swissarmyhammer-skills = { path = "crates/swissarmyhammer-skills" }
 swissarmyhammer-statusline = { path = "crates/swissarmyhammer-statusline" }
 swissarmyhammer-store = { path = "crates/swissarmyhammer-store" }
