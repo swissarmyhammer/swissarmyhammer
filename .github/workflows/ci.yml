@@ -99,6 +99,25 @@ jobs:
             brew install go
           fi
           swift --version
+      - name: Require a Swift toolchain that can run swift format
+        # The toolchain is the Swift formatter: `idioms-swift` runs
+        # `swift format lint --assume-filename ... -`, and `swift format`
+        # accepts that option pair only at Swift 6.2 and newer. An older
+        # toolchain makes the gate judge nothing, so fail here with a clear
+        # message instead.
+        run: |
+          required_major=6
+          required_minor=2
+          version="$(swift --version 2>&1 | sed -n 's/.*Swift version \([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p' | head -n 1)"
+          read -r major minor <<< "$version"
+          if [ -z "${major:-}" ] || [ -z "${minor:-}" ]; then
+            echo "::error::Cannot read the Swift version from 'swift --version'."
+            exit 1
+          fi
+          if [ "$major" -lt "$required_major" ] || { [ "$major" -eq "$required_major" ] && [ "$minor" -lt "$required_minor" ]; }; then
+            echo "::error::Swift $major.$minor is too old. The idioms-swift rule needs 'swift format' from Swift $required_major.$required_minor or newer (Xcode 26 or newer)."
+            exit 1
+          fi
       - name: Ensure the tools that declare no install command are available
         # `swiftlint`, `periphery` and `dart` ship only through Homebrew, which
         # installs the current version and therefore cannot pin one, so their
@@ -107,9 +126,6 @@ jobs:
         run: |
           if ! command -v swiftlint &>/dev/null; then
             brew install swiftlint
-          fi
-          if ! command -v swiftformat &>/dev/null; then
-            brew install swiftformat
           fi
           # `periphery` comes from homebrew-core, not from the vendor tap. The
           # tap ships 2.21.2, whose scan output `dead-code-swift` cannot read,
