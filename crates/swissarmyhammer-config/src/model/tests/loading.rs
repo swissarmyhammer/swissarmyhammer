@@ -67,10 +67,10 @@ fn test_read_model_content_success() {
     // Reading an existing file should return its content
     let temp_dir = tempfile::TempDir::new().expect("create temp dir");
     let file_path = temp_dir.path().join("test.yaml");
-    std::fs::write(&file_path, "executor:\n  type: llama-embedding\n").expect("write");
+    std::fs::write(&file_path, "executor:\n  type: ane-embedding\n").expect("write");
 
     let content = ModelManager::read_model_content(&file_path).expect("should read");
-    assert!(content.contains("llama-embedding"));
+    assert!(content.contains("ane-embedding"));
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn test_process_directory_entries_mixed_success_and_failure() {
     let temp_dir = tempfile::TempDir::new().expect("create temp dir");
 
     // Valid model file
-    let valid_content = "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n";
+    let valid_content = "executor:\n  type: ane-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n";
     fs::write(temp_dir.path().join("good-model.yaml"), valid_content).expect("write valid");
 
     // Invalid YAML model file (parseable YAML but invalid ModelConfig)
@@ -111,7 +111,7 @@ fn test_process_directory_entries_all_valid() {
     use std::fs;
     let temp_dir = tempfile::TempDir::new().expect("create temp dir");
 
-    let content = "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n";
+    let content = "executor:\n  type: ane-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n";
     fs::write(temp_dir.path().join("model-a.yaml"), content).expect("write a");
     fs::write(temp_dir.path().join("model-b.yaml"), content).expect("write b");
 
@@ -184,11 +184,11 @@ fn test_load_models_from_dir_end_to_end_mixed() {
     let temp_dir = tempfile::TempDir::new().expect("create temp dir");
 
     // Valid model with description
-    let content_with_desc = "---\ndescription: \"My custom model\"\n---\nexecutor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n";
+    let content_with_desc = "---\ndescription: \"My custom model\"\n---\nexecutor:\n  type: ane-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n";
     fs::write(temp_dir.path().join("custom.yaml"), content_with_desc).expect("write");
 
     // Valid model without description
-    let content_no_desc = "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: true\n";
+    let content_no_desc = "executor:\n  type: ane-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: true\n";
     fs::write(temp_dir.path().join("plain.yaml"), content_no_desc).expect("write");
 
     // Invalid model

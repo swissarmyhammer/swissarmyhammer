@@ -45,7 +45,7 @@ mod model_resolution_tests {
 fn test_parse_old_executor_format_backward_compat() {
     let yaml = r#"
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: "Qwen/Qwen3-Embedding-0.6B-GGUF"
@@ -59,7 +59,7 @@ quiet: false
     assert!(config.executors[0].platform.is_none());
     assert_eq!(
         config.executor_type().unwrap(),
-        ModelExecutorType::LlamaEmbedding
+        ModelExecutorType::AneEmbedding
     );
 }
 
@@ -75,7 +75,7 @@ executors:
           repo: "wballard/Qwen3-Embedding-0.6B-CoreML"
         normalize: true
   - executor:
-      type: llama-embedding
+      type: ane-embedding
       config:
         source: !HuggingFace
           repo: "Qwen/Qwen3-Embedding-0.6B-GGUF"
@@ -88,6 +88,18 @@ quiet: false
     assert_eq!(config.executors.len(), 2);
     assert_eq!(config.executors[0].platform, Some(Platform::MacosArm64));
     assert!(config.executors[1].platform.is_none());
+}
+
+/// The HuggingFace repo of the executor `select_executor` picks, so a test can
+/// tell which of several same-type entries won.
+fn selected_repo(config: &ModelConfig) -> String {
+    match config.select_executor() {
+        Some(ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
+            source: ModelSource::HuggingFace { repo, .. },
+            ..
+        })) => repo.clone(),
+        other => panic!("expected a HuggingFace ANE executor, got {other:?}"),
+    }
 }
 
 #[test]
@@ -108,9 +120,9 @@ fn test_platform_selection_prefers_platform_match() {
             },
             ExecutorEntry {
                 platform: None,
-                executor: ModelExecutorConfig::LlamaEmbedding(EmbeddingModelConfig {
+                executor: ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
                     source: ModelSource::HuggingFace {
-                        repo: "test/llama".to_string(),
+                        repo: "test/universal".to_string(),
                         filename: None,
                         folder: None,
                     },
@@ -122,10 +134,7 @@ fn test_platform_selection_prefers_platform_match() {
         quiet: false,
     };
     // First entry matches current platform, so it should be selected
-    assert_eq!(
-        config.executor_type().unwrap(),
-        ModelExecutorType::AneEmbedding
-    );
+    assert_eq!(selected_repo(&config), "test/ane");
 }
 
 #[test]
@@ -153,9 +162,9 @@ fn test_platform_selection_falls_back_to_universal() {
             },
             ExecutorEntry {
                 platform: None,
-                executor: ModelExecutorConfig::LlamaEmbedding(EmbeddingModelConfig {
+                executor: ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
                     source: ModelSource::HuggingFace {
-                        repo: "test/llama".to_string(),
+                        repo: "test/universal".to_string(),
                         filename: None,
                         folder: None,
                     },
@@ -167,10 +176,7 @@ fn test_platform_selection_falls_back_to_universal() {
         quiet: false,
     };
     // First entry doesn't match, second is universal fallback
-    assert_eq!(
-        config.executor_type().unwrap(),
-        ModelExecutorType::LlamaEmbedding
-    );
+    assert_eq!(selected_repo(&config), "test/universal");
 }
 
 #[test]

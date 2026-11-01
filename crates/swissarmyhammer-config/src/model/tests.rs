@@ -34,13 +34,13 @@ mod types;
 use super::*;
 use swissarmyhammer_common::test_utils::CurrentDirGuard;
 
-/// A minimal `llama-embedding` model configuration, the shape every model
+/// A minimal `ane-embedding` model configuration, the shape every model
 /// YAML now takes.
 fn embedding_model_config() -> ModelConfig {
     ModelConfig {
         executors: vec![ExecutorEntry {
             platform: None,
-            executor: ModelExecutorConfig::LlamaEmbedding(EmbeddingModelConfig {
+            executor: ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
                 source: ModelSource::HuggingFace {
                     repo: "test/embed".to_string(),
                     filename: Some("test.gguf".to_string()),

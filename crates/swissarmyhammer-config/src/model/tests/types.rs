@@ -78,12 +78,12 @@ fn test_model_config_deserialize_executors_list() {
 executors:
   - platform: macos-arm64
     executor:
-      type: llama-embedding
+      type: ane-embedding
       config:
         source: !HuggingFace
           repo: test/embed
   - executor:
-      type: llama-embedding
+      type: ane-embedding
       config:
         source: !HuggingFace
           repo: test/embed
@@ -101,7 +101,7 @@ fn test_model_config_deserialize_unknown_fields_ignored() {
     // Exercises the `_: IgnoredAny` path in the custom deserializer.
     let yaml = r#"
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -113,7 +113,7 @@ another_unknown: 42
         serde_yaml_ng::from_str(yaml).expect("Should parse despite unknown fields");
     assert_eq!(
         config.executor_type().unwrap(),
-        ModelExecutorType::LlamaEmbedding
+        ModelExecutorType::AneEmbedding
     );
     assert!(!config.quiet);
 }
@@ -235,30 +235,8 @@ fn test_model_paths_sah() {
 }
 
 #[test]
-fn test_executor_type_all_variants() {
-    // Exercises `executor_type()` for all executor types.
-    // Test LlamaEmbedding
-    let embedding_config = ModelConfig {
-        executors: vec![ExecutorEntry {
-            platform: None,
-            executor: ModelExecutorConfig::LlamaEmbedding(EmbeddingModelConfig {
-                source: ModelSource::HuggingFace {
-                    repo: "test/repo".to_string(),
-                    filename: Some("model.gguf".to_string()),
-                    folder: None,
-                },
-                normalize: false,
-                max_sequence_length: None,
-            }),
-        }],
-        quiet: false,
-    };
-    assert_eq!(
-        embedding_config.executor_type().unwrap(),
-        ModelExecutorType::LlamaEmbedding
-    );
-
-    // Test AneEmbedding
+fn test_executor_type_ane_embedding() {
+    // Exercises `executor_type()` for the only executor type.
     let ane_config = ModelConfig {
         executors: vec![ExecutorEntry {
             platform: None,

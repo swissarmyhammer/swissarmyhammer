@@ -29,10 +29,7 @@ fn embedding_models_still_resolve_through_model_manager() {
         .select_executor()
         .unwrap_or_else(|| panic!("`{name}` must offer an executor for this platform"));
     assert!(
-        matches!(
-            executor,
-            ModelExecutorConfig::LlamaEmbedding(_) | ModelExecutorConfig::AneEmbedding(_)
-        ),
+        matches!(executor, ModelExecutorConfig::AneEmbedding(_)),
         "`{name}` must select an embedding executor, got {executor:?}"
     );
 }

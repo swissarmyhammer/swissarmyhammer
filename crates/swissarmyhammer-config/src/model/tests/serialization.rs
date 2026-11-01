@@ -11,7 +11,7 @@ fn test_configuration_serialization_yaml() {
 
     // Should serialize to YAML correctly
     let yaml = serde_yaml_ng::to_string(&config).expect("Failed to serialize to YAML");
-    assert!(yaml.contains("type: llama-embedding"));
+    assert!(yaml.contains("type: ane-embedding"));
     assert!(yaml.contains("quiet: false"));
 
     // Should deserialize from YAML correctly
@@ -30,7 +30,7 @@ fn test_configuration_serialization_json() {
 
     // Should serialize to JSON correctly
     let json = serde_json::to_string(&config).expect("Failed to serialize to JSON");
-    assert!(json.contains("\"type\":\"llama-embedding\""));
+    assert!(json.contains("\"type\":\"ane-embedding\""));
     assert!(json.contains("\"quiet\":false"));
 
     // Should deserialize from JSON correctly
@@ -309,7 +309,7 @@ fn test_agent_info_equality() {
 fn test_agent_info_serialization() {
     let agent_info = ModelInfo {
         name: "test-agent".to_string(),
-        content: "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false".to_string(),
+        content: "executor:\n  type: ane-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false".to_string(),
         source: ModelConfigSource::User,
         description: Some("A test agent".to_string()),
     };

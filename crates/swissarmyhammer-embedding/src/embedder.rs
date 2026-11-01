@@ -1,21 +1,24 @@
-//! Platform-aware embedder that dispatches to ANE or llama.cpp backends.
+//! Embedder backed by the Apple Neural Engine (ANE).
 
 #[cfg(target_os = "macos")]
 use ane_embedding::{AneEmbeddingConfig, AneEmbeddingModel};
-use llama_embedding::{EmbeddingConfig, EmbeddingModel};
 use model_embedding::{EmbeddingError, EmbeddingResult, TextEmbedder};
 use std::future::Future;
 
-use model_loader::{DownloadObserver, ModelSource};
-use swissarmyhammer_config::model::{EmbeddingModelConfig, ModelExecutorConfig, ModelManager};
+use model_loader::DownloadObserver;
+#[cfg(target_os = "macos")]
+use model_loader::ModelSource;
+#[cfg(target_os = "macos")]
+use swissarmyhammer_config::model::EmbeddingModelConfig;
+use swissarmyhammer_config::model::{ModelExecutorConfig, ModelManager};
 use swissarmyhammer_config::parse_model_config;
 use thiserror::Error;
 use tokio::sync::Semaphore;
 
 /// Process-global serialization gate for embedding inference.
 ///
-/// Embedding a text drives a model — llama.cpp on CPU/GPU, or CoreML on the
-/// Apple Neural Engine — which is heavy in both memory and compute. Every
+/// Embedding a text drives a CoreML model on the Apple Neural Engine, which is
+/// heavy in both memory and compute. Every
 /// production embedding caller (the review pipeline's probes, the code-context
 /// indexer, entity search) funnels through [`Embedder`], yet nothing otherwise
 /// bounds how many embeddings run at once: independent callers, and even
@@ -32,7 +35,7 @@ static EMBEDDING_GATE: Semaphore = Semaphore::const_new(1);
 
 /// Run `op` while holding the process-global embedding permit (see
 /// [`EMBEDDING_GATE`]). Callers that perform embedding inference wrap it here so
-/// the one-per-process limit holds across every backend and instance. Factored
+/// the one-per-process limit holds across every instance. Factored
 /// out so the serialization is unit-testable without a loaded model.
 async fn with_embedding_permit<F, Fut, T>(op: F) -> T
 where
@@ -68,8 +71,8 @@ pub enum EmbedderError {
     Embedding(#[from] EmbeddingError),
 }
 
-/// A unified embedder that resolves a named model, picks the right backend
-/// for the current platform, and handles download + loading.
+/// An embedder that resolves a named model, builds the ANE backend, and
+/// handles download + loading.
 ///
 /// When text exceeds `max_sequence_length`, the embedder automatically splits
 /// it into overlapping chunks, embeds each, and mean-pools the results.
@@ -82,18 +85,18 @@ pub struct Embedder {
     normalize: bool,
 }
 
+/// The one embedding backend. The ANE model type exists on macOS only, so off
+/// macOS this enum has no variant and no value of it can be built.
 enum EmbedderBackend {
-    Llama(Box<EmbeddingModel>),
     #[cfg(target_os = "macos")]
     Ane(Box<AneEmbeddingModel>),
 }
 
 impl EmbedderBackend {
-    /// Stable backend identifier — the single mapping from backend variant to
-    /// name, shared by [`Embedder::backend_name`], logging, and Debug output.
+    /// Stable backend identifier — shared by [`Embedder::backend_name`],
+    /// logging, and Debug output.
     fn name(&self) -> &'static str {
-        match self {
-            EmbedderBackend::Llama(_) => "llama",
+        match *self {
             #[cfg(target_os = "macos")]
             EmbedderBackend::Ane(_) => "ane",
         }
@@ -137,8 +140,7 @@ impl Embedder {
     /// Create an embedder from a builtin or user model name.
     ///
     /// Resolves the name via `ModelManager`, selects the first executor
-    /// compatible with the current platform, and constructs the appropriate
-    /// backend. The model is **not** loaded yet — call [`TextEmbedder::load`]
+    /// compatible with the current platform, and constructs the ANE backend. The model is **not** loaded yet — call [`TextEmbedder::load`]
     /// before embedding.
     ///
     /// # Errors
@@ -194,17 +196,6 @@ impl Embedder {
             .ok_or_else(|| EmbedderError::NoCompatibleExecutor(name.to_string()))?;
 
         let (backend, max_seq, normalize) = match executor {
-            ModelExecutorConfig::LlamaEmbedding(cfg) => {
-                let max_seq = cfg
-                    .max_sequence_length
-                    .unwrap_or(LLAMA_DEFAULT_MAX_SEQUENCE_LENGTH);
-                let normalize = cfg.normalize;
-                (
-                    EmbedderBackend::Llama(Box::new(build_llama_model(cfg, observer).await?)),
-                    max_seq,
-                    normalize,
-                )
-            }
             #[cfg(target_os = "macos")]
             ModelExecutorConfig::AneEmbedding(cfg) => {
                 let max_seq = cfg
@@ -219,6 +210,7 @@ impl Embedder {
             }
             #[cfg(not(target_os = "macos"))]
             ModelExecutorConfig::AneEmbedding(_) => {
+                drop(observer);
                 return Err(EmbedderError::NoCompatibleExecutor(name.to_string()));
             }
         };
@@ -255,7 +247,7 @@ impl Embedder {
     }
 }
 
-// Delegate TextEmbedder to whichever backend was selected.
+// Delegate TextEmbedder to the ANE backend.
 impl model_embedding::private::Sealed for Embedder {}
 
 #[async_trait::async_trait]
@@ -267,10 +259,9 @@ impl TextEmbedder for Embedder {
     /// Propagates any [`EmbeddingError`] the backend raises while resolving,
     /// downloading, or initializing the model.
     async fn load(&self) -> Result<(), EmbeddingError> {
-        match &self.inner {
-            EmbedderBackend::Llama(m) => m.load().await,
+        match self.inner {
             #[cfg(target_os = "macos")]
-            EmbedderBackend::Ane(m) => m.load().await,
+            EmbedderBackend::Ane(ref m) => m.load().await,
         }
     }
 
@@ -303,19 +294,17 @@ impl TextEmbedder for Embedder {
     /// Embedding dimension of the selected backend, or `None` before the model
     /// is loaded.
     fn embedding_dimension(&self) -> Option<usize> {
-        match &self.inner {
-            EmbedderBackend::Llama(m) => m.embedding_dimension(),
+        match self.inner {
             #[cfg(target_os = "macos")]
-            EmbedderBackend::Ane(m) => m.embedding_dimension(),
+            EmbedderBackend::Ane(ref m) => m.embedding_dimension(),
         }
     }
 
     /// Whether the selected backend's model is loaded and ready for inference.
     fn is_loaded(&self) -> bool {
-        match &self.inner {
-            EmbedderBackend::Llama(m) => m.is_loaded(),
+        match self.inner {
             #[cfg(target_os = "macos")]
-            EmbedderBackend::Ane(m) => m.is_loaded(),
+            EmbedderBackend::Ane(ref m) => m.is_loaded(),
         }
     }
 }
@@ -323,10 +312,9 @@ impl TextEmbedder for Embedder {
 impl Embedder {
     /// Embed a single text chunk directly via the backend.
     async fn embed_single(&self, text: &str) -> Result<EmbeddingResult, EmbeddingError> {
-        match &self.inner {
-            EmbedderBackend::Llama(m) => m.embed_text(text).await,
+        match self.inner {
             #[cfg(target_os = "macos")]
-            EmbedderBackend::Ane(m) => m.embed_text(text).await,
+            EmbedderBackend::Ane(ref m) => m.embed_text(text).await,
         }
     }
 
@@ -458,46 +446,6 @@ fn advance_to_char_boundary(s: &str, pos: usize) -> usize {
 // Backend construction helpers
 // ---------------------------------------------------------------------------
 
-/// Convert the config-crate `ModelSource` to the model-loader `ModelSource`.
-fn convert_source(src: &swissarmyhammer_config::ModelSource) -> ModelSource {
-    match src {
-        swissarmyhammer_config::ModelSource::HuggingFace {
-            repo,
-            filename,
-            folder,
-        } => ModelSource::HuggingFace {
-            repo: repo.clone(),
-            filename: filename.clone(),
-            folder: folder.clone(),
-        },
-        swissarmyhammer_config::ModelSource::Local { filename, folder } => ModelSource::Local {
-            folder: folder.clone().unwrap_or_default(),
-            filename: Some(filename.to_string_lossy().to_string()),
-        },
-    }
-}
-
-/// Build the llama.cpp backend, attaching `observer` so the model download
-/// that happens at load time reports progress. `None` leaves downloads silent.
-async fn build_llama_model(
-    cfg: &EmbeddingModelConfig,
-    observer: Option<DownloadObserver>,
-) -> Result<EmbeddingModel, EmbeddingError> {
-    let config = EmbeddingConfig {
-        model_source: convert_source(&cfg.source),
-        normalize_embeddings: cfg.normalize,
-        max_sequence_length: cfg.max_sequence_length,
-        debug: false,
-    };
-    let mut model = EmbeddingModel::new(config)
-        .await
-        .map_err(|e| EmbeddingError::model(e.to_string()))?;
-    if let Some(observer) = observer {
-        model = model.with_download_observer(observer);
-    }
-    Ok(model)
-}
-
 /// Tokenizer file downloaded alongside the model on the ANE path.
 #[cfg(target_os = "macos")]
 const TOKENIZER_FILENAME: &str = "tokenizer.json";
@@ -510,10 +458,6 @@ const MLPACKAGE_EXTENSION: &str = "mlpackage";
 /// does not specify one.
 #[cfg(target_os = "macos")]
 const ANE_DEFAULT_MAX_SEQUENCE_LENGTH: usize = 256;
-
-/// Default maximum sequence length for the Llama backend when the model config
-/// does not specify one.
-const LLAMA_DEFAULT_MAX_SEQUENCE_LENGTH: usize = 512;
 
 /// Build the CoreML/ANE backend. Model resolution (and download) happens
 /// here, during construction, so `observer` must be provided up front;
@@ -844,90 +788,6 @@ mod tests {
         let e: EmbedderError = inner.into();
         let dbg = format!("{e:?}");
         assert!(dbg.contains("Embedding"));
-    }
-
-    // -------------------------------------------------------------------------
-    // convert_source — both HuggingFace and Local variants
-    // -------------------------------------------------------------------------
-
-    /// HuggingFace source converts correctly with all fields populated.
-    #[test]
-    fn convert_source_huggingface_with_all_fields() {
-        let src = swissarmyhammer_config::ModelSource::HuggingFace {
-            repo: "owner/repo".to_string(),
-            filename: Some("model.gguf".to_string()),
-            folder: Some("subfolder".to_string()),
-        };
-        let converted = convert_source(&src);
-        match converted {
-            ModelSource::HuggingFace {
-                repo,
-                filename,
-                folder,
-            } => {
-                assert_eq!(repo, "owner/repo");
-                assert_eq!(filename, Some("model.gguf".to_string()));
-                assert_eq!(folder, Some("subfolder".to_string()));
-            }
-            other => panic!("Expected HuggingFace, got: {other:?}"),
-        }
-    }
-
-    /// HuggingFace source converts correctly with optional fields as None.
-    #[test]
-    fn convert_source_huggingface_minimal() {
-        let src = swissarmyhammer_config::ModelSource::HuggingFace {
-            repo: "org/model".to_string(),
-            filename: None,
-            folder: None,
-        };
-        let converted = convert_source(&src);
-        match converted {
-            ModelSource::HuggingFace {
-                repo,
-                filename,
-                folder,
-            } => {
-                assert_eq!(repo, "org/model");
-                assert_eq!(filename, None);
-                assert_eq!(folder, None);
-            }
-            other => panic!("Expected HuggingFace, got: {other:?}"),
-        }
-    }
-
-    /// Local source converts correctly with folder present.
-    #[test]
-    fn convert_source_local_with_folder() {
-        let src = swissarmyhammer_config::ModelSource::Local {
-            filename: std::path::PathBuf::from("model.bin"),
-            folder: Some(std::path::PathBuf::from("/opt/models")),
-        };
-        let converted = convert_source(&src);
-        match converted {
-            ModelSource::Local { folder, filename } => {
-                assert_eq!(folder, std::path::PathBuf::from("/opt/models"));
-                assert_eq!(filename, Some("model.bin".to_string()));
-            }
-            other => panic!("Expected Local, got: {other:?}"),
-        }
-    }
-
-    /// Local source converts correctly without folder (defaults to empty PathBuf).
-    #[test]
-    fn convert_source_local_without_folder() {
-        let src = swissarmyhammer_config::ModelSource::Local {
-            filename: std::path::PathBuf::from("weights.safetensors"),
-            folder: None,
-        };
-        let converted = convert_source(&src);
-        match converted {
-            ModelSource::Local { folder, filename } => {
-                assert_eq!(folder, std::path::PathBuf::from(""));
-                assert_eq!(filename, Some("weights.safetensors".to_string()));
-            }
-            other => panic!("Expected Local, got: {other:?}"),
-        }
     }
 
     // -------------------------------------------------------------------------

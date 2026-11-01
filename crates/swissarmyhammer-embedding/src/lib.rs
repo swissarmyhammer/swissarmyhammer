@@ -1,9 +1,9 @@
 //! Unified embedding interface for SwissArmyHammer.
 //!
-//! Resolves a named model config (e.g. `"qwen-embedding"`), selects the best
-//! executor for the current platform (ANE on Apple Silicon, llama.cpp elsewhere),
-//! downloads the model on first use, and provides embeddings through the
-//! [`TextEmbedder`] trait.
+//! Resolves a named model config (e.g. `"qwen-embedding"`), selects the
+//! executor for the current platform, downloads the model on first use, and
+//! provides embeddings through the [`TextEmbedder`] trait. The only backend is
+//! the Apple Neural Engine (ANE), so embedding needs macOS on Apple Silicon.
 //!
 //! # Quick Start
 //!

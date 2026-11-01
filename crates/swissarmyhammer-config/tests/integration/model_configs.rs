@@ -16,7 +16,7 @@ use swissarmyhammer_config::ModelExecutorType;
 /// Generate a test embedding model YAML configuration with optional description
 fn test_agent_yaml(description: &str, agent_type: &str, custom_config: Option<&str>) -> String {
     let config_section = match agent_type {
-        "llama-embedding" | "ane-embedding" => custom_config.map_or_else(
+        "ane-embedding" => custom_config.map_or_else(
             || {
                 r#"config:
     source: !HuggingFace
@@ -209,7 +209,7 @@ fn test_user_agent_overrides_builtin() {
 
     let user_override = test_agent_yaml(
         "User override of the builtin embedding model",
-        "llama-embedding",
+        "ane-embedding",
         Some(
             r#"config:
     source: !HuggingFace
@@ -262,7 +262,7 @@ fn test_custom_agents_from_each_source() {
 
     let user_custom = test_agent_yaml(
         "User custom agent",
-        "llama-embedding",
+        "ane-embedding",
         Some(
             r#"config:
     source: !HuggingFace
@@ -273,7 +273,7 @@ fn test_custom_agents_from_each_source() {
 
     let project_specific = test_agent_yaml(
         "Project specific agent",
-        "llama-embedding",
+        "ane-embedding",
         Some(
             r#"config:
     source: !HuggingFace
@@ -316,7 +316,7 @@ fn test_gitroot_agent_loading() {
     assert!(git_root.is_some(), "Should be in a git repository");
 
     // Create gitroot agent
-    let gitroot_agent = test_agent_yaml("Test gitroot agent", "llama-embedding", None);
+    let gitroot_agent = test_agent_yaml("Test gitroot agent", "ane-embedding", None);
     env.create_gitroot_agent("gitroot-test", &gitroot_agent);
 
     let agents = ModelManager::list_agents().expect("Should list all agents");
@@ -333,11 +333,11 @@ fn test_gitroot_agent_overrides_project() {
     env.activate();
 
     // Create project agent
-    let project_agent = test_agent_yaml("Project version", "llama-embedding", None);
+    let project_agent = test_agent_yaml("Project version", "ane-embedding", None);
     env.create_project_agent("override-test", &project_agent);
 
     // Create gitroot agent with same name (should override project)
-    let gitroot_agent = test_agent_yaml("GitRoot version", "llama-embedding", None);
+    let gitroot_agent = test_agent_yaml("GitRoot version", "ane-embedding", None);
     env.create_gitroot_agent("override-test", &gitroot_agent);
 
     let agents = ModelManager::list_agents().expect("Should list all agents");
@@ -354,11 +354,11 @@ fn test_user_agent_overrides_gitroot() {
     env.activate();
 
     // Create gitroot agent
-    let gitroot_agent = test_agent_yaml("GitRoot version", "llama-embedding", None);
+    let gitroot_agent = test_agent_yaml("GitRoot version", "ane-embedding", None);
     env.create_gitroot_agent("override-test", &gitroot_agent);
 
     // Create user agent with same name (should override gitroot)
-    let user_agent = test_agent_yaml("User version", "llama-embedding", None);
+    let user_agent = test_agent_yaml("User version", "ane-embedding", None);
     env.create_user_agent("override-test", &user_agent);
 
     let agents = ModelManager::list_agents().expect("Should list all agents");
@@ -375,13 +375,13 @@ fn test_full_precedence_hierarchy_with_gitroot() {
     env.activate();
 
     // Override qwen-embedding at each level to test full precedence
-    let project_agent = test_agent_yaml("Project model", "llama-embedding", None);
+    let project_agent = test_agent_yaml("Project model", "ane-embedding", None);
     env.create_project_agent("qwen-embedding", &project_agent);
 
-    let gitroot_agent = test_agent_yaml("GitRoot model", "llama-embedding", None);
+    let gitroot_agent = test_agent_yaml("GitRoot model", "ane-embedding", None);
     env.create_gitroot_agent("qwen-embedding", &gitroot_agent);
 
-    let user_agent = test_agent_yaml("User model", "llama-embedding", None);
+    let user_agent = test_agent_yaml("User model", "ane-embedding", None);
     env.create_user_agent("qwen-embedding", &user_agent);
 
     let agents = ModelManager::list_agents().expect("Should list all agents");
@@ -404,7 +404,7 @@ fn test_full_precedence_hierarchy_with_gitroot() {
 fn test_valid_agent_loads_successfully() {
     let env = TestEnvironment::new();
 
-    let valid_agent = test_agent_yaml("Valid test agent", "llama-embedding", None);
+    let valid_agent = test_agent_yaml("Valid test agent", "ane-embedding", None);
     env.create_user_agent("valid-agent", &valid_agent);
     env.activate();
 
@@ -419,6 +419,34 @@ fn test_valid_agent_loads_successfully() {
         .as_ref()
         .unwrap()
         .contains("Valid test agent"));
+}
+
+/// A user model file that still names the removed `llama-embedding` executor
+/// is skipped by the loader, and parsing its content fails with an error that
+/// names both the rejected type and the supported one.
+#[serial_test::serial(cwd)]
+#[test]
+fn test_user_model_with_llama_embedding_type_is_rejected() {
+    let env = TestEnvironment::new();
+
+    let legacy_yaml = test_agent_yaml("Legacy llama model", "ane-embedding", None)
+        .replace("type: ane-embedding", "type: llama-embedding");
+    env.create_user_agent("legacy-llama", &legacy_yaml);
+    env.activate();
+
+    let user_agents = ModelManager::load_user_models().expect("Should load despite bad files");
+    assert!(
+        user_agents.iter().all(|a| a.name != "legacy-llama"),
+        "A llama-embedding model must not load"
+    );
+
+    let err =
+        parse_model_config(&legacy_yaml).expect_err("A llama-embedding executor must be rejected");
+    let message = err.to_string();
+    assert!(
+        message.contains("llama-embedding") && message.contains("ane-embedding"),
+        "error must name the rejected and the supported type, got: {message}"
+    );
 }
 
 #[serial_test::serial(cwd)]
@@ -505,7 +533,7 @@ version: "1.0"
 author: "Test Author"
 ---
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config: {}
 quiet: false"#;
 
@@ -522,7 +550,7 @@ fn test_agent_description_comment_based() {
     let content = r#"# Description: Comment-based description
 # Additional comment
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config: {}
 quiet: false"#;
 
@@ -538,7 +566,7 @@ description: "YAML takes precedence"
 ---
 # Description: This should be ignored
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config: {}
 quiet: false"#;
 
@@ -550,7 +578,7 @@ quiet: false"#;
 #[test]
 fn test_agent_description_no_description() {
     let content = r#"executor:
-  type: llama-embedding
+  type: ane-embedding
   config: {}
 quiet: false"#;
 
@@ -565,7 +593,7 @@ fn test_agent_description_empty_description() {
 description: ""
 ---
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config: {}
 quiet: false"#;
 
@@ -580,7 +608,7 @@ fn test_agent_description_whitespace_trimmed() {
 description: "  Trimmed description  "
 ---
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config: {}
 quiet: false"#;
 
@@ -600,7 +628,7 @@ description: "Test agent with frontmatter"
 version: "1.0"
 ---
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: "test/model"
@@ -610,7 +638,7 @@ quiet: true"#;
     let config = parse_model_config(content).expect("Should parse config with frontmatter");
     assert_eq!(
         config.executor_type().unwrap(),
-        ModelExecutorType::LlamaEmbedding
+        ModelExecutorType::AneEmbedding
     );
     assert!(config.quiet);
 }
@@ -642,7 +670,7 @@ fn test_agent_config_parsing_with_comments() {
     let content = r#"# Description: Test agent with comments
 # Version: 1.0
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: "test/model"
@@ -651,7 +679,7 @@ quiet: false"#;
     let config = parse_model_config(content).expect("Should parse config with comments");
     assert_eq!(
         config.executor_type().unwrap(),
-        ModelExecutorType::LlamaEmbedding
+        ModelExecutorType::AneEmbedding
     );
     assert!(!config.quiet);
 }
@@ -735,7 +763,7 @@ fn test_load_gitroot_models_in_git_repo_with_agents() {
     env.activate();
 
     // Create gitroot agents
-    let agent1 = test_agent_yaml("First gitroot agent", "llama-embedding", None);
+    let agent1 = test_agent_yaml("First gitroot agent", "ane-embedding", None);
     let agent2 = test_agent_yaml("Second gitroot agent", "ane-embedding", None);
     env.create_gitroot_agent("gitroot-agent-1", &agent1);
     env.create_gitroot_agent("gitroot-agent-2", &agent2);
@@ -820,7 +848,7 @@ fn test_load_gitroot_models_with_invalid_agents() {
     env.activate();
 
     // Create valid and invalid gitroot agents
-    let valid_agent = test_agent_yaml("Valid gitroot agent", "llama-embedding", None);
+    let valid_agent = test_agent_yaml("Valid gitroot agent", "ane-embedding", None);
     let invalid_agent = "invalid: yaml: content: [unclosed bracket";
 
     let gitroot_dir = env.gitroot_agents_dir();
@@ -849,7 +877,7 @@ fn test_load_gitroot_models_with_non_yaml_files() {
     env.activate();
 
     // Create gitroot agent and non-yaml files
-    let agent = test_agent_yaml("Gitroot agent", "llama-embedding", None);
+    let agent = test_agent_yaml("Gitroot agent", "ane-embedding", None);
 
     let gitroot_dir = env.gitroot_agents_dir();
     fs::create_dir_all(&gitroot_dir).expect("Failed to create gitroot models dir");
@@ -884,7 +912,7 @@ fn test_load_gitroot_models_git_root_detection() {
     env::set_current_dir(&subdir).expect("Failed to change to subdirectory");
 
     // Create gitroot agent
-    let agent = test_agent_yaml("Gitroot agent from subdir", "llama-embedding", None);
+    let agent = test_agent_yaml("Gitroot agent from subdir", "ane-embedding", None);
     env.create_gitroot_agent("subdir-test", &agent);
 
     // Should still find gitroot models even from subdirectory

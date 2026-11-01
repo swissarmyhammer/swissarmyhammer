@@ -34,9 +34,10 @@
 //! # Embedding models
 //!
 //! Embedding models are declared in YAML files and loaded by name. Each file
-//! names an executor: `llama-embedding` (llama.cpp GGUF) or `ane-embedding`
-//! (Apple Neural Engine). A file may list several, and the first one compatible
-//! with the running platform wins.
+//! names an executor. The only executor type is `ane-embedding` (Apple Neural
+//! Engine). A file may list several entries, and the first one compatible with
+//! the running platform wins. Any other `type`, such as the removed
+//! `llama-embedding`, fails to parse.
 //!
 //! ```yaml
 //! ---
@@ -50,13 +51,6 @@
 //!       config:
 //!         source: !HuggingFace
 //!           repo: "wballard/Qwen3-Embedding-0.6B-CoreML"
-//!         normalize: true
-//!   - executor:
-//!       type: llama-embedding
-//!       config:
-//!         source: !HuggingFace
-//!           repo: "Qwen/Qwen3-Embedding-0.6B-GGUF"
-//!           filename: "Qwen3-Embedding-0.6B-Q8_0.gguf"
 //!         normalize: true
 //! ```
 //!
@@ -269,8 +263,6 @@ impl Platform {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelExecutorType {
-    /// Use local embedding model for semantic search via llama.cpp
-    LlamaEmbedding,
     /// Use Apple Neural Engine for embedding inference
     AneEmbedding,
 }
@@ -283,10 +275,6 @@ pub enum ModelExecutorType {
 ///   - platform: macos-arm64
 ///     executor:
 ///       type: ane-embedding
-///       config:
-///         source: ...
-///   - executor:
-///       type: llama-embedding
 ///       config:
 ///         source: ...
 /// ```
@@ -384,9 +372,6 @@ impl<'de> serde::Deserialize<'de> for ModelConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum ModelExecutorConfig {
-    /// Run the embedding model locally through llama.cpp.
-    #[serde(rename = "llama-embedding")]
-    LlamaEmbedding(EmbeddingModelConfig),
     /// Run the embedding model on the Apple Neural Engine.
     #[serde(rename = "ane-embedding")]
     AneEmbedding(EmbeddingModelConfig),
@@ -394,7 +379,7 @@ pub enum ModelExecutorConfig {
 
 /// Configuration for embedding model execution
 ///
-/// Used with the `llama-embedding` executor type for semantic embedding models.
+/// Used with the `ane-embedding` executor type for semantic embedding models.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmbeddingModelConfig {
     /// Model source (HuggingFace or local path)
@@ -457,7 +442,6 @@ impl ModelConfig {
     /// Get the executor type from the configuration
     pub fn executor_type(&self) -> Result<ModelExecutorType, ModelError> {
         match self.executor()? {
-            ModelExecutorConfig::LlamaEmbedding(_) => Ok(ModelExecutorType::LlamaEmbedding),
             ModelExecutorConfig::AneEmbedding(_) => Ok(ModelExecutorType::AneEmbedding),
         }
     }

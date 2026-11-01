@@ -6528,7 +6528,6 @@ version = "0.20.3"
 dependencies = [
  "ane-embedding",
  "async-trait",
- "llama-embedding",
  "model-embedding",
  "model-loader",
  "swissarmyhammer-config",

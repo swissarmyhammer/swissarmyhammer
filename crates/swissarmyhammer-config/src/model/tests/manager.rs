@@ -58,7 +58,7 @@ fn test_agent_manager_load_models_from_dir_with_temp_files() {
 description: "Test agent 1"
 ---
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -68,7 +68,7 @@ quiet: false"#;
 
     let agent2_content = r#"# Description: Test agent 2
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -223,7 +223,7 @@ fn test_agent_manager_list_agents_overriding_with_temp_files() {
 description: "Project-overridden embedding model"
 ---
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: project/embed
@@ -242,7 +242,7 @@ quiet: true"#;
 description: "User-overridden embedding model"
 ---
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: user/embed
@@ -356,7 +356,7 @@ quiet: not-a-boolean"#;
 description: "Valid agent 1"
 ---
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -453,7 +453,7 @@ fn test_agent_manager_list_agents_non_yaml_files() {
 
     // Create one valid YAML agent
     let valid_content = r#"executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed

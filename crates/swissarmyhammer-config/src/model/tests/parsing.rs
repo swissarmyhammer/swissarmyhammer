@@ -11,7 +11,7 @@ fn test_parse_model_description_yaml_frontmatter() {
 description: "This is a test agent"
 other_field: value
 ---
-type: llama-embedding
+type: ane-embedding
 config:
   source: !HuggingFace
     repo: test/embed"#;
@@ -23,7 +23,7 @@ config:
 #[test]
 fn test_parse_model_description_comment_format() {
     let content = r#"# Description: This is a comment-based description
-type: llama-embedding
+type: ane-embedding
 config:
   source: !HuggingFace
     repo: test/embed"#;
@@ -38,7 +38,7 @@ config:
 #[test]
 fn test_parse_model_description_no_description() {
     let content = r#"executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -55,7 +55,7 @@ description: ""
 other_field: value
 ---
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -69,7 +69,7 @@ quiet: false"#;
 fn test_parse_model_description_empty_comment_description() {
     let content = r#"# Description:
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -86,7 +86,7 @@ description: "YAML description"
 ---
 # Description: Comment description
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -103,7 +103,7 @@ invalid: yaml: content: [unclosed
 ---
 # Description: Fallback comment description
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -135,7 +135,7 @@ fn test_parse_model_description_multiline_comment() {
     let content = r#"# Description: First line
 # This is additional content
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -151,7 +151,7 @@ fn test_parse_agent_config_frontmatter() {
 description: "Test agent"
 ---
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -167,7 +167,7 @@ quiet: false"#;
 fn test_parse_agent_config_comment_format() {
     let content = r#"# Description: Test agent 2
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -184,7 +184,7 @@ quiet: false"#;
 #[test]
 fn test_parse_agent_config_pure_yaml() {
     let content = r#"executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -207,7 +207,7 @@ description: "Claude Code --- installed separately"
 other_field: value
 ---
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -230,7 +230,7 @@ description: "Claude Code --- installed separately"
 other_field: value
 ---
 executor:
-  type: llama-embedding
+  type: ane-embedding
   config:
     source: !HuggingFace
       repo: test/embed
@@ -267,4 +267,25 @@ fn test_parse_model_description_rejects_missing_closing_delimiter() {
     // result is `None`.
     let content = "---\ndescription: no closer\nother: field\n";
     assert_eq!(parse_model_description(content), None);
+}
+
+#[test]
+fn test_parse_model_config_rejects_llama_embedding_type() {
+    let content = r#"executor:
+  type: llama-embedding
+  config:
+    source: !HuggingFace
+      repo: test/embed
+quiet: false"#;
+
+    let err = parse_model_config(content).expect_err("llama-embedding is no longer an executor");
+    let message = err.to_string();
+    assert!(
+        message.contains("llama-embedding"),
+        "error must name the rejected type, got: {message}"
+    );
+    assert!(
+        message.contains("ane-embedding"),
+        "error must name the supported type, got: {message}"
+    );
 }

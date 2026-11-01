@@ -365,6 +365,7 @@ mod public_api_tests {
     use super::*;
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_load_configuration_returns_context() {
         // Exercises the `load_configuration()` public function.
         let result = load_configuration();
@@ -375,6 +376,7 @@ mod public_api_tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_load_configuration_for_cli_returns_context() {
         // Exercises the `load_configuration_for_cli()` public function.
         let result = load_configuration_for_cli();

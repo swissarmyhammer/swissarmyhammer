@@ -939,6 +939,7 @@ version = "1.0.0"
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_load_with_cli_args() {
         let cli_args = json!({
             "database": {
@@ -957,7 +958,8 @@ version = "1.0.0"
     #[serial_test::serial(cwd)]
     fn test_with_template_vars() {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
+        let _cwd_guard =
+            swissarmyhammer_common::test_utils::CurrentDirGuard::new(temp_dir.path()).unwrap();
         let mut template_vars = HashMap::new();
         template_vars.insert("template_var1".to_string(), json!("template_value1"));
         template_vars.insert("template_var2".to_string(), json!(42));
@@ -1260,6 +1262,7 @@ Generated for {{app.name}} by liquid templating engine.
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn test_load_sets_default_variables() {
         // This test may pass or fail depending on the environment, but should not crash
         let context_result = TemplateContext::load_for_cli();

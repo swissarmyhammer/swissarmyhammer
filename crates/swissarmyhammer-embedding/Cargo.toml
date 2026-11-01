@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 # Embedding backends
-llama-embedding = { workspace = true }
+ane-embedding = { workspace = true }
 model-embedding = { workspace = true }
 model-loader = { workspace = true }
 
@@ -18,9 +18,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 # Process-wide embedding-inference serialization gate (one per process).
 tokio = { workspace = true, features = ["sync"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-ane-embedding = { workspace = true }
 
 [features]
 # Enables the integration tests in `tests/integration_test.rs`. They resolve

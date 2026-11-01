@@ -37,7 +37,7 @@ fn test_ensure_config_structure_with_existing_yaml_config() {
     let existing_config = sah_dir.join("sah.yaml");
     fs::write(
         &existing_config,
-        "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n",
+        "executor:\n  type: ane-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n",
     )
     .expect("Failed to write existing yaml config");
 
@@ -117,7 +117,7 @@ fn test_ensure_config_structure_avp_with_existing_config() {
     let existing_config = avp_dir.join("avp.yaml");
     fs::write(
         &existing_config,
-        "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: true\n",
+        "executor:\n  type: ane-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: true\n",
     )
     .expect("Failed to write avp config");
 
@@ -219,7 +219,7 @@ fn test_ensure_config_structure_prefers_yaml_over_toml() {
 
     fs::write(
         sah_dir.join("sah.yaml"),
-        "executor:\n  type: llama-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n",
+        "executor:\n  type: ane-embedding\n  config:\n    source: !HuggingFace\n      repo: test/embed\nquiet: false\n",
     )
     .expect("Failed to write yaml config");
     fs::write(sah_dir.join("sah.toml"), "[existing]\nvalue = true\n")
