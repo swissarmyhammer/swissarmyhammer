@@ -14,6 +14,33 @@ comments:
     - New card for ideas/ docs.
     - Tests: cargo nextest -E rdeps(skills)|rdeps(agents)|rdeps(validators)|package(claude-agent)|package(mcp-proxy): 8245 passed, 0 failed. clippy on touched crates: no warnings.
   timestamp: 2026-11-01T00:12:42.550811+00:00
+- actor: claude-code
+  id: 01m6a7jd84f1afzpq7exg30jj2
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD, 2 findings: crates/claude-agent/src/tool_classification.rs:213, crates/claude-agent/tests/integration/coverage_tests.rs:1. Hand-check of markdown: no removed files-tool name and no Bash/Edit/Read/Write deny found.
+    - next: implementer fixes both items, then re-review.
+  timestamp: 2026-11-01T00:18:53.828457+00:00
+- actor: claude-code
+  id: 01m6a7jx4c2n309sv86hddfran
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 22 files, files tool removed from skills, agents, docs
+    - test: green — cargo nextest, 13546 passed
+    - commit: ded2fba49
+    - review: findings — crates/claude-agent/src/tool_classification.rs:213, crates/claude-agent/tests/integration/coverage_tests.rs:1
+  timestamp: 2026-11-01T00:19:10.092720+00:00
+- actor: claude-code
+  id: 01m6acpd8nnn8tk2kqme32ytmz
+  text: |-
+    ### implement — changed
+    - Finding 1: `generate_op_title` now has a "search code" title that reads `query`. Tests added: exact title, not the generic fallback, and no-query case. tool_classification.rs was restructured into name/op tables (one row per tool and op holds kind and title) so `review file` on it is clean (0 findings).
+    - Finding 2: tests/integration/coverage_tests.rs split into tests/integration/coverage_tests/{mod,mcp,errors,terminal,config,plan,session,tool_types,tool_classification,agent_misc}.rs. Largest part is 19 KB. All 193 original test names kept (diff of names: only new tests added). mod.rs path unchanged, so the integration target finds them.
+    - Extra tests: mcp__ prefix with no name, underscore-only name, SSE https. claude-agent: 1100 tests passed (1094 before + 6 new), clippy -D warnings clean, fmt clean.
+    - Review of moved modules: round 1 findings fixed (named JSON-RPC codes in mod.rs, terminal constants and round trips, config round trip compare, session message assertions, tool_types update assertions, SSE https test). Clean now: plan, agent_misc, mod, tool_classification (both files), errors, config, tool_types.
+    - Open after round 2 (old tests, moved verbatim; the reviewer finds new items in old code each pass): mcp.rs duplicate test of ProtocolError code; terminal.rs (shared capability helper, "/tmp" constant, weak asserts, repeated wire literals); session.rs (shared Session helper, duplicate parse tests, token constants). Some ask to delete tests, which conflicts with "keep every test". Needs a person to decide.
+    - Wrong finding: tool_classification.rs "make conversation_manager.rs call classify_tool" — conversation_manager.rs has no kind classification code.
+  timestamp: 2026-11-01T01:48:27.797733+00:00
 depends_on:
 - 01M69XPBKCWV1Q2JAP5MBCW1EK
 position_column: doing
@@ -34,3 +61,19 @@ Hits from a first search (check for more):
 
 Depends on the card that stops the native deny, so that agents have the host tools when they read the new text.
 Done when: no skill, agent, validator or doc names the removed tool, and `cargo nextest run -E 'rdeps(swissarmyhammer-skills) | rdeps(swissarmyhammer-agents) | rdeps(swissarmyhammer-validators)'` is green. #remove-files
+
+## Review Findings (2026-10-31 19:16)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 11 file(s) reviewed, 14 not reviewed.
+
+> 1 file(s) not reviewed — the rendered prompt would exceed the agent's prompt cap:
+> - `crates/claude-agent/tests/integration/coverage_tests.rs` — 341291 rendered bytes, over the 262144-byte per-file cap; not reviewed by: duplication (split the file)
+
+> 6 file(s) not reviewed — excluded by an ignore rule (`.kanban/`).
+
+> 7 markdown file(s) not reviewed — no validator matched. Hand-checked, see below.
+
+- [x] `crates/claude-agent/src/tool_classification.rs:213` `completeness/invariant-propagation` — `classify_by_op` now maps `"search code"` to Search, but `generate_op_title` has no `"search code"` arm. A search operation therefore gets the generic title "Code operation", while `query ast` gets a specific title. The two sibling mappings are not kept in step. Add a `"search code"` arm to `generate_op_title` (for example `Searching code for '<query>'`, reading the `query` argument). Add one assertion that the title for `{"op": "search code", "query": ...}` is not the generic fallback.
+- [x] `crates/claude-agent/tests/integration/coverage_tests.rs:1` `review-engine/prompt-cap` — This file exceeds the review prompt cap — 341291 rendered bytes against the 262144-byte per-file cap — so these validators could not review it: duplication. Split the file into smaller modules that fit the review prompt cap.
+
+Hand-check (markdown and wording, 2026-10-31): no changed file names `read file`, `write file`, `edit file`, `glob files`, `grep files`, `mcp__sah__files` or `files tool`. No skill, agent, validator or doc text denies Bash, Edit, Read or Write. `builtin/agents/double-check/AGENT.md` allow list is `read grep glob mcp__sah__code_context mcp__sah__git`. Hashline remnants (`Cargo.toml`, `crates/swissarmyhammer-hashline`, `crates/swissarmyhammer-edit-match/src/lib.rs`) belong to card ^6n3a6ky and are not a finding here.
