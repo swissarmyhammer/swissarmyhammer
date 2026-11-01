@@ -181,7 +181,7 @@ const SWIFT_UNCHECKED_SENDABLE_ANNOTATED: &str = concat!(
 /// judgment — the smell is the ABSENCE of a lock and a comment. No tool can
 /// answer "is there a documented invariant". A tool CAN require an explicit
 /// annotation, and the text of that annotation is the invariant, which is what
-/// Airbnb's own message asks the author to write.
+/// the rule's own message asks the author to write.
 ///
 /// The two halves are both load-bearing. Without the directive the conformance
 /// reports, and with it the same bytes report nothing, so the escape hatch is

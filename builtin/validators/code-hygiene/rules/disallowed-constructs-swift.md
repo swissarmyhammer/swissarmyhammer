@@ -150,10 +150,9 @@ construct is there, the replacement exists, and the tool names which one the
 project writes.
 
 Twelve rules stand in the run. Nine are swiftlint's own, and three are custom
-regex rules copied from Airbnb's
-`Sources/AirbnbSwiftFormatTool/swiftlint.yml`. The three turn a question a
-reader would judge into a regex plus an escape hatch, which is what makes them
-worth copying.
+regex rules that this gate states in its own swiftlint configuration. The three
+turn a question a reader would judge into a regex plus an escape hatch, which is
+what makes them worth stating.
 
 Every measurement below was made with swiftlint 0.65.0.
 
@@ -191,15 +190,13 @@ The other seven decide a question no shipped prompt rule asks:
 
 ## Every rule name was checked against the installed swiftlint
 
-A name swiftlint does not know is a real hazard for a rule of this shape, and
-`idioms-swift` records what it costs on the swiftformat side: a whole run at a
-status the engine reads as a broken tool. So each of the nine stock names was
-read out of `swiftlint rules` before it was enabled, and swiftlint 0.65.0 knows
-all nine. Nothing in Airbnb's file was taken on trust: `legacy_constant` and
-`fatal_error_message` stand in Airbnb's `only_rules` and are absent from this
-roster, because the card that states this gate names neither.
+A name swiftlint does not know is a real hazard for a rule of this shape. So
+each of the nine stock names was read out of `swiftlint rules` before it was
+enabled, and swiftlint 0.65.0 knows all nine. `legacy_constant` and
+`fatal_error_message` are absent from this roster, because the card that states
+this gate names neither.
 
-swiftlint is gentler than swiftformat about a name it does not know, and that is
+swiftlint answers a name it does not know with a warning and exit 0, and that is
 exactly what makes the check necessary. Measured over one file holding a force
 unwrap, beside a configuration naming `no_such_rule_at_all`:
 
@@ -239,7 +236,7 @@ needs a boundary after `#file` and `ID` is not one — which is what makes
 The regex reads an identifier and not a call, so a declaration named for one of
 the forms reports as well. Measured: `func _printChanges() {}` reports its own
 declaration line. The directive at the end of this file is the recourse, and the
-same directive is the recourse Airbnb's own message names.
+same directive is the recourse the rule's own message names.
 
 ## The annotation IS the documentation
 
@@ -262,9 +259,7 @@ that stopped honouring the directive makes the fixture pair fail.
 ## Test targets keep the three force rules off
 
 The two bullets above say "in non-test code" and they mean it. A test asserts on a
-value it has already proved is there, and a force unwrap is how a test says so;
-Airbnb reaches the same split from the other side, with the swiftformat rules
-`noForceUnwrapInTests` and `noForceTryInTests` that `idioms-swift` enables. So
+value it has already proved is there, and a force unwrap is how a test says so. So
 `force_unwrapping`, `force_try` and `force_cast` report in a product target and
 stay silent in a test target. The other nine rules read every file.
 

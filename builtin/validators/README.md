@@ -306,9 +306,10 @@ the REPORT beside the status, and accept the shared status only for the report
 shape a measured run writes. Measured with swiftlint 0.65.0: a run that
 breaches `warning_threshold:` exits 2 and writes a JSON array that holds one
 entry for each finding and one entry more for the threshold — 2 entries over
-the magic-numbers fixture and 3 over the missing-docs fixture; a run beside a
+the magic-numbers fixture, and 2 over a probe holding one `function_body_length`
+finding (measured with swiftlint 0.65.1); a run beside a
 project `swiftlint_version:` that names a version that is not installed exits
-2, writes 0 bytes and lints no file. The four shipped
+2, writes 0 bytes and lints no file. The three shipped
 swiftlint rules accept status 2 only when the report holds a JSON array of one
 entry or more. A script that accepted every status 2 reported 0 findings and
 exited 0 for the second shape, and the engine read a dirty file as clean.
@@ -318,9 +319,9 @@ must then test STDERR, and answer clean for the shape stderr names. Measured
 with swiftlint 0.65.0: a project `.swiftlint.yml` that holds `excluded: [src]`
 makes swiftlint write `Error: No lintable files found at paths:
 'src/Magic.swift'` to stderr, write 0 bytes to stdout, and exit 1. Each of the
-four shipped swiftlint rules tests stderr for `No lintable files found` after
+three shipped swiftlint rules tests stderr for `No lintable files found` after
 the status gate, and each exits 0 with no finding for that shape. Measured over
-four dirty fixtures beside that project file: each of the four reported 0
+three dirty fixtures beside that project file: each of the three reported 0
 findings at exit 0. A script without the stderr test answers a tool error for
 each project `excluded:` list.
 
@@ -375,7 +376,7 @@ Rules for tool rules:
   and only where the tool merges two configurations and lets the script's own
   one win. Which files a linter passes over — a generated tree, a vendored
   tree — is the project's decision and belongs in the project's file. What the
-  rule MEASURES is the rule's decision. The four shipped swiftlint rules do
+  rule MEASURES is the rule's decision. The three shipped swiftlint rules do
   this: each names the project's `.swiftlint.yml` as the PARENT config and its
   own temporary file as the CHILD, and passes `--force-exclude` so the
   project's `excluded:` list reaches a file named on the command line.
@@ -384,9 +385,9 @@ Rules for tool rules:
   EVERY rule it measures with, in its own child configuration, and the rule
   body must carry a measurement of a project configuration that states other
   options. Without that, a project silently changes the gate. Measured with
-  swiftlint 0.65.0: a parent stating `missing_docs: excludes_inherited_types:
-  false` moves the count when the child states no `missing_docs:` block, and it
-  moves nothing when the child states the block.
+  swiftlint 0.65.1: a parent stating `function_body_length: warning: 1` moves the
+  count when the child states no `function_body_length:` block, and it moves
+  nothing when the child states the block.
 
 ### Fixtures
 

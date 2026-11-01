@@ -458,63 +458,48 @@ same time cold and warm at two different paths.
 
 ## Swift idioms: one tool rule, and the prompt bullets it took
 
-`idioms-swift` runs `swiftformat --lint` over a roster of 29 rules, each of
-which rewrites one Swift shape into an equivalent shape. The two forms compile
-to the same program, so the tool's answer is a fact about the source rather
-than a preference. The roster is Airbnb's, taken from
-`Sources/AirbnbSwiftFormatTool/airbnb.swiftformat` and narrowed to the rules
-that decide an IDIOM: the formatting rules — `indent`, every `wrap*`,
-`sortImports`, `blankLines*`, `spaceAround*`, `trailingSpace`, `braces`,
-`semicolons` — are deliberately left out, because a whitespace finding in a
-diff review is noise and the format step already owns it.
+`idioms-swift` runs the toolchain's `swift format lint` with SEVEN rules turned
+on, each of which rewrites one Swift shape into an equivalent shape. The two
+forms compile to the same program, so the tool's answer is a fact about the
+source rather than a preference. `swift format` is a subcommand of the Swift
+toolchain, spelled with a space, and it is the ONE formatter of the Swift
+rules: `missing-docs-swift` runs it too, with a different rule turned on. The
+seven rules decide an IDIOM. The layout findings that the tool always writes —
+`Indentation`, `Spacing`, `LineLength` and the rest — are dropped by the script,
+because a whitespace finding in a diff review is noise and the format step
+already owns it.
 
 | Rule | Tool | Inline suppression |
 |---|---|---|
-| `idioms-swift` | `swiftformat --lint`, 29 named rules | `// swiftformat:disable:next <rule>` |
+| `idioms-swift` | `swift format lint`, 7 named rules | `// swift-format-ignore: <rule>` |
 
 It supersedes nothing, and that is a fact of the `supersedes` key rather than a
 reading of what the rule is about. The key names a WHOLE prompt rule and the
-engine skips that rule whole. This gate decides SEVEN bullets spread across
-three prompt rules of the `swift` set — five of `idioms.md`, one of
-`value-semantics.md` and one of `optionals.md` — and no one of those rules is
-only those bullets, so naming any of them would take its other bullets out of
-every review the moment swiftformat is installed.
+engine skips that rule whole. This gate decides SEVEN bullets of `idioms.md`,
+and that rule is not only those bullets: it keeps the empty `Set` literal, the
+type-name repetition in every shape the tool does not read, and the `public
+init` that repeats the synthesized initializer. Naming `idioms.md` would take
+those out of every review the moment the toolchain is present.
 
-Six of the seven are this gate's, and two of those six are HALF of the bullet
-they took. The seventh, `optionals.md` never `guard` in a test, stays in the
-prompt text whole, because `noGuardInTests` reports
-`guard let value = source else` and stays silent on the shorthand
-`guard let value else`.
+`NoVoidReturnOnFunctionSignature` reports BOTH halves of the `Void` return
+clause, `-> Void` and `-> ()`, so `idioms.md` keeps neither. `ReplaceForEachWithForLoop`
+reports every `forEach` with a closure and stays silent for `forEach(print)`.
+Both were measured with Apple Swift 6.4.2. The gate keeps `UseWhereClausesInForLoops`
+OFF, and no prompt rule states a `where` clause.
 
-The two halves each leave the rest with `idioms.md`. SwiftFormat's `void`
-rewrites `-> ()` into `-> Void` and removes the clause only under
-`redundantVoidReturnType`, which this roster does not name, so `idioms.md`
-keeps the omit-the-clause half. `preferForLoop` turns a `forEach` into a `for`
-loop — under `--single-line-for-each convert`, which the run states, so the
-single-line `things.forEach { if $0 > 2 { print($0) } }` reports rather than
-going silent — and it never suggests a `where` clause, so `idioms.md` keeps the
-`where` half.
+Two properties of `swift format` shape the run, and the rule file measures
+each. The `rules` table the script writes REPLACES the default table, so the 36
+rules it does not name are OFF. And the pretty-printer and the whitespace linter
+run whatever the configuration says, so the script keeps only an output tag that
+its allowlist of the seven names. A tag the toolchain renames would match no
+output line and read as a clean file, so a shipped test holds each of the seven
+to standing in `swift format dump-configuration`.
 
-Each half stays because the tool's own FIX lands there. `void` rewrites into
-`-> Void`, and `preferForLoop` rewrites the single-line `forEach` into
-`for thing in things { if thing > 2 { print(thing) } }` rather than into a
-`where` clause. A gate that autocorrects moves the author to a NEW shape, so a
-split bullet keeps the shape the fix writes.
-
-Two properties of swiftformat shape the run, and the rule file measures each.
-A rule name SwiftFormat does not know breaks the WHOLE run at status 70, and
-`--unknown-rules ignore` moves nothing on the command line, so the script
-intersects its roster with `swiftformat --rules` before it lints — two of
-Airbnb's 29 stand in no released SwiftFormat. And one refusing path costs a
-single swiftformat run every finding it made, which is the answer
-`builtin/validators/README.md` refuses, so the script hands swiftformat one
-path for each run and states each path it declined on the marked stderr
-channel.
-
-The version floor is SwiftFormat **0.62.1**, the version every rule of the
-roster was measured present in. `doctor.check_command` carries it through
-`--min-version`, so a machine whose swiftformat is too old reports as a missing
-tool rather than silently dropping the rules an older release lacks.
+The version floor is Swift **6.2**, stated in `doctor.fix_hint`. The toolchain
+gives `swift format`, so the gate has no install step, and a machine with no
+Swift toolchain reports the gate as a missing tool.
+`swift format` does not read `.swift-version`: a probe gave the same findings
+with and without it.
 
 ## Swift disallowed constructs: one tool rule, and the annotation as the exemption
 
@@ -527,9 +512,9 @@ the source rather than a preference.
 Nine are swiftlint's own — `implicitly_unwrapped_optional`, `force_unwrapping`,
 `force_try`, `force_cast`, `unused_optional_binding`, `unowned_variable_capture`,
 `legacy_constructor`, `legacy_nsgeometry_functions` and
-`legacy_cggeometry_functions`. Three are custom regex rules copied from Airbnb's
-`Sources/AirbnbSwiftFormatTool/swiftlint.yml`: `no_direct_standard_out_logs`,
-`no_file_literal` and `no_unchecked_sendable`.
+`legacy_cggeometry_functions`. Three are custom regex rules this gate states in its
+own swiftlint configuration: `no_direct_standard_out_logs`, `no_file_literal`
+and `no_unchecked_sendable`.
 
 | Rule | Tool | Inline suppression |
 |---|---|---|
@@ -541,15 +526,14 @@ of `optionals.md`, two of `error-handling.md` and one of `concurrency.md` — an
 none of the three was only those bullets. All five are out of the prompt text
 and this gate is their one owner.
 
-**The three custom rules are the reason to copy Airbnb's file rather than write
-one.** Each turns an LLM judgment into a regex plus an escape hatch, and
+**The three custom rules are the reason to state regex rules rather than leave
+the questions to a reader.** Each turns an LLM judgment into a regex plus an escape hatch, and
 `no_unchecked_sendable` is the shape that matters. `concurrency.md` stated its
 requirement as pure judgment — "`@unchecked Sendable` requires a documented
 synchronization invariant. The smell is the *absence* of a lock/isolation
 mechanism and a comment." No tool can answer "is there a documented invariant".
 A tool CAN require an explicit annotation, and the TEXT of that annotation is
-the invariant. Airbnb's message says so in as many words, and this rule keeps
-that message: write `// swiftlint:disable:next no_unchecked_sendable` above the
+the invariant. The rule's message says so in as many words: write `// swiftlint:disable:next no_unchecked_sendable` above the
 declaration with the reason after it. The exemption became an annotation, which
 is the standing answer this whole set gives to a judgment.
 
@@ -559,10 +543,8 @@ comment and inside a `///` doc comment: the shipped `match_kinds: [identifier]`
 reports the call alone, and the same regex without the key reports all four.
 
 **The three force rules stay off inside a test target**, because the two
-bullets they took each say "in non-test code" and mean it.
-Airbnb reaches the same split from the other side, with the swiftformat rules
-`noForceUnwrapInTests` and `noForceTryInTests` that `idioms-swift` enables. The
-split cannot live in the configuration: measured on swiftlint 0.65.0, an
+bullets they took each say "in non-test code" and mean it. A test asserts on a value it has already proved is there, and a force
+unwrap is how a test says so. The split cannot live in the configuration: measured on swiftlint 0.65.0, an
 `excluded:` key under `force_unwrapping:` is answered with
 `warning: Configuration for 'force_unwrapping' rule contains the invalid key(s)
 'excluded'.` and both files still report. So the SCRIPT partitions its own

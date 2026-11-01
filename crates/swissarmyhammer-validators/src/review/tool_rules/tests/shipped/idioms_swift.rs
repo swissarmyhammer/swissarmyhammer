@@ -25,7 +25,7 @@ use super::*;
 ///
 /// The pass fixture is the load-bearing half. It holds the same declarations
 /// the fail fixture holds, each written in the form its rule asks for, so a
-/// SwiftFormat release that changed what one rule asks for makes the pair
+/// Swift toolchain release that changed what one rule asks for makes the pair
 /// fail and takes the rule out of the review rather than moving a finding
 /// without a word.
 #[test]
@@ -774,9 +774,9 @@ const SWIFT_EMPTY_COLLECTION_RULE: &str = "AlwaysUseLiteralForEmptyCollectionIni
 /// The rule is OFF in the toolchain's own configuration, so the configuration
 /// the script writes is what turns it ON. The direction is the whole point:
 /// its message reads `replace '[Int]()' with ': [Int] = []'`, which is the DO
-/// of `idioms.md` word for word, and it is the OPPOSITE direction from
-/// SwiftFormat's `propertyTypes` under `--property-types inferred`, which this
-/// gate refused for exactly that reason.
+/// of `idioms.md` word for word. The earlier swiftformat tool had a rule that
+/// asked for the OPPOSITE direction, and this gate refused it for exactly that
+/// reason.
 ///
 /// The `Set` row is load-bearing beside them. Measured with Apple Swift 6.4,
 /// the rule reports `[Int]()` and `[String: Int]()` and stays SILENT for

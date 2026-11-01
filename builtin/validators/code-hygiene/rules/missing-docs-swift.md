@@ -79,8 +79,8 @@ Its own rule `AllPublicDeclarationsHaveDocumentation` names that check, and the
 gate runs `swift format lint` to read it. The gate never rewrites a file.
 Review is read-only, so a finding names the line and the author makes the edit.
 
-`swift format` is a SUBCOMMAND of the Swift toolchain, spelled with a space. It
-is a different program from `swiftformat`. This gate runs the toolchain, so it
+`swift format` is a SUBCOMMAND of the Swift toolchain, spelled with a space.
+This gate runs the toolchain, so it
 needs no install step at all. The earlier form of this gate ran `swiftlint`,
 which only Homebrew installs.
 

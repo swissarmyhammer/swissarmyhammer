@@ -167,12 +167,11 @@ const STUTTERING_NAME_RULE_KIND: &str = "stuttering-name";
 const SHIPPED_STUTTERING_NAME_RULES: &[(&str, &str, &[&str])] =
     &[("go", GO_STUTTERING_NAME_RULE, SUPERSEDES_NOTHING)];
 
-/// The shipped idioms tool rule for Swift. swiftformat names a rule
-/// SwiftFormat does not know as a whole-run error, so the script intersects
-/// its own roster with `swiftformat --rules` before it lints, and it hands
-/// swiftformat ONE path for each run because one refusing path otherwise
-/// costs the whole run every finding it made. Several more acceptance tests
-/// drive those answers end to end.
+/// The shipped idioms tool rule for Swift. It runs the toolchain's own
+/// `swift format lint` with seven rules turned ON, keeps only the findings
+/// those seven write, and hands `swift format` ONE path for each run because
+/// one refusing path otherwise costs the whole run every finding it made.
+/// Several more acceptance tests drive those answers end to end.
 const SWIFT_IDIOMS_RULE: &str = "idioms-swift";
 
 /// The name [`verify_shipped_tool_rules_pass_fixtures`] puts in its failure
@@ -185,20 +184,19 @@ const IDIOMS_RULE_KIND: &str = "idioms";
 ///
 /// It supersedes nothing, and `idioms-swift` states why in its own body.
 /// `supersedes` names a WHOLE prompt rule, and this gate decides seven bullets
-/// spread across three of them — five of `swift/rules/idioms.md`, one of
-/// `swift/rules/value-semantics.md` and one of `swift/rules/optionals.md`. Six
-/// of those bullets are the gate's, four whole and two in half, and each of the
-/// three rules keeps the bullets no tool reads and the half of each split
-/// bullet the gate misses. Naming any of those rules here would take THOSE out
-/// of every review the moment swiftformat is installed.
+/// of `swift/rules/idioms.md` and not the whole of it. That rule keeps the
+/// bullets no tool reads: the empty `Set` literal, the type-name repetition in
+/// every shape but one, and the `public init` that repeats the synthesized
+/// initializer. Naming it here would take THOSE out of every review the moment
+/// the Swift toolchain is present.
 const SHIPPED_IDIOMS_RULES: &[(&str, &str, &[&str])] =
     &[("swift", SWIFT_IDIOMS_RULE, SUPERSEDES_NOTHING)];
 
 /// The shipped disallowed-construct tool rule for Swift. It runs twelve
 /// swiftlint rules — nine of swiftlint's own and three custom regex rules
-/// copied from Airbnb — and it partitions its own paths, because three of the
-/// twelve stay off inside a test target and swiftlint carries no per-rule path
-/// filter for a stock rule. Several more acceptance tests drive those answers
+/// stated in its own configuration — and it partitions its own paths, because
+/// three of the twelve stay off inside a test target and swiftlint carries no
+/// per-rule path filter for a stock rule. Several more acceptance tests drive those answers
 /// end to end.
 const SWIFT_DISALLOWED_CONSTRUCTS_RULE: &str = "disallowed-constructs-swift";
 

@@ -696,7 +696,7 @@ struct ShippedEmptyRun {
     ///
     /// The ORDER of the entries is free. A tool that reads more than one file
     /// at one time answers in the order its own work finished. Measured on
-    /// `missing-docs-swift`: two runs over the same two files gave the two
+    /// the earlier swiftlint form of `missing-docs-swift`: two runs over the same two files gave the two
     /// files in opposite order.
     with_files: &'static [&'static str],
 
@@ -2345,7 +2345,7 @@ impl SwiftProjectDecline {
 /// What one shipped swiftlint rule's probe of a project decline states, with
 /// the way the project declines the run left out.
 ///
-/// The three shipped swiftlint rules — `missing-docs-swift`,
+/// The three shipped swiftlint rules — `disallowed-constructs-swift`,
 /// `function-length-swift` and `magic-numbers-swift` — each hold the same two
 /// branches, and every value beside these three is the same for all of them:
 /// the project types, the staged path, and the project files each shape stages.
