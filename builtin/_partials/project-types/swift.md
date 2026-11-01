@@ -65,7 +65,7 @@ swift format lint -s -r Sources Tests
 
 Keep `-s` on a check run. Without it `swift format lint` writes warnings and still exits 0.
 
-The tool reads `.swift-format`, a JSON file, from the directory of the file or from a parent. Obey a `.swift-format` the project already holds. Do not write one as a side effect of formatting. To make a first one, run `swift format dump-configuration`: it writes the default configuration.
+The tool reads `.swift-format`, a JSON file, from the directory of the file or from a parent. Obey a `.swift-format` the project already holds. Do not write one as a side effect of formatting. When the project holds no `.swift-format`, the tool defaults apply. To make a first one, run `swift format dump-configuration`: it writes the default configuration.
 
 To exempt one declaration, write `// swift-format-ignore` on the line above it. A comment on the same line does nothing.
 
