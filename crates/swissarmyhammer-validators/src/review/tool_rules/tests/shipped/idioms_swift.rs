@@ -269,13 +269,13 @@ fn swift_idioms_run(files: &[&str]) -> SwiftIdiomsRun {
 ///
 /// [`swift_gate_reporting_rules`] answers the finding names alone, so a probe
 /// of what the run DECLINED reaches the script through here instead.
-fn swift_idioms_staged_run(path: &str, source: &str) -> SwiftIdiomsRun {
+fn swift_idioms_staged_run(path: ProbePath<'_>, source: &str) -> SwiftIdiomsRun {
     let loader = builtin_loader();
     require_tool_installed(&loader, SWIFT_PROJECT_TYPES, SWIFT_IDIOMS_RULE);
 
-    let staged = [(path, source)];
+    let staged = [(path.0, source)];
 
-    swift_idioms_from_staging(&loader, &ShippedStaging::of(&staged), &[path])
+    swift_idioms_from_staging(&loader, &ShippedStaging::of(&staged), &[path.0])
 }
 
 /// Drives the shipped script over `staging` with `files` as the work list, and
@@ -546,7 +546,7 @@ fn the_shipped_swift_idioms_tool_rule_measures_a_file_named_for_a_diagnostic_hea
 #[test]
 fn the_shipped_swift_idioms_tool_rule_declines_a_file_named_for_a_diagnostic_head() {
     let run = swift_idioms_staged_run(
-        SWIFT_IDIOMS_DIAGNOSTIC_NAME_BROKEN_PATH,
+        ProbePath(SWIFT_IDIOMS_DIAGNOSTIC_NAME_BROKEN_PATH),
         SWIFT_FORMAT_UNPARSABLE_SOURCE,
     );
 
@@ -643,7 +643,10 @@ fn assert_swift_idioms_reports_the_long_type(run: &SwiftIdiomsRun, path: &str) {
 /// So the break is the precomposed Latin letter a real repository writes.
 #[test]
 fn the_shipped_swift_idioms_tool_rule_reports_a_file_whose_name_carries_an_accent() {
-    let run = swift_idioms_staged_run(SWIFT_IDIOMS_ACCENTED_PATH, SWIFT_IDIOMS_LONG_TYPE);
+    let run = swift_idioms_staged_run(
+        ProbePath(SWIFT_IDIOMS_ACCENTED_PATH),
+        SWIFT_IDIOMS_LONG_TYPE,
+    );
 
     assert_swift_idioms_reports_the_long_type(&run, SWIFT_IDIOMS_ACCENTED_PATH);
 }
@@ -659,7 +662,10 @@ fn the_shipped_swift_idioms_tool_rule_reports_a_file_whose_name_carries_an_accen
 /// literal bar, so the substitution was skipped without a word.
 #[test]
 fn the_shipped_swift_idioms_tool_rule_reports_a_file_whose_name_carries_an_alternation_bar() {
-    let run = swift_idioms_staged_run(SWIFT_IDIOMS_ALTERNATION_PATH, SWIFT_IDIOMS_LONG_TYPE);
+    let run = swift_idioms_staged_run(
+        ProbePath(SWIFT_IDIOMS_ALTERNATION_PATH),
+        SWIFT_IDIOMS_LONG_TYPE,
+    );
 
     assert_swift_idioms_reports_the_long_type(&run, SWIFT_IDIOMS_ALTERNATION_PATH);
 }
@@ -715,7 +721,7 @@ const SWIFT_IDIOMS_FORGED_LAYOUT_SOURCE: &str =
 #[test]
 fn the_shipped_swift_idioms_tool_rule_measures_a_file_whose_source_forges_a_diagnostic_head() {
     for source in SWIFT_IDIOMS_FORGED_FINDING_SOURCES {
-        let run = swift_idioms_staged_run(SWIFT_IDIOMS_PROBE_PATH, source);
+        let run = swift_idioms_staged_run(ProbePath(SWIFT_IDIOMS_PROBE_PATH), source);
 
         assert!(
             run.findings.is_empty(),
@@ -744,7 +750,10 @@ fn the_shipped_swift_idioms_tool_rule_measures_a_file_whose_source_forges_a_diag
 /// file.
 #[test]
 fn the_shipped_swift_idioms_tool_rule_declines_a_file_whose_source_forges_a_diagnostic_head() {
-    let run = swift_idioms_staged_run(SWIFT_IDIOMS_PROBE_PATH, SWIFT_IDIOMS_FORGED_LAYOUT_SOURCE);
+    let run = swift_idioms_staged_run(
+        ProbePath(SWIFT_IDIOMS_PROBE_PATH),
+        SWIFT_IDIOMS_FORGED_LAYOUT_SOURCE,
+    );
 
     assert!(
         run.findings.is_empty(),
@@ -785,12 +794,54 @@ const SWIFT_IDIOMS_SHELL_UTILITIES: &[&str] = &[
     "sed", "sort", "swift", "tail", "tr", "uniq", "wc", "xargs",
 ];
 
+/// The path a probe stages its one file at.
+///
+/// A distinct type, so a path and the source staged at it cannot trade places.
+#[derive(Clone, Copy)]
+struct ProbePath<'a>(&'a str);
+
+/// The name of a shell utility a script may run.
+///
+/// A distinct type, so the utility and the script that may run it cannot trade
+/// places.
+#[derive(Clone, Copy)]
+struct Utility<'a>(&'a str);
+
+/// What a failure message calls the text a helper reads, such as `body`.
+///
+/// A distinct type, so the label and the text it names cannot trade places.
+#[derive(Clone, Copy)]
+struct Subject<'a>(&'a str);
+
+/// A mark whose position in a text a helper looks up.
+///
+/// A distinct type, so the mark and the text it stands in cannot trade places.
+#[derive(Clone, Copy)]
+struct Marker<'a>(&'a str);
+
+/// The two ends of a span of text: what opens it and what closes it.
+///
+/// Named fields, so the opening and the closing cannot trade places.
+#[derive(Clone, Copy)]
+struct Between<'a> {
+    head: &'a str,
+    end: &'a str,
+}
+
+/// The heading line a body table stands under.
+///
+/// A distinct type, so the heading and the body it stands in cannot trade
+/// places.
+#[derive(Clone, Copy)]
+struct Heading<'a>(&'a str);
+
 /// Whether `script` runs `utility` — the name standing in it as a whole word.
 ///
 /// A word ends at any character that is neither a letter, a digit, an
 /// underscore nor a dash. So `format` never reads as `rm`, `trap` never reads
 /// as `tr`, and `sah-probe.swift` reads as `swift`, which the script does run.
-fn script_runs_utility(script: &str, utility: &str) -> bool {
+fn script_runs_utility(script: &str, utility: Utility<'_>) -> bool {
+    let utility = utility.0;
     let word = |letter: char| letter.is_alphanumeric() || letter == '_' || letter == '-';
 
     script.match_indices(utility).any(|(at, _)| {
@@ -826,7 +877,7 @@ fn the_shipped_swift_idioms_rule_doctor_names_every_utility_its_script_runs() {
     let run: std::collections::BTreeSet<&str> = SWIFT_IDIOMS_SHELL_UTILITIES
         .iter()
         .copied()
-        .filter(|utility| script_runs_utility(&shipped.script, utility))
+        .filter(|utility| script_runs_utility(&shipped.script, Utility(utility)))
         .collect();
 
     let unasked: Vec<&str> = run.difference(&asked).copied().collect();
@@ -866,9 +917,13 @@ const SWIFT_IDIOMS_LINE_CONTINUATION: &str = "\\\n";
 /// The reading opens at the lint verb and closes where that one command
 /// closes, so a `which` list standing before it and a `|| status=$?` standing
 /// after it reach the answer neither.
-fn swift_format_lint_options(command: &str, what: &str) -> std::collections::BTreeSet<String> {
+fn swift_format_lint_options(
+    command: &str,
+    what: Subject<'_>,
+) -> std::collections::BTreeSet<String> {
     let head = format!("{SWIFT_TOOLCHAIN_TOOL} {SWIFT_FORMAT_SUBCOMMAND} {SWIFT_FORMAT_LINT_VERB}");
     let joined = command.replace(SWIFT_IDIOMS_LINE_CONTINUATION, " ");
+    let what = what.0;
     let at = joined
         .find(&head)
         .unwrap_or_else(|| panic!("the {what} of `{SWIFT_IDIOMS_RULE}` must run `{head}`"));
@@ -909,8 +964,8 @@ fn the_shipped_swift_idioms_rule_doctor_measures_every_option_its_script_gives_t
         .as_deref()
         .unwrap_or_else(|| panic!("`{SWIFT_IDIOMS_RULE}` must carry a `doctor.check_command`"));
 
-    let run = swift_format_lint_options(&shipped.script, "run block");
-    let asked = swift_format_lint_options(check, "`doctor.check_command`");
+    let run = swift_format_lint_options(&shipped.script, Subject("run block"));
+    let asked = swift_format_lint_options(check, Subject("`doctor.check_command`"));
 
     assert_eq!(
         run, asked,
@@ -950,7 +1005,8 @@ const SWIFT_IDIOMS_HINT_FLOOR_MARK: &str = " or newer";
 const SWIFT_IDIOMS_XCODE_MARK: &str = " and above ship it";
 
 /// The word standing immediately before the first `mark` of `text`.
-fn word_before(text: &str, mark: &str, what: &str) -> String {
+fn word_before(text: &str, mark: Marker<'_>, what: Subject<'_>) -> String {
+    let (mark, what) = (mark.0, what.0);
     let at = text
         .find(mark)
         .unwrap_or_else(|| panic!("the {what} of `{SWIFT_IDIOMS_RULE}` must state `{mark}`"));
@@ -966,7 +1022,8 @@ fn word_before(text: &str, mark: &str, what: &str) -> String {
 
 /// The text standing between the first `head` of `text` and the next `end`
 /// after it.
-fn text_between(text: &str, head: &str, end: &str, what: &str) -> String {
+fn text_between(text: &str, span: Between<'_>, what: Subject<'_>) -> String {
+    let (head, end, what) = (span.head, span.end, what.0);
     let at = text
         .find(head)
         .unwrap_or_else(|| panic!("the {what} of `{SWIFT_IDIOMS_RULE}` must state `{head}`"));
@@ -994,11 +1051,17 @@ fn the_shipped_swift_idioms_rule_states_one_swift_version_floor() {
 
     let stated = text_between(
         &source,
-        SWIFT_IDIOMS_BODY_FLOOR_HEAD,
-        SWIFT_IDIOMS_BODY_FLOOR_END,
-        "body",
+        Between {
+            head: SWIFT_IDIOMS_BODY_FLOOR_HEAD,
+            end: SWIFT_IDIOMS_BODY_FLOOR_END,
+        },
+        Subject("body"),
     );
-    let hinted = word_before(&hint, SWIFT_IDIOMS_HINT_FLOOR_MARK, "`doctor.fix_hint`");
+    let hinted = word_before(
+        &hint,
+        Marker(SWIFT_IDIOMS_HINT_FLOOR_MARK),
+        Subject("`doctor.fix_hint`"),
+    );
 
     assert_eq!(
         stated, hinted,
@@ -1011,8 +1074,12 @@ fn the_shipped_swift_idioms_rule_states_one_swift_version_floor() {
          accepts; it states {stated:?}"
     );
 
-    let body_xcode = word_before(&source, SWIFT_IDIOMS_XCODE_MARK, "body");
-    let hint_xcode = word_before(&hint, SWIFT_IDIOMS_XCODE_MARK, "`doctor.fix_hint`");
+    let body_xcode = word_before(&source, Marker(SWIFT_IDIOMS_XCODE_MARK), Subject("body"));
+    let hint_xcode = word_before(
+        &hint,
+        Marker(SWIFT_IDIOMS_XCODE_MARK),
+        Subject("`doctor.fix_hint`"),
+    );
 
     assert_eq!(
         body_xcode, hint_xcode,
@@ -1678,7 +1745,8 @@ const RULE_BODY_CODE_MARK: char = '`';
 /// rows the table measures and nothing else. A heading the body does not state
 /// answers NO row, which is what makes a test that reads a table it expects
 /// fail rather than pass over a table nobody wrote.
-fn rule_body_table(body: &str, heading: &str) -> Vec<Vec<String>> {
+fn rule_body_table(body: &str, heading: Heading<'_>) -> Vec<Vec<String>> {
+    let heading = heading.0;
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut under_heading = false;
 
@@ -2194,6 +2262,13 @@ mod swift_reflection {
             .collect()
     }
 
+    /// The suffix a type name must end in to be read.
+    ///
+    /// A distinct type, so the suffix and the path of the image cannot trade
+    /// places.
+    #[derive(Clone, Copy)]
+    struct TypeSuffix<'a>(&'a str);
+
     /// The case names of every type of `image` whose name ends in `suffix`,
     /// keyed by the type's own name.
     ///
@@ -2202,7 +2277,7 @@ mod swift_reflection {
     fn cases_of_types_named(
         image: &[u8],
         path: &str,
-        suffix: &str,
+        suffix: TypeSuffix<'_>,
     ) -> Result<BTreeMap<String, Vec<String>>, ReflectionFailure> {
         let sections = sections(image, path)?;
         let metadata = sections
@@ -2228,7 +2303,7 @@ mod swift_reflection {
             )?);
 
             if let Some(name) = type_name(image, &sections, descriptor)? {
-                if name.ends_with(suffix) {
+                if name.ends_with(suffix.0) {
                     found.insert(
                         name,
                         record_names(image, &sections, descriptor, record_size, count)?,
@@ -2293,7 +2368,7 @@ mod swift_reflection {
             source,
         })?;
 
-        let categories = cases_of_types_named(&image, &path, CATEGORY_SUFFIX)?;
+        let categories = cases_of_types_named(&image, &path, TypeSuffix(CATEGORY_SUFFIX))?;
 
         let mut expected: Vec<&str> = UNSTOPPABLE_CATEGORIES.to_vec();
         expected.push(RULE_CATEGORY);
@@ -2422,7 +2497,7 @@ const SWIFT_FORMAT_TAG_PROBES: &[(&str, &str)] = &[
 fn the_shipped_swift_idioms_rule_body_names_every_tag_swift_format_writes() {
     let loader = builtin_loader();
     let source = shipped_swift_idioms_source(&loader);
-    let recorded = rule_body_table(&source, SWIFT_FORMAT_TAG_TABLE_HEADING);
+    let recorded = rule_body_table(&source, Heading(SWIFT_FORMAT_TAG_TABLE_HEADING));
 
     let named: Vec<String> = recorded
         .iter()
@@ -2619,7 +2694,7 @@ fn stage_swift_format_probe(repo: &Path, shape: &SwiftFormatProbeShape) -> PathB
 fn the_shipped_swift_idioms_rule_body_records_every_status_the_lint_run_writes() {
     let loader = builtin_loader();
     let source = shipped_swift_idioms_source(&loader);
-    let recorded = rule_body_table(&source, SWIFT_FORMAT_STATUS_TABLE_HEADING);
+    let recorded = rule_body_table(&source, Heading(SWIFT_FORMAT_STATUS_TABLE_HEADING));
 
     assert_eq!(
         recorded.len(),
