@@ -174,14 +174,10 @@ const SWIFT_INITIALIZATION_ANSWER: &str = concat!(
 ///
 /// The accumulator bullet names TWO loop shapes, and both stand here.
 ///
-/// `Roster` carries the `where` clause, which is the shape `idioms.md` states
-/// as its own DO — so the probe measures the line an author lands on by
-/// obeying that rule and reading no further.
+/// `Roster` carries the `where` clause.
 ///
 /// `Directory` carries the nested `if`, which is the shape
-/// `UseWhereClausesInForLoops` reads. That rule is OFF in the shipped gate,
-/// and the body of `idioms-swift.md` records why: its fix rewrites the nested
-/// `if` into the `where` clause `immutability.md` names as its other DON'T. A
+/// `UseWhereClausesInForLoops` reads. That rule is OFF in the shipped gate. A
 /// gate that turned it on reports this probe, so the row is what would catch
 /// that.
 const SWIFT_IMMUTABILITY_REFUSAL: &str = concat!(
@@ -365,10 +361,10 @@ const SWIFT_VALUE_SEMANTICS_ANSWER: &str = concat!(
 
 /// The idiom bullets `idioms.md` keeps, written the way it states NOT to.
 ///
-/// Four subjects, one for each bullet: a static member that repeats its type
+/// Three subjects, one for each bullet: a static member that repeats its type
 /// name in a shape the tool rule does not read, an empty `Set` written as a
-/// call, a `public init` that repeats the synthesized memberwise initializer on
-/// an internal type, and a loop that filters and then acts.
+/// call, and a `public init` that repeats the synthesized memberwise
+/// initializer on an internal type.
 const SWIFT_IDIOMS_REFUSAL: &str = concat!(
     "import Foundation\n\n",
     "struct Color {\n",
@@ -385,16 +381,10 @@ const SWIFT_IDIOMS_REFUSAL: &str = concat!(
     "        self.x = x\n",
     "        self.y = y\n",
     "    }\n",
-    "}\n\n",
-    "enum Looping {\n",
-    "    static func record(_ value: Int) {}\n\n",
-    "    static func walk(_ things: [Int]) {\n",
-    "        for thing in things { if thing > 0 { record(thing) } }\n",
-    "    }\n",
     "}\n",
 );
 
-/// The same four subjects written the way `idioms.md` asks for.
+/// The same three subjects written the way `idioms.md` asks for.
 const SWIFT_IDIOMS_ANSWER: &str = concat!(
     "import Foundation\n\n",
     "struct Color {\n",
@@ -406,12 +396,6 @@ const SWIFT_IDIOMS_ANSWER: &str = concat!(
     "struct Point {\n",
     "    var x: Int\n",
     "    var y: Int\n",
-    "}\n\n",
-    "enum Looping {\n",
-    "    static func record(_ value: Int) {}\n\n",
-    "    static func walk(_ things: [Int]) {\n",
-    "        for thing in things where thing > 0 { record(thing) }\n",
-    "    }\n",
     "}\n",
 );
 

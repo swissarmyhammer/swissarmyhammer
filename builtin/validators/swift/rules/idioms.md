@@ -1,14 +1,16 @@
 ---
 name: idioms
-description: Literal empty collections, redundant Void return clauses, type-name repetition in static members, where clauses over nested ifs and filter chains
+description: Type-name repetition in static members, empty Set literals, public initializers that repeat the synthesized one
 ---
 
 # Swift Idioms
 
 Semantic idioms that read wrong in a diff. (Whitespace, indentation, and import
-ordering are `swift-format`'s job, not review findings.)
+ordering are `swift format`'s job, not review findings. So are the shorthand type
+names, the `Void` return clause, the empty `Array` and `Dictionary` literal, the
+internal memberwise initializer, the `let` on each bound case variable, and
+`forEach` — the `idioms-swift` tool rule decides those.)
 
-- **Empty-collection variables use a literal with a type annotation, not a call.** DO: `var items: [Int] = []`. DON'T: `var items = [Int]()`. This includes `Set` and every other `ExpressibleByArrayLiteral`/`ExpressibleByDictionaryLiteral` type: `var ids: Set<String> = []` is the idiomatic form — do NOT flag it toward `Set<String>()`; the annotated literal wins, and flip-flopping between the two forms across review rounds is always a validator error. SwiftFormat's `propertyTypes` rule under `--property-types inferred` rewrites this bullet's DO into its DON'T — measured on 0.62.1, `var items: [Int] = []` becomes `var items = [Int]()` and `var ids: Set<String> = []` becomes `var ids = Set<String>()`. The `idioms-swift` tool rule therefore enables neither the rule nor the option, and its body carries the measurement. Do not add either one.
-- **Omit the return clause entirely when it is `Void`.** DON'T: `func f() -> Void {}`. DO: `func f() {}`.
-- **Don't repeat the enclosing type's name in a static member.** DON'T: `static let redColor` on `Color`. DO: `static let red`.
-- **A loop that filters says `where`.** DON'T: `for thing in things { if thing > 2 { print(thing) } }`, and DON'T: `things.filter { $0 > 2 }.forEach { thing in print(thing) }`. DO: `for thing in things where thing > 2 { print(thing) }`. A loop whose body only appends into a collection belongs to `immutability.md`, and its fix is `map`/`filter` rather than a `where` clause. SwiftFormat's `preferForLoop` WRITES the first DON'T as its own fix and never suggests a `where` clause, so this half is this rule's alone.
+- **Empty `Set` variables use a literal with a type annotation, not a call.** DO: `var ids: Set<String> = []`. DON'T: `var ids = Set<String>()`. The tool rule stays silent for `Set`, so this bullet is the only owner of it.
+- **Don't repeat the enclosing type's name in a static member.** DON'T: `static let redColor` on `Color`. DO: `static let red`. The tool rule reads one shape only, a member whose initializer calls its own type, so every other shape is this bullet's.
+- **Don't write a `public init` that only repeats the synthesized memberwise initializer on a type that is not `public`.** The compiler synthesizes an internal memberwise initializer, and a `public` one on an internal or `private` type reaches no more callers than that. DON'T: `struct Point { var x: Int; public init(x: Int) { self.x = x } }`. DO: delete the `init`. A `public init` on a `public` type stays, because the compiler never synthesizes a `public` one. The tool rule reports the internal form only.

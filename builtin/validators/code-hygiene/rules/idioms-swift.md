@@ -125,7 +125,7 @@ and it is the allowlist the output filter reads.
 | `AlwaysUseLiteralForEmptyCollectionInit` | the empty-collection bullet of `idioms.md`, in the direction that rule asks for. It is OFF in the default configuration, so the written configuration is what turns it ON |
 | `DontRepeatTypeInStaticProperties` | the type-name bullet of `idioms.md`, for one shape of many |
 | `NoVoidReturnOnFunctionSignature` | the `Void` return clause, BOTH halves of the bullet `idioms.md` split |
-| `ReplaceForEachWithForLoop` | the `forEach` half of the loop bullet |
+| `ReplaceForEachWithForLoop` | the `forEach` walk, for a closure that holds an `if` and for a `filter` chain that feeds it |
 | `UseLetInEveryBoundCaseVariable` | the pattern-let bullet |
 | `UseShorthandTypeNames` | the shorthand type sugar bullet |
 | `UseSynthesizedInitializer` | the redundant memberwise initializer, the INTERNAL half alone |
@@ -142,8 +142,8 @@ three bullets: it runs swiftlint, which carries the test-target split and the
 `ignored_literal_argument_functions` option that `swift format` does not have.
 One requirement takes one owner.
 
-`UseWhereClausesInForLoops` stays OFF, and the section that measures it states
-why.
+`UseWhereClausesInForLoops` is not in the allowlist: the tool cannot tell a loop
+that acts from a loop that builds a collection.
 
 ## The allowlist is the gate, and the configuration only a second one
 
@@ -686,78 +686,31 @@ every review round.
 `the_shipped_swift_idioms_tool_rule_reads_the_internal_synthesized_initializer`
 holds row 1 and row 2 together.
 
-## `UseWhereClausesInForLoops` and `immutability.md` disagree
-
-`builtin/validators/swift/rules/immutability.md` names TWO shapes as a DON'T, in
-one bullet, and its fix is `map` or `filter`:
-
-```swift
-// the first DON'T
-for user in users where user.isActive { names.append(user.name) }
-// the second DON'T
-for user in users { if user.isActive { names.append(user.name) } }
-```
-
-Measured with `UseWhereClausesInForLoops` ON, over one file for each shape:
-
-| the walk | reported | the fix `swift format --in-place` wrote |
-|---|---|---|
-| the second DON'T, the nested `if` | YES — `replace this 'if' statement with a 'where' clause` | the FIRST DON'T, character for character |
-| the first DON'T, the `where` clause | NO | — |
-| `let names = users.filter(\.isActive).map(\.name)`, the DO | NO | — |
-
-The conflict is real and it is measured. An author who takes the finding, and who
-applies the tool's own correction, lands on the first DON'T of `immutability.md`,
-word for word. The rule is `false` in the shipped configuration, and the gate
-leaves it that way, so the gate creates no such conflict.
-
-This is the same class of conflict this repository already refused for
-SwiftFormat's `--property-types inferred`. A tool and a prompt rule that
-disagree make churn on every review round.
-
-A person must choose one of two answers:
-
-1. **Keep `UseWhereClausesInForLoops` OFF.** `idioms.md` and `immutability.md`
-   then keep the whole question, and the tool decides nothing here.
-2. **Rewrite the carve-out of `immutability.md`** so the two rules cannot
-   disagree. The bullet would then stop naming the `where` form as a DON'T.
-
-**This body chooses neither.** The evidence stands above. The choice is a
-person's, and until a person makes it the rule stays OFF.
-`the_shipped_swift_idioms_tool_rule_leaves_the_where_clause_rule_off` holds it
-there: the shipped script must name the rule nowhere, and the gate must stay
-silent over the nested `if`.
-
 ## Which rule reports a filter chain
 
-The `where` bullet of `idioms.md` names a filter chain as its second DON'T:
+A `filter` chain that feeds a `forEach` is this walk:
 
 ```swift
 things.filter { $0 > 2 }.forEach { thing in print(thing) }
 ```
 
-Measured over one file for each walk, each rule ON alone and then both together:
+Measured over one file for each walk, `ReplaceForEachWithForLoop` ON alone:
 
-| the walk | `UseWhereClausesInForLoops` | `ReplaceForEachWithForLoop` | the two together |
-|---|---|---|---|
-| `things.filter { $0 > 2 }.forEach { thing in print(thing) }` | NO | YES, at 2:28 | `ReplaceForEachWithForLoop` |
-| `things.forEach { if $0 > 2 { print($0) } }` | NO | YES, at 2:10 | `ReplaceForEachWithForLoop` |
-| `for thing in things where thing > 2 { print(thing) }` | NO | NO | NO |
+| the walk | `ReplaceForEachWithForLoop` |
+|---|---|
+| `things.filter { $0 > 2 }.forEach { thing in print(thing) }` | YES, at 2:28 |
+| `things.forEach { if $0 > 2 { print($0) } }` | YES, at 2:10 |
+| `for thing in things where thing > 2 { print(thing) }` | NO |
 
 `ReplaceForEachWithForLoop` reports the chain, and it is in the allowlist, so
 the gate reports it. Its message reads `replace use of '.forEach { ... }' with
-for-in loop`, which asks for a for-in loop and not for the `where` clause the
-bullet wants. The author who takes the finding therefore lands one edit short
-of the bullet.
+for-in loop`.
 
 The shape its fix lands on is NOTHING. Measured: `swift format --in-place` with
-that rule ON leaves the file byte for byte as it was, with the rule alone and
-with both rules together. The rule REPORTS and it CORRECTS nothing, so the
-message is the whole of what the author receives, and no fix walks the author
-into a shape this body would have to name.
+that rule ON leaves the file byte for byte as it was. The rule REPORTS and it
+CORRECTS nothing, so the message is the whole of what the author receives.
 
-`the_shipped_swift_idioms_tool_rule_reports_a_filter_chain` holds row 1, and it
-holds `idioms.md` to stating the walk word for word.
+`the_shipped_swift_idioms_tool_rule_reports_a_filter_chain` holds row 1.
 
 ## The directive an author writes
 
@@ -902,23 +855,25 @@ when the tool is healthy. This gate decides BULLETS of
 that rule here would take its OTHER bullets out of every review the moment the
 toolchain is present.
 
-`the_shipped_swift_idioms_tool_rule_owns_each_bullet_it_took` holds five
-bullets to having exactly one owner: each one is reported by its rule, over
-Swift written in the SHAPE the deleted bullet named, and stated by no prompt
-rule. The five are the shorthand type sugar bullet, the `()` return clause, the
-memberwise initializer identical to the synthesized one, the `forEach` + `if`
-walk, and the `let` on each bound case variable.
+`the_shipped_swift_idioms_tool_rule_owns_each_bullet_it_took` holds seven
+bullets to being reported by this rule, over Swift written in the SHAPE the
+deleted bullet named. The seven are the shorthand type sugar bullet, both halves
+of the `Void` return clause, the empty `Array` and `Dictionary` literal, the
+internal memberwise initializer identical to the synthesized one, the
+`forEach` walk, and the `let` on each bound case variable.
 
-Two answers of this gate are still waiting for a person, and both are the work
-of the task that rebalances the Swift prompt rules.
+`idioms.md` stays, and states only the bullets this gate cannot read: the empty
+`Set` literal, the type-name repetition in every shape but one, and the `public
+init` that repeats the synthesized initializer on a type that is not `public`.
+A requirement has one owner, so none of those three is a row of the test above. `swift_judgment_rules.rs` holds the gate
+silent over each of them instead.
 
-- `idioms.md` still states the empty-collection bullet and the
-  omit-the-clause half of the `Void` bullet, and this gate now decides both. A
-  requirement with two owners makes churn on every review round.
-- `value-semantics.md` "Mark classes not designed for subclassing" lost its
-  tool. SwiftFormat's `preferFinalClasses` decided it, and the toolchain carries
-  no rule like it, so that requirement waits for the prompt rule to state it
-  again.
+`value-semantics.md` states "Mark a `class` that is not designed for subclassing
+`final`" again. The toolchain carries no rule like `preferFinalClasses`, so the
+prompt rule is the only owner, and the same file holds the gate silent over it.
+
+`UseWhereClausesInForLoops` stays OFF, and no prompt rule states a `where`
+clause.
 
 `stuttering-name-go` and `unused-dependencies-rust` are the two shipped tool
 rules that already declare no `supersedes`, so an empty key is the stated shape

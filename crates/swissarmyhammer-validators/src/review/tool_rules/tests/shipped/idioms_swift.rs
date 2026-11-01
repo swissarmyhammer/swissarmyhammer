@@ -42,14 +42,14 @@ fn every_shipped_idioms_tool_rule_passes_its_fixtures() {
 const SWIFT_IDIOMS_ALLOWLIST_SIZE: usize = 7;
 
 /// The rule that rewrites a `for` loop's nested `if` into a `where` clause.
+///
+/// The gate leaves it OFF: the tool cannot tell a loop that acts from a loop
+/// that builds a collection.
 const SWIFT_IDIOMS_WHERE_CLAUSE_RULE: &str = "UseWhereClausesInForLoops";
 
 /// A `for` loop that filters with a nested `if`.
 ///
-/// `builtin/validators/swift/rules/immutability.md` names this shape as a
-/// DON'T whose fix is `map` or `filter`, and
-/// [`SWIFT_IDIOMS_WHERE_CLAUSE_RULE`] rewrites it into the `where` clause that
-/// rule names as its OTHER DON'T.
+/// [`SWIFT_IDIOMS_WHERE_CLAUSE_RULE`] reports this shape when it is ON.
 const SWIFT_IDIOMS_NESTED_IF_FOR_LOOP: &str = concat!(
     "public enum Nesting {\n",
     "    public static func walk(_ things: [Int]) {\n",
@@ -60,26 +60,15 @@ const SWIFT_IDIOMS_NESTED_IF_FOR_LOOP: &str = concat!(
 
 /// Acceptance: the gate leaves `UseWhereClausesInForLoops` OFF.
 ///
-/// Row 5 of the measurement table of `idioms-swift.md` records the reason, and
-/// it is a conflict rather than a preference. `immutability.md` names BOTH the
-/// nested `if` and the `where` clause as DON'Ts, and its fix is `map` or
-/// `filter`. Measured with that rule ON: it reports the nested `if`, and
-/// `swift format --in-place` rewrites the probe below into the `where` clause
-/// `immutability.md` refuses, character for character. So an author who takes
-/// the finding and applies the tool's own correction lands on a DON'T.
-///
-/// The body of `idioms-swift.md` states two answers for that and chooses
-/// neither, because the choice is a person's. Until a person makes it, the
-/// rule stays OFF, and this test is what holds it there: the gate must stay
-/// silent over the shape.
+/// Measured with that rule ON, it reports the nested `if` of the probe below.
+/// The gate must stay silent over the probe, which holds the rule OFF.
 #[test]
 fn the_shipped_swift_idioms_tool_rule_leaves_the_where_clause_rule_off() {
     let reported = swift_idioms_reporting_rules(SWIFT_IDIOMS_NESTED_IF_FOR_LOOP, NO_SUPPORT_FILES);
     assert!(
         !reported.contains(&SWIFT_IDIOMS_WHERE_CLAUSE_RULE.to_string()),
-        "the gate must stay silent over a `for` loop that filters with a nested `if`, \
-         because `{SWIFT_IMMUTABILITY_PROMPT_RULE}.md` decides that shape; the run reported \
-         {reported:?}"
+        "the gate must stay silent over a `for` loop that filters with a nested `if`; \
+         the run reported {reported:?}"
     );
 }
 
@@ -835,8 +824,7 @@ const SWIFT_IDIOMS_SINGLE_LINE_FOR_EACH: &str = concat!(
 
 /// The same walk written as a `filter` chain feeding a `forEach`.
 ///
-/// The line stands, character for character, in the `idioms.md` bullet that
-/// states the `where` half.
+/// A `forEach` after a `filter` is the walk `ReplaceForEachWithForLoop` reports.
 const SWIFT_IDIOMS_FILTER_CHAIN: &str = concat!(
     "public enum Filtering {\n",
     "    public static func walk(_ things: [Int]) {\n",
@@ -845,14 +833,10 @@ const SWIFT_IDIOMS_FILTER_CHAIN: &str = concat!(
     "}\n",
 );
 
-/// Acceptance: `ReplaceForEachWithForLoop` reports the `filter` chain, and its
-/// message asks for a for-in loop rather than for the `where` clause the
-/// prompt bullet asks for.
+/// Acceptance: `ReplaceForEachWithForLoop` reports the `filter` chain.
 ///
 /// This is the row the body of `idioms-swift.md` records under "Which rule
-/// reports a filter chain", and it answers a question a person has to see: an
-/// author who takes this finding is told to write a for-in loop, and the
-/// `where` clause the bullet wants is a further edit the tool never names.
+/// reports a filter chain".
 ///
 /// The tool CORRECTS nothing here. Measured with Apple Swift 6.4,
 /// `swift format --in-place` with this rule ON leaves the file byte for byte
@@ -991,7 +975,7 @@ const SWIFT_IDIOMS_HOISTED_LET: &str = concat!(
 /// measures that boundary.
 ///
 /// `ReplaceForEachWithForLoop` carries the `forEach` + `if` half, and it
-/// reports the `filter` chain of the `where` bullet as well —
+/// reports the `filter` chain as well —
 /// `the_shipped_swift_idioms_tool_rule_reports_a_filter_chain` measures that.
 ///
 /// One bullet this gate USED to own is not here at all. `value-semantics.md`
