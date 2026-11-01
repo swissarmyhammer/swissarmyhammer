@@ -122,6 +122,9 @@ swissarmyhammer-build = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# `TemplateContext` renders the shipped Swift guidelines partial through the
+# same template path `detect projects` uses.
+swissarmyhammer-config = { workspace = true }
 serial_test = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing-test = { workspace = true }

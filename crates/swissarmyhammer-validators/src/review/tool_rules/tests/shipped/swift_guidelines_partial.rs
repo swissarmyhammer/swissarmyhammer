@@ -1,19 +1,22 @@
 //! What the shipped Swift guidelines partial has to agree with.
 //!
 //! `builtin/_partials/project-types/swift.md` is the Swift guidance an agent
-//! receives before it writes a line of Swift, and this project ships gates
-//! that judge the Swift it then writes. Guidance that disagrees with a gate
+//! receives before it writes a line of Swift, and this project ships a gate
+//! that judges the Swift it then writes. Guidance that disagrees with the gate
 //! walks the author into a finding from this project's own review, so the
 //! agreement is a requirement rather than a coincidence.
 //!
-//! The partial is read through `get_builtin_partials`, the table
-//! `PromptResolver::load_builtin_partials` serves from, so an assertion here
-//! measures the text an agent actually RECEIVES rather than a file on disk.
-//! What the partial is HELD TO is read the same way. The lint command comes
-//! out of the shipped `idioms-swift` script, and the two empty-collection
-//! forms come out of the shipped `idioms` prompt rule, so each value has ONE
-//! owner and a change to either gate fails a test here rather than leaving the
-//! partial to drift.
+//! The partial is RENDERED here through the path `detect projects` uses: an
+//! `{% include "_partials/project-types/swift" %}` directive, rendered by the
+//! `TemplateLibrary` a `PromptResolver` fills. An assertion here therefore
+//! measures the text an agent actually RECEIVES, after the front matter and
+//! the template engine have had their say, rather than a file on disk.
+//!
+//! What the partial is HELD TO is read from the shipped `idioms-swift` rule:
+//! the lint command out of its script, the exemption directive out of its
+//! body and the Swift version floor out of its `doctor.fix_hint`. Each value
+//! has ONE owner, and a change to the gate fails a test here rather than
+//! leaving the partial to drift.
 //!
 //! This module stands in this crate rather than beside the partial in
 //! `swissarmyhammer-templating`, because that crate cannot read a validator:
@@ -23,240 +26,226 @@
 
 use super::*;
 
-use swissarmyhammer_templating::resolver::get_builtin_partials;
+use swissarmyhammer_config::TemplateContext;
+use swissarmyhammer_templating::{PromptResolver, TemplateLibrary};
 
-/// The name `get_builtin_partials` serves the Swift project-type guidelines
+/// The path `detect projects` includes the Swift project-type guidelines
 /// under.
 ///
-/// `PromptResolver::load_builtin_partials` registers it as `_partials/{name}`,
-/// which is the same path `swissarmyhammer-project-detection` builds for the
-/// `swift` project type through its `partial!` macro.
-const SWIFT_GUIDELINES_PARTIAL: &str = "project-types/swift";
+/// It is the `_partials/project-types/{key}` path
+/// `swissarmyhammer-project-detection` builds for the `swift` project type.
+const SWIFT_GUIDELINES_PARTIAL_INCLUDE: &str = "_partials/project-types/swift";
 
-/// The Swift project-type guidelines, as an agent receives them.
-fn swift_guidelines_partial() -> &'static str {
-    get_builtin_partials()
-        .into_iter()
-        .find(|(name, _)| *name == SWIFT_GUIDELINES_PARTIAL)
-        .map(|(_, content)| content)
-        .unwrap_or_else(|| {
-            panic!("the builtin partial `{SWIFT_GUIDELINES_PARTIAL}` must be embedded")
-        })
+/// The Swift project-type guidelines, rendered as `detect projects` renders
+/// them for an agent.
+fn rendered_swift_guidelines() -> String {
+    let mut library = TemplateLibrary::new();
+    PromptResolver::new()
+        .load_all_prompts(&mut library)
+        .expect("the builtin partials must load into the template library");
+    library
+        .render_text(
+            &format!("{{% include \"{SWIFT_GUIDELINES_PARTIAL_INCLUDE}\" %}}"),
+            &TemplateContext::new(),
+        )
+        .expect("the Swift guidelines partial must render through the template library")
 }
 
-/// Assert the Swift guidelines partial carries each phrase it must keep.
+/// Assert the rendered Swift guidelines carry each phrase they must keep.
 ///
-/// Each row pairs the exact text the partial has to hold with the requirement
-/// that text satisfies, so a failure names the requirement rather than only
-/// the missing string.
-fn assert_swift_partial_states(requirements: &[(&str, &str)]) {
-    let partial = swift_guidelines_partial();
+/// Each row pairs the exact text the guidelines have to hold with the
+/// requirement that text satisfies, so a failure names the requirement rather
+/// than only the missing string.
+fn assert_swift_guidelines_state(rendered: &str, requirements: &[(&str, &str)]) {
     for (needle, requirement) in requirements {
         assert!(
-            partial.contains(needle),
-            "the swift guidelines partial must {requirement} (missing {needle:?})"
+            rendered.contains(needle),
+            "the swift guidelines must {requirement} (missing {needle:?})"
         );
     }
 }
 
-/// Acceptance: the guidelines name each formatter beside the config file it
-/// alone reads.
+/// Acceptance: the guidelines name ONE formatter, the toolchain's own
+/// `swift format`, with the command that writes, the command that checks, and
+/// the configuration rules.
 ///
-/// `swift format` and `swiftformat` are DIFFERENT programs. The first is
-/// Apple's swift-format, which ships with the toolchain and reads
-/// `.swift-format`. The second is Nick Lockwood's SwiftFormat, installed
-/// separately, which reads `.swiftformat`. The guidelines once offered the two
-/// as interchangeable alternatives on one line, which sends an agent to the
-/// wrong config file.
-///
-/// The PAIRING is what the requirement is about. Guidelines holding all three
-/// file names somewhere state nothing about which tool reads which file, so a
-/// row that swapped `.swift-format` and `.swiftformat` would send an agent to
-/// the wrong one and read as correct. Each needle below therefore carries the
-/// command cell and the config cell of ONE table row.
+/// `swift format lint` without `-s` writes warnings and exits 0, so the check
+/// command keeps `-s`. The tool reads `.swift-format` on its own, so the
+/// guidelines obey a file the project holds, and make a first one only from
+/// `dump-configuration`.
 #[test]
-fn swift_partial_names_each_formatter_with_its_own_config_file() {
-    assert_swift_partial_states(&[
-        (
-            "`swift format` (in the toolchain) | `.swift-format`",
-            "pair Apple's swift-format with the config file it alone reads",
-        ),
-        (
-            "`swiftformat` | `.swiftformat`",
-            "pair SwiftFormat with the config file it alone reads",
-        ),
-        (
-            "`swiftlint` | `.swiftlint.yml`",
-            "pair SwiftLint with the config file it alone reads",
-        ),
-        (
-            "DIFFERENT programs",
-            "state that the two formatters are not one tool",
-        ),
-        (
-            "Do not write a config file as a side effect",
-            "forbid creating a config file while formatting",
-        ),
-    ]);
-
-    let partial = swift_guidelines_partial();
-    assert!(
-        !partial.contains("(or `swiftformat .`)"),
-        "the swift guidelines partial must never offer `swift format` and \
-         `swiftformat` as interchangeable alternatives — they are different \
-         tools reading different config files"
+fn swift_partial_states_the_one_toolchain_formatter() {
+    assert_swift_guidelines_state(
+        &rendered_swift_guidelines(),
+        &[
+            (
+                "swift format -i -r Sources Tests",
+                "give the command that writes the formatting",
+            ),
+            (
+                "swift format lint -s -r Sources Tests",
+                "give the strict command that checks the formatting",
+            ),
+            (
+                "`.swift-format`",
+                "name the configuration file the toolchain formatter reads",
+            ),
+            (
+                "Obey a `.swift-format` the project already holds",
+                "obey a configuration the project already holds",
+            ),
+            (
+                "Do not write one as a side effect of formatting",
+                "forbid creating a configuration file while formatting",
+            ),
+            (
+                "`swift format dump-configuration`",
+                "name the command that makes a first configuration",
+            ),
+        ],
     );
 }
 
-/// Acceptance: the guidelines carry the Airbnb plugin command lines that RUN.
+/// Acceptance: the guidelines name no second formatter, no plugin that wraps
+/// one, and no mechanism of one.
 ///
-/// A package that depends on `github.com/airbnb/swift` gets one command
-/// running SwiftFormat and SwiftLint together. Both command lines carry
-/// `--allow-writing-to-package-directory`: the plugin always asks for write
-/// permission, so a bare `swift package format --lint` stops with a permission
-/// error in a non-interactive shell.
+/// Every needle is matched in lower case, so a capitalised mention fails the
+/// test as well.
 #[test]
-fn swift_partial_documents_the_airbnb_plugin_commands() {
-    assert_swift_partial_states(&[
-        (
-            "https://github.com/airbnb/swift",
-            "show the dependency that supplies the Airbnb plugin",
-        ),
-        (
-            "swift package --allow-writing-to-package-directory format --lint\n",
-            "give the plugin check command, which needs the write permission too",
-        ),
-        (
-            "swift package --allow-writing-to-package-directory format\n",
-            "give the plugin non-interactive fix command",
-        ),
-        (
-            "--target <Target>",
-            "give the singular --target switch the plugin accepts",
-        ),
-        ("--paths Sources Tests", "list the plugin paths switch"),
-        ("--exclude Tests", "list the plugin exclude switch"),
-        (
-            "--swift-version 6.2",
-            "list the plugin Swift version switch",
-        ),
-        (
-            "Fix mode exits non-zero only for a SwiftLint rule",
-            "state which failures each mode reports through its exit code",
-        ),
-    ]);
+fn swift_partial_names_no_second_formatter() {
+    let rendered = rendered_swift_guidelines().to_lowercase();
+    for (needle, why) in [
+        ("swiftformat", "a different program from `swift format`"),
+        ("airbnb", "a plugin that wraps a second formatter"),
+        ("--property-types", "an option of a second formatter"),
+        (".swift-version", "a file a second formatter reads"),
+        ("allow-writing-to-package-directory", "a plugin command"),
+    ] {
+        assert!(
+            !rendered.contains(needle),
+            "the swift guidelines must not name {needle:?}, {why}"
+        );
+    }
 }
 
-/// The head of the lint command the shipped `idioms-swift` script runs.
-///
-/// The gate moved from Nick Lockwood's `swiftformat` to the toolchain's own
-/// `swift format`, and the guidelines have to send an author to the SAME tool.
-/// Reading the head off the shipped script is what keeps the two together: a
-/// gate that moved again fails the test below rather than leaving the partial
-/// to name a tool no review runs.
-const SWIFT_IDIOMS_LINT_HEAD: &str = "swift format lint";
-
-/// What the shipped `idioms` prompt rule writes before the swiftformat option
-/// that rewrites its DO into its DON'T.
-///
-/// The mark opens with the quote the rule wraps the option in, so the reading
-/// below lands on the option's own value rather than on the prose after it.
-const SWIFT_IDIOMS_PROPERTY_TYPES_MARK: &str = "`--property-types ";
-
-/// What that rule writes before the empty-collection form it asks for.
-const SWIFT_IDIOMS_DO_MARK: &str = "DO: `";
-
-/// What that rule writes before the empty-collection form it refuses.
-const SWIFT_IDIOMS_DONT_MARK: &str = "DON'T: `";
-
-/// What closes a quoted span of a prompt rule body.
-const SWIFT_PROMPT_RULE_QUOTE: char = '`';
-
-/// The one bullet of `body` that decides how an empty collection is declared.
-///
-/// The bullet is found by the swiftformat option it names, so the DO form, the
-/// DON'T form and the option all come off the SAME sentence rather than out of
-/// whichever bullet of the rule happened to write `DO:` first.
-fn swift_empty_collection_bullet(body: &str) -> &str {
-    body.lines()
-        .find(|line| line.contains(SWIFT_IDIOMS_PROPERTY_TYPES_MARK))
-        .unwrap_or_else(|| {
-            panic!(
-                "the shipped `{SWIFT_IDIOMS_PROMPT_RULE}` prompt rule must name \
-                 {SWIFT_IDIOMS_PROPERTY_TYPES_MARK:?}"
-            )
-        })
+/// Acceptance: the guidelines name `swiftlint` and `periphery` as the tools
+/// the review gates need, say Homebrew installs them, and never offer either as
+/// a formatter.
+#[test]
+fn swift_partial_names_the_review_gate_tools_and_no_formatter_use() {
+    let rendered = rendered_swift_guidelines();
+    assert_swift_guidelines_state(
+        &rendered,
+        &[
+            (
+                "`brew install swiftlint periphery`",
+                "say Homebrew installs the two review gate tools",
+            ),
+            (
+                "`swiftlint`",
+                "name the tool the disallowed-construct gate needs",
+            ),
+            ("`periphery`", "name the tool the dead-code gate needs"),
+        ],
+    );
+    for formatter_use in ["swiftlint --fix", "swiftlint autocorrect", ".swiftlint.yml"] {
+        assert!(
+            !rendered.contains(formatter_use),
+            "the swift guidelines must not offer swiftlint as a formatter ({formatter_use:?})"
+        );
+    }
 }
 
-/// What `bullet` writes between `mark` and the quote that closes the span
-/// holding it.
-///
-/// The prompt rules quote every declaration and every option they name, so one
-/// reading serves each of them.
-fn stated_after(bullet: &str, mark: &str) -> String {
-    let opened = bullet
-        .split_once(mark)
+/// What the `idioms-swift` rule body writes before the exemption directive an
+/// author writes.
+const SWIFT_IDIOMS_DIRECTIVE_MARK: &str = "The directive is `";
+
+/// What closes a quoted span of a rule body.
+const SWIFT_GUIDELINES_QUOTE: char = '`';
+
+/// What follows the Swift version `doctor.fix_hint` names as its floor.
+const SWIFT_GUIDELINES_FLOOR_MARK: &str = " or newer";
+
+/// The markdown source of the shipped `idioms-swift` rule, front matter and
+/// body alike.
+fn shipped_swift_idioms_source(loader: &ValidatorLoader) -> String {
+    std::fs::read_to_string(shipped_asset(loader, &RULE_SOURCE_ASSET, SWIFT_IDIOMS_RULE))
+        .expect("read the shipped Swift idioms rule source")
+}
+
+/// The exemption directive the shipped `idioms-swift` rule body tells an
+/// author to write.
+fn shipped_swift_idioms_directive(source: &str) -> String {
+    let opened = source
+        .split_once(SWIFT_IDIOMS_DIRECTIVE_MARK)
         .unwrap_or_else(|| {
-            panic!("the empty-collection bullet must write {mark:?}");
+            panic!("the `{SWIFT_IDIOMS_RULE}` body must state {SWIFT_IDIOMS_DIRECTIVE_MARK:?}")
         })
         .1;
     opened
-        .split_once(SWIFT_PROMPT_RULE_QUOTE)
-        .unwrap_or_else(|| panic!("the span the bullet opens after {mark:?} must be closed"))
+        .split_once(SWIFT_GUIDELINES_QUOTE)
+        .unwrap_or_else(|| panic!("the directive the `{SWIFT_IDIOMS_RULE}` body states must close"))
         .0
         .to_string()
 }
 
-/// Acceptance: the guidelines state what the shipped Swift gates measure, read
-/// out of those gates.
+/// The Swift version the shipped `idioms-swift` doctor names as its floor.
 ///
-/// Guidance that disagrees with a gate walks an author into a finding from
-/// this project's own review, and two shipped rules could disagree with what
-/// the guidelines say:
+/// The first `or newer` of the source stands in `doctor.fix_hint`, the
+/// sentence a person reads when the doctor reports the rule unhealthy.
+fn shipped_swift_idioms_floor(source: &str) -> String {
+    let at = source
+        .find(SWIFT_GUIDELINES_FLOOR_MARK)
+        .unwrap_or_else(|| panic!("the fix hint must state {SWIFT_GUIDELINES_FLOOR_MARK:?}"));
+    source[..at]
+        .split_whitespace()
+        .next_back()
+        .unwrap_or_else(|| panic!("the fix hint must name a version before the mark"))
+        .to_string()
+}
+
+/// Acceptance: the guidelines and the `idioms-swift` gate name the SAME
+/// formatter, the SAME exemption directive and the SAME Swift version floor,
+/// each read out of the shipped gate.
 ///
-/// - `builtin/validators/code-hygiene/rules/idioms-swift.md` runs the
-///   toolchain's own `swift format`, so an author the guidelines send to
-///   another formatter writes code that gate reports.
-/// - `builtin/validators/swift/rules/idioms.md` wants the annotated
-///   empty-collection literal that the Airbnb plugin's own
-///   `--property-types inferred` rewrites away.
-///
-/// Every value below is READ from the shipped rule rather than written here,
-/// so the tool name and the two declaration forms each have one owner. Change
-/// either gate and this test fails.
+/// A gate that moved to another tool or another directive fails here rather
+/// than leaving the guidelines to name a tool no review runs, or a directive
+/// the gate ignores.
 #[test]
-fn swift_partial_agrees_with_the_shipped_swift_tool_validators() {
+fn swift_partial_agrees_with_the_idioms_swift_gate() {
     let loader = builtin_loader();
+    let rendered = rendered_swift_guidelines();
 
     let script = required_shipped_tool_rule(&loader, SWIFT_IDIOMS_RULE).script;
     assert!(
-        script.contains(SWIFT_IDIOMS_LINT_HEAD),
-        "the shipped `{SWIFT_IDIOMS_RULE}` script must run `{SWIFT_IDIOMS_LINT_HEAD}`, or the \
+        script.contains("swift format lint"),
+        "the shipped `{SWIFT_IDIOMS_RULE}` script must run `swift format lint`, or the \
          guidelines below name a tool no review runs"
     );
-    assert_swift_partial_states(&[(
-        SWIFT_IDIOMS_LINT_HEAD,
-        "name the lint command the idioms-swift gate itself runs",
-    )]);
 
-    let idioms = swift_prompt_rule_body(&loader, SWIFT_IDIOMS_PROMPT_RULE);
-    let bullet = swift_empty_collection_bullet(&idioms);
-    let inferred = format!(
-        "--property-types {}",
-        stated_after(bullet, SWIFT_IDIOMS_PROPERTY_TYPES_MARK)
+    let source = shipped_swift_idioms_source(&loader);
+    let directive = shipped_swift_idioms_directive(&source);
+    let floor = shipped_swift_idioms_floor(&source);
+    let floor_sentence = format!("Swift {floor}{SWIFT_GUIDELINES_FLOOR_MARK}");
+    assert_swift_guidelines_state(
+        &rendered,
+        &[
+            (
+                "swift format lint",
+                "name the lint command the idioms-swift gate itself runs",
+            ),
+            (
+                directive.as_str(),
+                "name the exemption directive the idioms-swift gate reads",
+            ),
+            (
+                floor_sentence.as_str(),
+                "state the Swift version floor the idioms-swift doctor asks for",
+            ),
+        ],
     );
-    assert_swift_partial_states(&[
-        (
-            inferred.as_str(),
-            "name the option that rewrites the annotated empty collection away",
-        ),
-        (
-            stated_after(bullet, SWIFT_IDIOMS_DO_MARK).as_str(),
-            "show the empty-collection form the idioms prompt rule wants back",
-        ),
-        (
-            stated_after(bullet, SWIFT_IDIOMS_DONT_MARK).as_str(),
-            "show the empty-collection form a plugin fix run writes",
-        ),
-    ]);
+    assert!(
+        !rendered.contains("swiftformat:disable"),
+        "the swift guidelines must not name the directive of a different formatter"
+    );
 }

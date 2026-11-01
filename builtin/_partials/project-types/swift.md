@@ -53,57 +53,25 @@ Run `swift package reset` when you start a new task. It removes the full build d
 
 For Xcode builds the same files accumulate in `~/Library/Developer/Xcode/DerivedData/`. Remove the DerivedData directory of the project when the disk gets full.
 
-**Formatting and linting.** Format before you commit.
-
-`swift format` and `swiftformat` are DIFFERENT programs. Each one reads its own config file and applies its own rules:
-
-| tool | command | config file it reads |
-|---|---|---|
-| Apple swift-format | `swift format` (in the toolchain) | `.swift-format` (JSON) |
-| SwiftFormat (Nick Lockwood) | `swiftformat` | `.swiftformat` |
-| SwiftLint | `swiftlint` | `.swiftlint.yml` |
-
-Use the tool whose config file the repo already holds, and obey that config. Do not write a config file as a side effect of formatting. Do not add style flags that disagree with a config file that is already there. When the repo holds no config file, use the tool defaults.
-
-**Prefer the Airbnb plugin when `Package.swift` declares it.** Look for this dependency:
-
-```swift
-.package(url: "https://github.com/airbnb/swift", from: "1.0.0"),
-```
-
-It gives one command that runs SwiftFormat AND SwiftLint, with a shared config and one exit code:
+**Formatting.** Format before you commit. `swift format` is the ONE formatter. The Swift toolchain gives it (Swift 6.2 or newer), so it has no install step.
 
 ```
-# check — the run writes no file
-swift package --allow-writing-to-package-directory format --lint
+# write the formatting
+swift format -i -r Sources Tests
 
-# fix — non-interactive
-swift package --allow-writing-to-package-directory format
+# check the formatting
+swift format lint -s -r Sources Tests
 ```
 
-Give `--allow-writing-to-package-directory` to the check run also. The plugin always asks for write permission, so a bare `swift package format --lint` stops with a permission error in a non-interactive shell. The check run still writes no file.
+Keep `-s` on a check run. Without it `swift format lint` writes warnings and still exits 0.
 
-Switches: `--paths Sources Tests Package.swift`, `--target <Target>` (singular — `--targets` is not a switch and exits non-zero), `--exclude Tests`, `--swift-version 6.2`.
+The tool reads `.swift-format`, a JSON file, from the directory of the file or from a parent. Obey a `.swift-format` the project already holds. Do not write one as a side effect of formatting. To make a first one, run `swift format dump-configuration`: it writes the default configuration.
 
-Exit codes: `--lint` exits non-zero on any failure. Fix mode exits non-zero only for a SwiftLint rule, because SwiftLint cannot correct those automatically.
+To exempt one declaration, write `// swift-format-ignore` on the line above it. A comment on the same line does nothing.
 
-One caution about the plugin. Its config sets `--property-types inferred`, so fix mode rewrites `var items: [Int] = []` into `var items = [Int]()`. The `idioms` review rule wants the annotated literal. Put the annotated form back after a fix run.
+**Review gates need two more tools.** The toolchain has no rule for the disallowed constructs, the function length, the magic numbers or the dead code. Two other tools report them, and Homebrew installs both: `brew install swiftlint periphery`.
 
-**Without the plugin**, name the tool and its options:
-
-- SwiftFormat, 0.62.1 or newer:
-
-  ```
-  swiftformat . --pattern-let inline --short-optionals always \
-    --single-line-for-each convert --guard-like-if-statements convert
-  ```
-
-  State those four options. Their defaults are `hoist`, `preserve-struct-inits`, `ignore` and `preserve`, and a bare `swiftformat .` writes code that the `idioms-swift` review gate then reports. A repo `.swiftformat` that already states the four options makes a bare `swiftformat .` correct — the tool finds that file in the file's own directory or a parent, and obeys it. Add `--lint` to check without writing.
-
-- Apple swift-format: `swift format -i -r Sources Tests` to write, `swift format lint -s -r Sources Tests` to check. The tool finds `.swift-format` in the file's own directory or a parent, and obeys it. Keep `-s` on a check run — without it `swift format lint` reports warnings and still exits 0.
-
-- SwiftLint: `swiftlint` to report, `swiftlint --fix` to correct what it can.
-
-**Write the project Swift version in `.swift-version`.** SwiftFormat reads that file, and several rules stay silent without it — they will not suggest an API the toolchain may lack. `Package.swift` is not read for this.
+- `swiftlint` reports the disallowed constructs, the function length and the magic numbers.
+- `periphery` reports the dead code.
 
 **File locations:** `Sources/` (source), `Tests/` (tests), `Package.swift` (SwiftPM manifest). Xcode projects use `*.xcodeproj` / `*.xcworkspace`. Git-ignored: `.build/`.
