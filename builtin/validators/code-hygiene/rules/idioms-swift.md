@@ -97,8 +97,7 @@ The gate runs `swift format lint`. It never rewrites a file. Review is
 read-only, so a finding names the line and the author makes the edit.
 
 `swift format` is a SUBCOMMAND of the Swift toolchain, spelled with a space. It
-is a different program from `swiftformat`, which is Nick Lockwood's SwiftFormat
-and which only Homebrew installs. This gate runs the toolchain, so it needs no
+is part of the Swift toolchain. This gate runs the toolchain, so it needs no
 install step at all.
 
 Every measurement below was made with the toolchain of this machine and of the
@@ -122,12 +121,12 @@ and it is the allowlist the output filter reads.
 
 | the rule | what it decides |
 |---|---|
-| `AlwaysUseLiteralForEmptyCollectionInit` | the empty-collection bullet of `idioms.md`, in the direction that rule asks for. It is OFF in the default configuration, so the written configuration is what turns it ON |
-| `DontRepeatTypeInStaticProperties` | the type-name bullet of `idioms.md`, for one shape of many |
-| `NoVoidReturnOnFunctionSignature` | the `Void` return clause, BOTH halves of the bullet `idioms.md` split |
+| `AlwaysUseLiteralForEmptyCollectionInit` | the empty `Array` and `Dictionary` literal (`[Int]()` becomes `: [Int] = []`, `[String: Int]()` becomes `: [String: Int] = [:]`), and nothing for `Set`. It is OFF in the default configuration, so the written configuration is what turns it ON |
+| `DontRepeatTypeInStaticProperties` | the repeated type name in a static member, for one shape of many |
+| `NoVoidReturnOnFunctionSignature` | the `Void` return clause, BOTH halves: `-> Void` and `-> ()` on a function signature |
 | `ReplaceForEachWithForLoop` | the `forEach` walk, for a closure that holds an `if` and for a `filter` chain that feeds it |
-| `UseLetInEveryBoundCaseVariable` | the pattern-let bullet |
-| `UseShorthandTypeNames` | the shorthand type sugar bullet |
+| `UseLetInEveryBoundCaseVariable` | one `let` on the pattern, not a `let` on each bound case variable |
+| `UseShorthandTypeNames` | the shorthand type sugar: `[Int]`, `[K: V]` and `Int?` in place of `Array<Int>`, `Dictionary<K, V>` and `Optional<Int>` |
 | `UseSynthesizedInitializer` | the redundant memberwise initializer, the INTERNAL half alone |
 
 `the_shipped_swift_idioms_tool_rule_names_only_rules_swift_format_knows` holds
@@ -828,12 +827,11 @@ release the same way, so the two cannot disagree.
 `swift format lint --help` names no option that states one, and the run states
 none, so the toolchain floor above is the whole of what a version decides here.
 
-`AlwaysUseLiteralForEmptyCollectionInit` writes the DO of `idioms.md` as its
-fix:
+`AlwaysUseLiteralForEmptyCollectionInit` writes
 `replace '[Int]()' with ': [Int] = []'`, and
 `replace '[String: Int]()' with ': [String: Int] = [:]'`. It stays SILENT for
-`Set<String>()`, so the set form of that bullet has no owner here and
-`idioms.md` keeps it.
+`Set<String>()`, so the empty `Set` literal has no owner here and the
+`idioms.md` bullet for it keeps it.
 
 **The CI runner runs the same toolchain.** The self-hosted macOS runner writes
 `swift --version` in the step "Ensure the language toolchains the roster tests
