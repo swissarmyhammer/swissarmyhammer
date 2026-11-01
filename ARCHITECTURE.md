@@ -2,6 +2,8 @@
 
 SwissArmyHammer is a monorepo producing CLI tools and MCP servers for AI-assisted software engineering. The core domain is a file-backed kanban board engine with YAML-driven schema and a unified command system.
 
+**Platform: macOS Apple Silicon only.** sah targets macOS on Apple Silicon (aarch64). The only embedding backend is the Apple Neural Engine through CoreML, so the workspace carries no code paths for other operating systems or for Intel Macs.
+
 Consult the root `Cargo.toml` for the current workspace members. This document describes the architectural concepts and rules that don't change with every commit.
 
 ---
@@ -490,7 +492,7 @@ The agent MCP tool (`swissarmyhammer-agents`) does NOT run LLM inference. It pro
 
 Text embeddings power semantic search across code context and entities. One backend implements the sealed `TextEmbedder` trait:
 
-- **ane-embedding** — Apple Neural Engine embedding via CoreML (macOS only)
+- **ane-embedding** — Apple Neural Engine embedding via CoreML (macOS Apple Silicon only)
 
 The `swissarmyhammer-embedding` facade drives that backend. It handles long-text chunking with overlap and mean-pooling transparently. Model resolution goes through `model-loader`, which handles HuggingFace repo downloads and local path resolution with caching.
 
@@ -514,7 +516,7 @@ The hook runs `sah tool ralph ralph check --` and strict-parses its stdout, so t
 
 - **ACP as Protocol**: Agent interop uses the Agent Communication Protocol, not ad-hoc APIs. Consumers go through `swissarmyhammer-agent::create_agent` and only ever receive an `AcpAgentHandle` — the ACP transport, not the concrete `claude-agent` implementation, is the contract. In ACP 0.12, backends are built by registering handlers on `Agent.builder()` and wiring them to a transport with `connect_with(...)` — there is no `impl Agent for MyBackend` trait to implement. The conformance test suite validates any new backend.
 - **Metadata, Not Inference**: The subagent system provides persona/instructions to the host agent. It does not spawn LLM processes.
-- **Platform-Aware Embedding**: The embedding facade selects the best backend (ANE on Apple Silicon, llama.cpp elsewhere) automatically.
+- **Single Embedding Backend**: The embedding facade drives the ANE backend, the only embedding backend on macOS Apple Silicon.
 
 ### Practices
 

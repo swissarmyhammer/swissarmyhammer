@@ -1,14 +1,11 @@
 //! Embedder backed by the Apple Neural Engine (ANE).
 
-#[cfg(target_os = "macos")]
 use ane_embedding::{AneEmbeddingConfig, AneEmbeddingModel};
 use model_embedding::{EmbeddingError, EmbeddingResult, TextEmbedder};
 use std::future::Future;
 
 use model_loader::DownloadObserver;
-#[cfg(target_os = "macos")]
 use model_loader::ModelSource;
-#[cfg(target_os = "macos")]
 use swissarmyhammer_config::model::EmbeddingModelConfig;
 use swissarmyhammer_config::model::{ModelExecutorConfig, ModelManager};
 use swissarmyhammer_config::parse_model_config;
@@ -85,10 +82,8 @@ pub struct Embedder {
     normalize: bool,
 }
 
-/// The one embedding backend. The ANE model type exists on macOS only, so off
-/// macOS this enum has no variant and no value of it can be built.
+/// The one embedding backend: the Apple Neural Engine.
 enum EmbedderBackend {
-    #[cfg(target_os = "macos")]
     Ane(Box<AneEmbeddingModel>),
 }
 
@@ -97,7 +92,6 @@ impl EmbedderBackend {
     /// logging, and Debug output.
     fn name(&self) -> &'static str {
         match *self {
-            #[cfg(target_os = "macos")]
             EmbedderBackend::Ane(_) => "ane",
         }
     }
@@ -163,7 +157,7 @@ impl Embedder {
     /// the load path downloads (the model file(s) and `tokenizer.json`).
     ///
     /// This is a constructor variant rather than an instance builder because
-    /// on macOS the ANE backend resolves (and downloads) its model during
+    /// the ANE backend resolves (and downloads) its model during
     /// construction — an observer attached after construction could never see
     /// those downloads.
     ///
@@ -196,7 +190,6 @@ impl Embedder {
             .ok_or_else(|| EmbedderError::NoCompatibleExecutor(name.to_string()))?;
 
         let (backend, max_seq, normalize) = match executor {
-            #[cfg(target_os = "macos")]
             ModelExecutorConfig::AneEmbedding(cfg) => {
                 let max_seq = cfg
                     .max_sequence_length
@@ -207,11 +200,6 @@ impl Embedder {
                     max_seq,
                     normalize,
                 )
-            }
-            #[cfg(not(target_os = "macos"))]
-            ModelExecutorConfig::AneEmbedding(_) => {
-                drop(observer);
-                return Err(EmbedderError::NoCompatibleExecutor(name.to_string()));
             }
         };
 
@@ -260,7 +248,6 @@ impl TextEmbedder for Embedder {
     /// downloading, or initializing the model.
     async fn load(&self) -> Result<(), EmbeddingError> {
         match self.inner {
-            #[cfg(target_os = "macos")]
             EmbedderBackend::Ane(ref m) => m.load().await,
         }
     }
@@ -295,7 +282,6 @@ impl TextEmbedder for Embedder {
     /// is loaded.
     fn embedding_dimension(&self) -> Option<usize> {
         match self.inner {
-            #[cfg(target_os = "macos")]
             EmbedderBackend::Ane(ref m) => m.embedding_dimension(),
         }
     }
@@ -303,7 +289,6 @@ impl TextEmbedder for Embedder {
     /// Whether the selected backend's model is loaded and ready for inference.
     fn is_loaded(&self) -> bool {
         match self.inner {
-            #[cfg(target_os = "macos")]
             EmbedderBackend::Ane(ref m) => m.is_loaded(),
         }
     }
@@ -313,7 +298,6 @@ impl Embedder {
     /// Embed a single text chunk directly via the backend.
     async fn embed_single(&self, text: &str) -> Result<EmbeddingResult, EmbeddingError> {
         match self.inner {
-            #[cfg(target_os = "macos")]
             EmbedderBackend::Ane(ref m) => m.embed_text(text).await,
         }
     }
@@ -447,22 +431,18 @@ fn advance_to_char_boundary(s: &str, pos: usize) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Tokenizer file downloaded alongside the model on the ANE path.
-#[cfg(target_os = "macos")]
 const TOKENIZER_FILENAME: &str = "tokenizer.json";
 
 /// Extension of the CoreML model package directory on the ANE path.
-#[cfg(target_os = "macos")]
 const MLPACKAGE_EXTENSION: &str = "mlpackage";
 
 /// Default maximum sequence length for the ANE backend when the model config
 /// does not specify one.
-#[cfg(target_os = "macos")]
 const ANE_DEFAULT_MAX_SEQUENCE_LENGTH: usize = 256;
 
 /// Build the CoreML/ANE backend. Model resolution (and download) happens
 /// here, during construction, so `observer` must be provided up front;
 /// `None` leaves downloads silent.
-#[cfg(target_os = "macos")]
 async fn build_ane_model(
     cfg: &EmbeddingModelConfig,
     observer: Option<&DownloadObserver>,
@@ -917,7 +897,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     /// `Embedder::default()` resolves the default model name.
-    /// On macOS ARM64, qwen-embedding selects the ANE backend which needs model
+    /// qwen-embedding selects the ANE backend which needs model
     /// resolution, so this may fail in CI. We just verify it doesn't panic and
     /// returns a meaningful error or succeeds.
     #[test]
@@ -925,16 +905,14 @@ mod tests {
         let rt = rt();
         rt.block_on(async {
             let result = Embedder::default().await;
-            // On macOS ARM64: may fail due to ANE model resolution (needs download).
-            // On other platforms: qwen-embedding offers only an ANE executor, so
-            // construction fails with `NoCompatibleExecutor`.
+            // May fail due to ANE model resolution (needs download).
             // Either way, should not panic.
             match result {
                 Ok(embedder) => {
                     assert_eq!(embedder.model_name(), DEFAULT_MODEL_NAME);
                 }
                 Err(e) => {
-                    // Expected on macOS ARM64 without cached model.
+                    // Expected without a cached model.
                     // Verify it's a sensible error, not a random panic.
                     let msg = e.to_string();
                     assert!(!msg.is_empty(), "Error should have a descriptive message");

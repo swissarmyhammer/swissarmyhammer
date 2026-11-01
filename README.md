@@ -50,6 +50,8 @@ Works with Claude Code, Cursor, Windsurf, or any MCP-compatible agent.
 
 ## Get Started in 30 Seconds
 
+**Platform: macOS Apple Silicon only.** sah runs on Macs with Apple Silicon (M-series). Other operating systems and Intel Macs are not supported.
+
 Get in your project directory and run:
 
 ```bash

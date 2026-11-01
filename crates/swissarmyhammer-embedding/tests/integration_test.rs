@@ -37,13 +37,12 @@ async fn load_qwen_embedder() -> Embedder {
 }
 
 /// Real path: the builtin `qwen-embedding` model loads and embeds one text.
-/// On macOS it must resolve to the ANE backend.
+/// It must resolve to the ANE backend.
 #[test]
 fn qwen_embedding_load_and_embed() {
     let rt = rt();
     rt.block_on(async {
         let embedder = load_qwen_embedder().await;
-        #[cfg(target_os = "macos")]
         assert_eq!(embedder.backend_name(), "ane");
 
         let result = embedder
