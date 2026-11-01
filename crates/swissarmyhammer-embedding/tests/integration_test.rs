@@ -21,14 +21,30 @@ use model_embedding::cosine_similarity;
 
 // -- Qwen3 Embedding (ANE on macOS arm64 only) -------------------------------
 
+/// Output dimension of the Qwen3 embedding model.
+const QWEN3_EMBEDDING_DIM: usize = 1024;
+
+/// Model name of the builtin embedding model.
+const QWEN_MODEL_NAME: &str = "qwen-embedding";
+
+/// Build the builtin Qwen embedder and load it. Shared by every test below.
+async fn load_qwen_embedder() -> Embedder {
+    let embedder = Embedder::from_model_name(QWEN_MODEL_NAME)
+        .await
+        .expect("Failed to create qwen-embedding embedder");
+    embedder.load().await.expect("Failed to load model");
+    embedder
+}
+
+/// Real path: the builtin `qwen-embedding` model loads and embeds one text.
+/// On macOS it must resolve to the ANE backend.
 #[test]
 fn qwen_embedding_load_and_embed() {
     let rt = rt();
     rt.block_on(async {
-        let embedder = Embedder::from_model_name("qwen-embedding")
-            .await
-            .expect("Failed to create qwen-embedding embedder");
-        embedder.load().await.expect("Failed to load model");
+        let embedder = load_qwen_embedder().await;
+        #[cfg(target_os = "macos")]
+        assert_eq!(embedder.backend_name(), "ane");
 
         let result = embedder
             .embed_text("fn main() { println!(\"hello\"); }")
@@ -37,8 +53,11 @@ fn qwen_embedding_load_and_embed() {
 
         let embedding = result.embedding();
         assert!(!embedding.is_empty(), "Embedding should not be empty");
-        // Qwen3 produces 1024-dim embeddings
-        assert_eq!(result.dimension(), 1024, "Expected 1024-dim embedding");
+        assert_eq!(
+            result.dimension(),
+            QWEN3_EMBEDDING_DIM,
+            "Expected {QWEN3_EMBEDDING_DIM}-dim embedding"
+        );
     });
 }
 
@@ -46,10 +65,7 @@ fn qwen_embedding_load_and_embed() {
 fn qwen_embedding_nonzero_values() {
     let rt = rt();
     rt.block_on(async {
-        let embedder = Embedder::from_model_name("qwen-embedding")
-            .await
-            .expect("Failed to create embedder");
-        embedder.load().await.expect("Failed to load");
+        let embedder = load_qwen_embedder().await;
 
         let result = embedder
             .embed_text("struct Vec<T> { ptr: *mut T, len: usize }")
@@ -70,10 +86,7 @@ fn qwen_embedding_nonzero_values() {
 fn qwen_embedding_similarity() {
     let rt = rt();
     rt.block_on(async {
-        let embedder = Embedder::from_model_name("qwen-embedding")
-            .await
-            .expect("Failed to create embedder");
-        embedder.load().await.expect("Failed to load");
+        let embedder = load_qwen_embedder().await;
 
         let rust_result = embedder
             .embed_text("fn fibonacci(n: u64) -> u64 { if n <= 1 { n } else { fibonacci(n-1) + fibonacci(n-2) } }")
@@ -98,27 +111,5 @@ fn qwen_embedding_similarity() {
             sim_code > sim_unrelated,
             "Similar code should have higher similarity ({sim_code:.4}) than unrelated text ({sim_unrelated:.4})"
         );
-    });
-}
-
-/// Real path on the Mac runner: the builtin `qwen-embedding` model resolves
-/// to the ANE backend, loads, and embeds one text.
-#[cfg(target_os = "macos")]
-#[test]
-fn qwen_embedding_embeds_one_text_on_ane() {
-    let rt = rt();
-    rt.block_on(async {
-        let embedder = Embedder::from_model_name("qwen-embedding")
-            .await
-            .expect("Failed to create qwen-embedding embedder");
-        assert_eq!(embedder.backend_name(), "ane");
-        embedder.load().await.expect("Failed to load model");
-
-        let result = embedder
-            .embed_text("fn add(a: i32, b: i32) -> i32 { a + b }")
-            .await
-            .expect("Failed to embed text");
-
-        assert_eq!(result.dimension(), 1024, "Expected 1024-dim embedding");
     });
 }
