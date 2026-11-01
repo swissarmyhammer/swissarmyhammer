@@ -1,7 +1,7 @@
 //! Macros for composing builtin command sources at the app layer.
 //!
 //! Each contributor crate (e.g. `swissarmyhammer-commands`,
-//! `swissarmyhammer-kanban`, `swissarmyhammer-focus`) ships its own
+//! `swissarmyhammer-kanban`) ships its own
 //! `builtin/commands/` directory and exposes a
 //! `pub fn builtin_yaml_sources() -> Vec<(&'static str, &'static str)>`
 //! function that returns the embedded YAML sources for that crate.
@@ -33,13 +33,14 @@
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use swissarmyhammer_commands::compose_registry;
 ///
+/// // List every contributor crate; later crates override earlier ones.
 /// let registry = compose_registry![
 ///     swissarmyhammer_commands,  // generic UI commands
-///     swissarmyhammer_kanban,    // domain commands (overrides allowed)
 /// ];
+/// # let _ = registry;
 /// ```
 ///
 /// [`CommandsRegistry`]: crate::CommandsRegistry
@@ -65,12 +66,12 @@ macro_rules! compose_registry {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use swissarmyhammer_commands::{compose_yaml_sources, CommandsRegistry};
 ///
+/// let user_overrides: Vec<(String, String)> = Vec::new();
 /// let mut sources = compose_yaml_sources![
 ///     swissarmyhammer_commands,
-///     swissarmyhammer_kanban,
 /// ];
 /// // Append user overrides — they apply last and override builtins.
 /// let user_refs: Vec<(&str, &str)> = user_overrides

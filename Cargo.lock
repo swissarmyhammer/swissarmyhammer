@@ -6472,22 +6472,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "swissarmyhammer-focus"
-version = "0.20.3"
-dependencies = [
- "include_dir",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "swissarmyhammer-commands",
- "swissarmyhammer-common",
- "thiserror 2.0.21",
- "tracing",
- "tracing-subscriber",
- "ulid",
-]
-
-[[package]]
 name = "swissarmyhammer-git"
 version = "0.20.3"
 dependencies = [
@@ -6546,7 +6530,6 @@ dependencies = [
  "swissarmyhammer-entity",
  "swissarmyhammer-fields",
  "swissarmyhammer-filter-expr",
- "swissarmyhammer-focus",
  "swissarmyhammer-kanban",
  "swissarmyhammer-operations",
  "swissarmyhammer-perspectives",

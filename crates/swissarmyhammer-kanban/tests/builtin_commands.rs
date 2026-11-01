@@ -169,57 +169,33 @@ fn kanban_yaml_preserves_command_metadata() {
     assert!(registry.get("file.newBoard").is_some());
 }
 
-/// Compose every builtin source the way `kanban-app/src/state.rs` does
-/// and assert the full command count matches the post-focus total.
-/// Proves that the file moves and the focus-crate addition lost no
-/// commands.
+/// Compose every builtin source the way `kanban-app/src/state.rs` did
+/// and assert the full command count matches the expected total.
 ///
-/// Count: 33 (commands-crate) + 9 (focus-crate nav.*) + 30 (kanban-crate) = 72.
-///
-/// The 34/26 → 32/28 shift came from relocating `ui.view.set` and
-/// `ui.perspective.set` into the kanban domain (new ids `view.set` and
-/// `perspective.set`) in 01KPY02X405QTP5ACH67THHSN8. The +8 came from
-/// landing the eight directional / drill `nav.*` YAML stubs in
-/// `swissarmyhammer-focus` (01KQYWM5BHFRPCRD70GF8YRCGY); the +1 to 9
-/// came from adding `nav.jump` (AceJump-style overlay) in
-/// 01KQYWV9DC866DGRPBRFR17ZEY. The +1 to 70 came from adding
-/// `ui.inspector.set_width` for the resizable inspector
-/// (01KQSE8TT79XC3KJGEHX6DW99G). The +1 to 71 came from adding
-/// `perspective.filter.focus` as the first command-driven tab button
-/// (01KRE1YA65MMG29RDQDQ0VPJQG). The +5 to 76 came from adding the `ai.*`
-/// AI-panel command scope (01KRRN69YDB2B03RB1N9G6RR3J). The +1 to 77 came
-/// from adding `update.board` (01KSNJ6AE18EQYDC2WSYFSSAY1) — the dispatch-
-/// layer wrapper around `crate::board::UpdateBoard` that lets a board-
-/// metadata editor persist board metadata through the unified dispatcher.
-/// The -5 to 72 came from removing the `ai.*` AI-panel command scope
-/// (01KZ23M5980FBS5HHGVTPVW1Q6).
+/// Count: 33 (commands-crate) + 30 (kanban-crate) = 63.
 #[test]
-fn composed_builtins_register_all_seventy_two_commands() {
+fn composed_builtins_register_all_sixty_three_commands() {
     let commands_sources = swissarmyhammer_commands::builtin_yaml_sources();
-    let focus_sources = swissarmyhammer_focus::builtin_yaml_sources();
     let kanban_sources = swissarmyhammer_kanban::builtin_yaml_sources();
 
     let mut composed: Vec<(&str, &str)> =
-        Vec::with_capacity(commands_sources.len() + focus_sources.len() + kanban_sources.len());
+        Vec::with_capacity(commands_sources.len() + kanban_sources.len());
     composed.extend(commands_sources.iter().map(|(n, c)| (*n, *c)));
-    composed.extend(focus_sources.iter().map(|(n, c)| (*n, *c)));
     composed.extend(kanban_sources.iter().map(|(n, c)| (*n, *c)));
 
     let registry = CommandsRegistry::from_yaml_sources(&composed);
 
     assert_eq!(
         registry.all_commands().len(),
-        72,
-        "composed registry must match the post-focus command count",
+        63,
+        "composed registry must match the expected command count",
     );
 
-    // Spot checks across all three source sets.
+    // Spot checks across both source sets.
     assert!(registry.get("app.quit").is_some(), "commands crate");
     assert!(registry.get("entity.add").is_some(), "commands crate");
     assert!(registry.get("ui.palette.open").is_some(), "commands crate");
     assert!(registry.get("drag.start").is_some(), "commands crate");
-    assert!(registry.get("nav.up").is_some(), "focus crate");
-    assert!(registry.get("nav.drillIn").is_some(), "focus crate");
     assert!(registry.get("task.untag").is_some(), "kanban crate");
     assert!(registry.get("perspective.goto").is_some(), "kanban crate");
     assert!(registry.get("file.closeBoard").is_some(), "kanban crate");
