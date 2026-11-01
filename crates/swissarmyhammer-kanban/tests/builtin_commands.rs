@@ -15,7 +15,14 @@
 //! before the split. They moved here once the YAMLs left the commands crate
 //! (see task 01KPXY7Q6980X2R5DVNVCY4SZK).
 
+mod common;
+
+use common::EXPECTED_COMPOSED_COMMAND_COUNT;
 use swissarmyhammer_commands::CommandsRegistry;
+
+/// Number of params each hidden, arg-driven command (`view.set`,
+/// `perspective.switch`) must declare: a single `*_id` arg.
+const SINGLE_ID_PARAM_COUNT: usize = 1;
 
 /// The 30 kanban-specific command IDs shipped under
 /// `swissarmyhammer-kanban/builtin/commands/`.
@@ -172,9 +179,9 @@ fn kanban_yaml_preserves_command_metadata() {
 /// Compose every builtin source the way `kanban-app/src/state.rs` did
 /// and assert the full command count matches the expected total.
 ///
-/// Count: 33 (commands-crate) + 30 (kanban-crate) = 63.
+/// Count: commands-crate builtins plus kanban-crate builtins.
 #[test]
-fn composed_builtins_register_all_sixty_three_commands() {
+fn composed_builtins_register_all_commands() {
     let commands_sources = swissarmyhammer_commands::builtin_yaml_sources();
     let kanban_sources = swissarmyhammer_kanban::builtin_yaml_sources();
 
@@ -187,7 +194,7 @@ fn composed_builtins_register_all_sixty_three_commands() {
 
     assert_eq!(
         registry.all_commands().len(),
-        63,
+        EXPECTED_COMPOSED_COMMAND_COUNT,
         "composed registry must match the expected command count",
     );
 
@@ -234,7 +241,7 @@ fn view_set_and_perspective_switch_registered_hidden() {
     );
     assert_eq!(
         view_set.params.len(),
-        1,
+        SINGLE_ID_PARAM_COUNT,
         "view.set must accept exactly one param (view_id from args)",
     );
     assert_eq!(view_set.params[0].name, "view_id");
@@ -250,7 +257,7 @@ fn view_set_and_perspective_switch_registered_hidden() {
     );
     assert_eq!(
         perspective_switch.params.len(),
-        1,
+        SINGLE_ID_PARAM_COUNT,
         "perspective.switch must accept exactly one param (perspective_id from args)",
     );
     assert_eq!(perspective_switch.params[0].name, "perspective_id");

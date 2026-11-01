@@ -7,10 +7,13 @@
 //! which contributors to compose and in what order, while contributor
 //! crates remain simple data-providers exposing `builtin_yaml_sources`.
 
+mod common;
+
+use common::EXPECTED_COMPOSED_COMMAND_COUNT;
 use swissarmyhammer_commands::{compose_registry, CommandsRegistry};
 
 /// The macro must return a `CommandsRegistry` containing every id from
-/// the composed source stacks (`commands` + `kanban`): 63 commands.
+/// the composed source stacks (`commands` + `kanban`).
 #[test]
 fn composed_registry_matches_manual_composition() {
     let registry: CommandsRegistry =
@@ -18,7 +21,7 @@ fn composed_registry_matches_manual_composition() {
 
     assert_eq!(
         registry.all_commands().len(),
-        63,
+        EXPECTED_COMPOSED_COMMAND_COUNT,
         "composed registry must contain the full generic + kanban command set",
     );
 
@@ -157,5 +160,5 @@ fn composed_registry_command_id_set_snapshot() {
     ];
 
     assert_eq!(ids, expected, "command id set drifted; ids = {ids:?}",);
-    assert_eq!(ids.len(), 63);
+    assert_eq!(ids.len(), EXPECTED_COMPOSED_COMMAND_COUNT);
 }
