@@ -54,8 +54,45 @@ comments:
     - evidence: one local commit, 24 code files plus the task files (not pushed). Subject: test: delete tests that assert on skill, validator or source text. Find the sha with git log --grep ga169e or the subject.
     - next: review
   timestamp: 2026-11-01T16:51:42.474874+00:00
+- actor: claude-code
+  id: 01m6c0p5q2wh3acbvt67tdgaj8
+  text: |-
+    ### review — findings
+    - evidence: review sha 59d4aedfb~1..59d4aedfb. counts: 1 finding, 1 confirmed. crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:1 review-engine/prompt-cap (360530 rendered bytes, cap 262144; duplication could not review it).
+    - next: split missing_docs.rs into smaller modules that fit the prompt cap. Then run review again.
+  timestamp: 2026-11-01T16:57:06.018851+00:00
+- actor: claude-code
+  id: 01m6c0pj26sawry6spnvm84ec7
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — tests deleted across skills, mirdan, validators
+    - test: green — cargo nextest workspace, 13244 passed
+    - commit: 59d4aedfb
+    - review: findings — crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:1
+  timestamp: 2026-11-01T16:57:18.662662+00:00
+- actor: claude-code
+  id: 01m6c0w2vympgpydwyxvh3bfzx
+  text: |-
+    ### implement — changed
+    - evidence: Split `tests/shipped/missing_docs.rs` (125761 bytes) into `tests/shipped/missing_docs/` with mod.rs (2135 B, shared macros and roster test), dart.rs (38216 B), go.rs (18647 B), python.rs (34207 B), swift.rs (24193 B), typescript.rs (8768 B). Total 126166 B. `mod missing_docs;` in shipped.rs is unchanged (it now resolves to the directory). Test count for filter missing_docs: 61 before, 61 after. `cargo nextest run --override-version-check -p swissarmyhammer-validators`: 836 run, 836 passed. Clippy -D warnings clean. rustfmt --check clean on the new files.
+    - next: task stays in doing. Run /review.
+  timestamp: 2026-11-01T17:00:19.710352+00:00
+- actor: claude-code
+  id: 01m6c11nwchyf5qatnpm6qeh1b
+  text: |-
+    ### test — green
+    - evidence: cargo nextest run --override-version-check -p swissarmyhammer-validators: 836 run, 836 passed, 0 skipped; cargo clippy --workspace --all-targets -- -D warnings: exit 0, 0 warnings; cargo fmt --all --check: exit 0
+    - next: review
+  timestamp: 2026-11-01T17:03:23.020327+00:00
+- actor: claude-code
+  id: 01m6c12hn8mbmdxsjdxwyqmzjg
+  text: |-
+    ### commit — changed
+    - evidence: one local commit on top of 7a89b57b4. 9 files: 1 deletion (missing_docs.rs), 6 new files in missing_docs/ (mod, dart, go, python, swift, typescript), 2 kanban files for this task. The sha is in the commit log, as the commit holds this comment.
+    - next: review
+  timestamp: 2026-11-01T17:03:51.464066+00:00
 position_column: doing
-position_ordinal: '8680'
+position_ordinal: '8980'
 title: Delete tests that assert on skill text or source text
 ---
 Goal: no test asserts on the text of a skill or on source code text. User rule: such tests must go.
@@ -78,3 +115,18 @@ Then:
 - Do not edit any `SKILL.md` file.
 
 Done when: `cargo nextest run -p swissarmyhammer-skills` passes, the workspace has no test that asserts on skill or source text, and clippy and fmt are clean. #remove-llama-cpp
+
+## Review Findings (2026-11-01 10:52)
+
+> Scope: `review sha 59d4aedfb~1..59d4aedfb` — reviewed the diffs only — lines this change added or modified. 23 file(s) reviewed, 4 not reviewed.
+
+> ⚠️ 1 file(s) not reviewed — the rendered prompt would exceed the agent's prompt cap:
+> - `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs` — 360530 rendered bytes, over the 262144-byte per-file cap; not reviewed by: duplication (split the file)
+
+> 2 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 2 file(s)
+
+> 1 file(s) not reviewed — no validator matched:
+> - `Cargo.lock` — no validator matches this file
+
+- [x] `crates/swissarmyhammer-validators/src/review/tool_rules/tests/shipped/missing_docs.rs:1` `review-engine/prompt-cap` — This file exceeds the review prompt cap — 360530 rendered bytes against the 262144-byte per-file cap — so these validators could not review it: duplication. Split the file into smaller modules that fit the review prompt cap.
