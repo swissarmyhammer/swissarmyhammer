@@ -56,47 +56,29 @@ for Python.
 The two carve-outs were measured against each of the six shipped language rules
 — Dart, Go, Python, Rust, Swift and TypeScript.
 
-- "Simple getters/setters with self-explanatory names": four of the six report
-  an undocumented public getter whatever its body holds. Dart, Go, Python and
-  Rust report it. TypeScript reports it only when the body holds more than one
-  statement: `missing-docs-typescript` reads the body for the word "simple", so
-  a getter of one `return` and a setter of one assignment each stay silent, and
-  an accessor of two statements reports. Measured over 4306 files of six
-  TypeScript repositories: 177 accessors reported before that reading and 30
-  after. Swift reports it only when the type declares no inherited type.
-  Measured with swiftlint 0.65.0, with the shipped `missing-docs-swift` run
-  script. Three probe files each declare one inherited type. The first holds an
-  undocumented `public struct Wide: Equatable` at row 1, an undocumented
-  `public var name` at row 2, an undocumented `public func compute()` at row 3,
-  an undocumented nested `public struct Inner` at row 4 and an undocumented
-  `public var v` at row 5. The run reports 0 findings and exits 0. With
-  `excludes_inherited_types: false` the run reports rows 1, 2, 3, 4 and 5. The
-  second probe file holds a documented `open class Base`, an undocumented
-  `public class Sub: Base` at row 6, an undocumented `public var name` at row 7
-  and an undocumented `public func compute()` at row 8. The run reports 0
-  findings and exits 0. With `excludes_inherited_types: false` the run reports
-  rows 6, 7 and 8. The third probe file holds an undocumented
-  `public enum Raw: String` at row 1, a case at row 2, an undocumented
-  `public var name` at row 3 and an undocumented `public func compute()` at
-  row 4. The run reports 0 findings and exits 0. With
-  `excludes_inherited_types: false` the run reports rows 1, 2, 3 and 4. The
-  fourth probe file holds the five rows of the first probe file in an
-  undocumented `public struct Plain`, which declares no inherited type. The run
-  reports rows 1, 2, 3, 4 and 5. The setting `excludes_inherited_types: true`
-  is the cause. The shipped `missing-docs-swift` script writes that value into
-  its own configuration, and it is swiftlint's own default as well. The setting
-  makes the tool pass over the type declaration, over each member, over a
-  nested type and over each member of the nested type. The three inherited
-  types measured are a protocol conformance, a superclass and a raw-value type.
-  No other inherited type was measured. Swift stays silent for every getter in
-  a type that declares an inherited type.
+- "Simple getters/setters with self-explanatory names": five of the six report
+  an undocumented public getter whatever its body holds. Dart, Go, Python, Rust
+  and Swift report it. TypeScript reports it only when the body holds more than
+  one statement: `missing-docs-typescript` reads the body for the word
+  "simple", so a getter of one `return` and a setter of one assignment each
+  stay silent, and an accessor of two statements reports. Measured over 4306
+  files of six TypeScript repositories: 177 accessors reported before that
+  reading and 30 after. Swift reports the getter in every type. Measured with
+  Apple Swift 6.4.2 and the shipped `missing-docs-swift` run script: an
+  undocumented `public var name: String { "" }` inside an undocumented
+  `public struct Wide: Equatable` reports, and the structure reports as well.
+  The toolchain rule reads the access modifier and the doc comment, and it
+  does not read the body or the inherited types.
 - "Obvious implementations (Display, Debug, ToString, etc.)": five of the six
   stay silent on it. Dart, Go, Python, Rust and TypeScript stay silent. Each
   one names the shape in its own way: Python leaves the magic-method code out
   of its selector, Go takes revive's fixed list of six method names, and
   TypeScript names `toString`, `valueOf`, `toLocaleString`, `toJSON` and every
-  method keyed by a `Symbol` member. Swift stays silent inside a type that
-  declares an inherited type, for the reason above. Never carry this carve-out
+  method keyed by a `Symbol` member. Swift reports it. Measured with the same
+  script: an undocumented `public var description: String` inside
+  `extension Wide: CustomStringConvertible` reports. A `public override`
+  member is the one Swift shape that stays silent, because the toolchain rule
+  skips every declaration that carries `override`. Never carry this carve-out
   over from another language.
 
 Run the language rule over the item to check either carve-out. What it reports

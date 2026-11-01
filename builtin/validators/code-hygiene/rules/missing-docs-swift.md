@@ -1,6 +1,6 @@
 ---
 name: missing-docs-swift
-description: Public Swift declarations need docs — checked by swiftlint, not by prompt.
+description: Public Swift declarations need docs — checked by the toolchain's own `swift format`, not by prompt.
 match:
   files:
     - "**/*.swift"
@@ -14,644 +14,249 @@ tool:
     if [ "$#" -eq 0 ]; then
       exit 0
     fi
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    probe=sah-probe.swift
+    allowed=AllPublicDeclarationsHaveDocumentation
+    printf '{"rules":{"%s":true}}\n' "$allowed" > "$work/rules.json"
     for file in "$@"; do
       if [ ! -e "$file" ]; then
         printf 'sah-diagnostic: missing-docs-swift found no file at %s, so its declarations are unread\n' "$file" >&2
+        continue
       fi
-    done
-    work="$(mktemp -d)"
-    trap 'rm -rf "$work"' EXIT
-    printf '%s\n' 'only_rules:' '  - missing_docs' \
-      'missing_docs:' '  warning: [open, public]' \
-      '  excludes_extensions: true' '  excludes_inherited_types: true' \
-      '  excludes_trivial_init: false' \
-      '  evaluate_effective_access_control_level: false' > "$work/swiftlint.yml"
-    status=0
-    lint() {
-      parent="$1"
-      shift
+      if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+        printf 'sah-diagnostic: missing-docs-swift declined %s: the path is not a readable file\n' "$file" >&2
+        continue
+      fi
       status=0
-      if [ -n "$parent" ]; then
-        swiftlint lint --config "$parent" --config "$work/swiftlint.yml" \
-          --force-exclude --no-cache --quiet --reporter json "$@" \
-          > "$work/report.json" 2> "$work/lint.err" || status=$?
-      else
-        swiftlint lint --config "$work/swiftlint.yml" \
-          --force-exclude --no-cache --quiet --reporter json "$@" \
-          > "$work/report.json" 2> "$work/lint.err" || status=$?
+      swift format lint --strict --configuration "$work/rules.json" \
+        --assume-filename "$probe" - < "$file" > /dev/null 2> "$work/lint.err" || status=$?
+      : > "$work/kept"
+      : > "$work/refused"
+      awk -v file="$file" -v probe="$probe" -v allowed="$allowed" \
+        -v kept="$work/kept" -v refused="$work/refused" '
+        BEGIN {
+          opening = probe ":"
+          size = length(opening)
+        }
+        {
+          at = index($0, opening)
+          rest = at > 0 ? substr($0, at + size) : ""
+          if (at == 0 || match(rest, /^[0-9]+:[0-9]+: error: /) == 0) {
+            print $0 > refused
+            next
+          }
+          split(substr(rest, 1, RLENGTH), part, ":")
+          mark = substr(rest, RLENGTH + 1)
+          if (mark !~ /^\[[A-Za-z]+\] /) {
+            print rest > refused
+            next
+          }
+          shut = index(mark, "]")
+          tag = substr(mark, 2, shut - 2)
+          if (tag == allowed) {
+            print file ":" part[1] ": " tag ": " substr(mark, shut + 2) > kept
+          }
+        }' "$work/lint.err"
+      trouble="$(sed -n '1p' "$work/refused")"
+      if [ -n "$trouble" ] || { [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; }; then
+        printf 'sah-diagnostic: missing-docs-swift declined %s: %s\n' \
+          "$file" "${trouble:-swift format exited $status}" >&2
+        continue
       fi
-    }
-    project=""
-    if [ -f .swiftlint.yml ]; then
-      project=".swiftlint.yml"
-    fi
-    lint "$project" "$@"
-    if [ -n "$project" ] && grep -qE '^Could not read configuration:' "$work/lint.err"; then
-      printf '%s\n' 'sah-diagnostic: missing-docs-swift: swiftlint cannot read .swiftlint.yml beside this rule. The run drops the project exclude list.' >&2
-      lint "" "$@"
-    fi
-    cat "$work/lint.err" >&2
-    sed -n 's/^Could not read contents of `\(.*\)`$/sah-diagnostic: swiftlint could not read the contents of \1, so its declarations are unread/p' "$work/lint.err" >&2
-    measured=0
-    if [ "$status" -eq 0 ]; then
-      measured=1
-    elif [ "$status" -eq 2 ] &&
-      jq -e 'type == "array" and length > 0' "$work/report.json" >/dev/null 2>&1
-    then
-      measured=1
-    fi
-    if [ "$measured" -eq 0 ]; then
-      if grep -qE '^Error: No lintable files found at paths:' "$work/lint.err"; then
-        for file in "$@"; do
-          if [ -e "$file" ]; then
-            printf 'sah-diagnostic: missing-docs-swift judged no file at %s, so its declarations are unread\n' "$file" >&2
-          fi
-        done
-        exit 0
-      fi
-      exit 1
-    fi
-    jq -c '.[] | select(.rule_id == "missing_docs")
-           | {file: .file, line: .line, message: .reason}' "$work/report.json"
+      cat "$work/kept"
+    done
   doctor:
-    check_command: "which swiftlint jq grep sed cat mktemp"
-    check_version_command: "swiftlint version"
-    fix_hint: "brew install swiftlint"
+    check_command: "which swift mktemp awk cat rm sed && printf '' | swift format lint --strict --configuration '{}' --assume-filename sah-probe.swift -"
+    check_version_command: "swift --version"
+    fix_hint: "install the Swift toolchain, Swift 6.2 or newer — Xcode 26 and above ship it"
 ---
 
 # Missing Documentation — Swift
 
-`swiftlint` reports every `open` and `public` declaration without a doc
-comment. The `missing_docs` rule names that check. It is opt-in, so it never
-runs unless a configuration turns it on.
+The Swift toolchain reports every `public` declaration that has no doc comment.
+Its own rule `AllPublicDeclarationsHaveDocumentation` names that check, and the
+gate runs `swift format lint` to read it. The gate never rewrites a file.
+Review is read-only, so a finding names the line and the author makes the edit.
 
-The fail fixture holds one undocumented public structure, one undocumented
-public method and one undocumented public function. The acceptance test
-`the_shipped_swift_missing_docs_tool_rule_reports_every_fail_fixture_line`
-holds swiftlint to reporting those three lines and no other.
+`swift format` is a SUBCOMMAND of the Swift toolchain, spelled with a space. It
+is a different program from `swiftformat`. This gate runs the toolchain, so it
+needs no install step at all. The earlier form of this gate ran `swiftlint`,
+which only Homebrew installs.
 
-Every measurement below was made with swiftlint 0.65.0.
+Every measurement below was made with the toolchain of this machine and of the
+self-hosted macOS CI runner:
+
+    Apple Swift version 6.4.2 (swiftlang-6.4.2.1.9 clang-2100.4.1.1)
+    Target: arm64-apple-macosx27.2.0
+
+`swift format --version` writes `main`, so it names no release. The Swift
+version above is the only version a measurement can carry.
+
+## Which Swift version gives the rule
+
+The rule is old. The file `AllPublicDeclarationsHaveDocumentation.swift` of the
+`swiftlang/swift-format` repository answers HTTP 200 on `release/5.6`,
+`release/5.7`, `release/5.8`, `release/5.9`, `release/5.10`, `release/6.0` and
+`release/6.2`. It answers HTTP 404 on `release/5.3` and `release/5.5`. So the
+rule ships with Swift 5.6 and newer.
+
+The rule does not set the floor of the GATE. The `swift format` subcommand
+arrives with Swift 6.0, and the option pair `--assume-filename sah-probe.swift -`
+is accepted only at Swift 6.2 and newer: `release/6.0` and `release/6.1` guard
+it with `if assumeFilename != nil && !paths.isEmpty`, and `-` IS a path. The
+guards were read from the source, and the behavior was measured on Swift 6.4.
+No Swift 6.0 or 6.1 toolchain was available. The floor is therefore **Swift
+6.2**, which Xcode 26 and above ship, and `doctor.fix_hint` says so.
+`doctor.check_command` gives the tool the same three options the run block
+gives it, so a toolchain that is too old reports as broken, and never as
+healthy over a gate that declines every file. `idioms-swift` states the full
+measurement of this floor.
+
+The CI runner runs Swift 6.4, which stands over the floor.
+
+## The configuration alone is not the gate
+
+`AllPublicDeclarationsHaveDocumentation` is OFF in the default configuration of
+the tool. The script writes a small JSON configuration that turns it ON, and
+that `rules` table REPLACES the default table, so every other rule is OFF. Two
+rules of the tool, `ValidateDocumentationComments` and
+`BeginDocumentationCommentWithOneLineSummary`, decide the bullets of
+`builtin/validators/swift/rules/doc-parameter-naming.md`. That is a different
+requirement with a different owner, so the configuration leaves both OFF.
+
+The configuration still is not the gate. `swift format lint` always writes the
+layout findings of its pretty-printer and of its whitespace linter —
+`[Indentation]`, `[Spacing]`, `[LineLength]`, `[AddLines]` and others — and no
+key of the configuration turns them off. Measured over the shipped passing
+fixture, with a configuration that makes ON only this one rule:
+
+    Pass.swift:9:1: error: [Indentation] unindent by 2 spaces
+    Pass.swift:10:1: error: [Indentation] unindent by 2 spaces
+
+Both fixtures of this rule are written with 4-space indentation, which is the
+house style of every Swift fixture of this set, and `swift format` asks for 2.
+So the script reads the `[<RuleName>]` tag off each output line and KEEPS ONLY
+`AllPublicDeclarationsHaveDocumentation`. Every other tag is dropped.
+
+| the run over | findings |
+|---|---|
+| the shipped passing fixture, `swift format lint --strict` with the configuration and no filter | 2, both `[Indentation]` |
+| the shipped passing fixture, the shipped script | 0, exit 0 |
+| the shipped failing fixture, `swift format lint --strict` with the configuration and no filter | 4, three of the rule and one `[Indentation]` |
+| the shipped failing fixture, the shipped script | **3**, exit 0 |
+
+The failing fixture holds one documented neighbor, one undocumented structure,
+one undocumented method and one undocumented function. The three findings are
+the structure, the method and the function.
 
 ## How the run is shaped
 
-The script names TWO configuration files. swiftlint reads a list of `--config`
-paths as a parent-child hierarchy.
+The script reads the tool's output from stderr. Findings and errors share that
+one channel, and stdout holds 0 bytes. `--strict` is what makes each line say
+`error:`. `swift format lint --strict` exits 1 when it reports, so the script
+captures the status with `|| status=$?`, and `set -e` never ends the run on a
+finding.
 
-- The PARENT is the project's own `.swiftlint.yml` at the repository root. The
-  script names it only when the file is there, because a `--config` path that
-  holds no file aborts swiftlint: measured, exit 134 with
-  `Could not read configuration`. The parent gives the run the project's
-  `excluded:` list.
-- The CHILD is the file the script writes into a temporary directory. It
-  states `only_rules: [missing_docs]` and every option of that rule, so the
-  rule owns what it measures.
+The status cannot tell a judged file from a refused one, because a finding and
+a parse error both exit 1. So the script reads the SHAPE of each line. A line
+whose FIRST `sah-probe.swift:` carries `<line>:<column>: error: [<Tag>] ` right
+after it is a tagged finding, and every other line is trouble. A file that
+wrote a trouble line is declined whole, because a file the parser could not
+read is a file no rule judged. Measured over `public func oops( {`: two untagged
+`error:` lines, exit 1, so the script writes one marked line and no finding.
 
-`--force-exclude` makes swiftlint apply the `excluded:` list to a file named as
-a command-line argument. `--no-cache` keeps swiftlint from writing a cache
-directory into the workspace.
+The script hands the tool the SOURCE on standing input under one assumed name
+that holds no `:`. The tool then writes `sah-probe.swift:<line>:<column>:
+error: ...` whatever the file is named, so neither the name of the file nor the
+bytes in it can move the head the reading looks for. `idioms-swift` states the
+measurements behind that shape. The finding the script writes carries the path
+the argument list spelled, the line, the tag and the tool's sentence.
 
-The scope is `files` because swiftlint reads the paths it is given.
+The script runs the tool ONCE for each file. A path that names a directory makes
+the tool exit 64, and a shared run would lose every finding beside it. A path
+that holds no file makes the tool exit 0 and write NOTHING, which reads exactly
+like a clean pass over a file the run never opened. So the script tests each
+path before the tool starts, and writes one line opening `sah-diagnostic:` for
+a path it could not judge, at exit 0. `builtin/validators/README.md` states that
+channel.
 
-## Generated code, which the project's own `excluded:` list carves out
-
-The `missing-docs` prompt rule carves out generated code. swiftlint holds no
-generated-code check of its own: it reads no header line and no file name. A
-project names the directory its generator writes into in the `excluded:` list
-of its own `.swiftlint.yml`, and that list is the whole carve-out.
-
-Measured over two files that hold the same undocumented `public struct` and the
-same undocumented stored property, one under `Generated/` and one under
-`Sources/`, beside a `.swiftlint.yml` that states `excluded: [Generated]`:
-
-| the run | findings |
+| the path | what the script does |
 |---|---|
-| the shipped script | 2 |
-| the same script with `--force-exclude` removed | 4 |
-| the same script that never names the project configuration | 4 |
-
-An `excluded:` entry resolves against the directory of the configuration file
-that states it, so the entry has to reach the project tree from a file under
-`/var/folders`. Measured over the same two files, with `excluded:` written into
-the temporary configuration beside the shipped rule set:
-
-| the entry the temporary configuration states | findings |
-|---|---|
-| `Generated`, with `--force-exclude` | 4 |
-| the absolute path of `Generated`, with `--force-exclude` | 2 |
-| the absolute path of `Generated`, with `--force-exclude` removed | 4 |
-
-So the script could write the exclude list itself, in absolute form. It would
-then have to read the project's YAML with a tool of its own, and it would read
-the root file alone. swiftlint reads that YAML already, so the script names the
-project's file and lets swiftlint do it.
-
-The acceptance test
-`the_shipped_swift_missing_docs_tool_rule_reads_the_project_exclude_list`
-holds the run to the 2 findings of the first row.
-
-The script reads the `.swiftlint.yml` at the repository root and no other file.
-Measured with a `Nested/.swiftlint.yml` that states `excluded: ['.']` and one
-file under `Nested/`: the run reports that file. `--config` turns swiftlint's
-own directory-by-directory lookup off.
-
-An `included:` list changes nothing. Measured with `included: [Sources]` in the
-project configuration and one file under `Tests/`: the run reports that file.
-
-## A run whose every file the project excludes
-
-`--force-exclude` can leave swiftlint no file to read. swiftlint then exits 1
-and writes `Error: No lintable files found at paths: ...` to stderr, which
-reads as a broken tool. A change that touched generated code alone would then
-answer with a tool error rather than with a clean list.
-
-The script reports nothing and exits 0 for that message. Measured over one file
-under `Generated/` beside `excluded: [Generated]`: the run reports no finding,
-exits 0, and writes swiftlint's own message to stderr.
-
-A run that reports nothing and exits 0 over a file swiftlint never read is the
-clean answer of a run that read every file. So the script states each path of
-the run under the `sah-diagnostic:` marker before it exits, and the marked
-line reads `missing-docs-swift judged no file at <path>, so its
-declarations are unread`. Measured over the same file: no finding, ONE marked
-line that names the path, exit 0.
-
-A sound run says nothing on stderr, which is what lets the whole channel carry
-the statement. Measured over the same file with no project configuration:
-2 entries on stdout and 0 bytes on stderr.
-
-The loop states a path that IS there, because the `[ ! -e "$file" ]` test above
-already states a path that holds no file. Measured over `Sources/Absent.swift`
-beside the excluded file: 2 marked lines, one for each path, and neither path
-stated twice.
-
-The acceptance test
-`the_shipped_swift_missing_docs_tool_rule_answers_zero_when_the_project_excludes_every_file`
-holds the run to no finding, and
-`the_shipped_swift_missing_docs_tool_rule_declines_a_run_the_project_excludes_whole`
-holds the marked line.
-
-The message names the path and it does not name the cause, so more than one
-shape reaches it. The section "A path the run cannot judge" below states each
-shape, and states what the script says for a path that holds no file.
-
-## Each stderr reading takes swiftlint's own message, and not a file name
-
-The script reads stderr three times: a test for a project configuration
-swiftlint cannot read, a substitution that states each file swiftlint could not
-decode, and a test for a run that found no file to lint. swiftlint writes the
-PATH of a file into stderr as well, so a reading that takes ALL of stderr
-answers the file NAME.
-
-swiftlint writes each message of its own at the START of a line, and it writes
-the path echo after `Error: `. Each of the three readings is therefore anchored
-on the start of a line, and the decode substitution carries the backtick pair
-swiftlint writes around the path as well:
-
-| what the script reads | the line swiftlint writes |
-|---|---|
-| `^Could not read configuration:` | `Could not read configuration: file Configuration.swift, line 278` |
-| ``^Could not read contents of `<path>`$`` | ``Could not read contents of `<path>` `` |
-| `^Error: No lintable files found at paths:` | `Error: No lintable files found at paths: '<path>'` |
-
-Measured with swiftlint 0.65.0, over one file that holds one undocumented
-`public struct` and one undocumented stored property under `Generated/`,
-beside a project `.swiftlint.yml` that states
-`excluded: [Generated]`. The file NAME is the one difference between the rows.
-The loose script is the earlier shape of this run with each of its three tests
-written as a plain `grep -qF` that carries no anchor and no closing punctuation:
-
-| the file name | the loose script | the shipped script |
-|---|---|---|
-| `Plain.swift` | 0 findings, exit 0 | 0 findings, exit 0, 1 diagnostic |
-| `Could not read contents of.swift` | 0 findings, exit 1, the rule's tool-error line | 0 findings, exit 0, 1 diagnostic |
-| `Could not read configuration.swift` | 2 findings on a file the project excludes | 0 findings, exit 0, 1 diagnostic |
-| `No lintable files found.swift` | 0 findings, exit 0 | 0 findings, exit 0, 1 diagnostic |
-
-Row 2 broke a run that measured correctly. Row 3 made a WRONG FINDING: the
-script dropped the project configuration, ran swiftlint a second time without
-it, and reported a file the project excludes. Row 4 moved nothing, because the
-decode reading stands above that test, and each other broken shape this rule
-measures — a version mismatch and a configuration abort — writes no path into
-stderr. The anchor holds each reading on swiftlint's own message as well.
-
-Each anchored reading was measured in both directions. These runs still make a
-reading answer:
-
-| the run | findings | exit | what the run stated |
-|---|---|---|---|
-| the Latin-1 file alone | 0 | 0 | the decode diagnostic |
-| the Latin-1 file beside one healthy file | 2 | 0 | the decode diagnostic |
-| a project file that states `child_config: other.yml` | 2 | 0 | the configuration line |
-| a project file of bytes that are not YAML | 2 | 0 | the configuration line |
-| one file under `Generated/` beside `excluded: [Generated]` | 0 | 0 | the whole-run decline diagnostic |
-
-One healthy file that holds a finding makes no reading answer: the run reports
-2 findings, exits 0, and states nothing.
-
-The acceptance tests
-`the_shipped_swift_missing_docs_tool_rule_measures_a_file_named_for_the_decode_message`
-and
-`the_shipped_swift_missing_docs_tool_rule_measures_a_file_named_for_the_configuration_message`
-hold rows 2 and 3 of the file-name table to no finding and no tool error.
-
-## A project configuration swiftlint cannot read beside this rule
-
-swiftlint reads the two `--config` paths as one hierarchy, and two shapes of
-the project file stop it. Measured over one file that holds an undocumented
-`public struct` and one undocumented stored property:
-
-| the project `.swiftlint.yml` | what swiftlint does |
-|---|---|
-| `child_config: other.yml` | aborts, exit 134, `There's an ambiguity in the child / parent configuration tree` |
-| bytes that are not YAML | aborts, exit 134, `Cannot parse YAML file` |
-
-Each abort writes `Could not read configuration: file Configuration.swift, line
-278` to stderr, and leaves stdout empty. The script read that as a broken tool
-and exited 1. Both shapes are configurations swiftlint reads on its own, so a
-project switched the gate off without meaning to.
-
-The script tests stderr for `Could not read configuration:` at the start of a
-line, and it then runs a second time with its own configuration alone. The
-section "Each stderr reading takes swiftlint's own message, and not a file name"
-above states why the test is anchored. The script writes one line to stderr that
-names what it dropped, under the `sah-diagnostic:` marker. The run then
-measured with settings the project did not ask for, which is one item it could
-not judge as the project asked, and `builtin/validators/README.md` states that
-channel. The project's `excluded:` list is not read
-for that second run. Measured over one file under `Generated/` that holds the
-same declarations, beside a project file that states `child_config: other.yml`
-and `excluded: [Generated]`: the run reports 2 findings and exits 0.
-
-`parent_config:` in the project file is not one of the two shapes. Measured
-with `parent_config: other.yml` beside the same file: swiftlint reads both
-configurations and exits 0.
-
-The acceptance test
-`the_shipped_swift_missing_docs_tool_rule_measures_beside_a_project_child_config`
-holds that behaviour, and
-`the_shipped_swift_missing_docs_tool_rule_declines_a_project_configuration_it_cannot_read`
-holds the marked line.
-
-## A project warning threshold, and what the script accepts at status 2
-
-swiftlint counts the warnings of a run against the `warning_threshold:` key of
-the project configuration. At that number, and over it, swiftlint adds one
-entry of `rule_id: warning_threshold` and error severity to the report, and it
-exits 2. Every finding of the run stands on stdout beside that entry.
-
-Measured over one file that holds an undocumented `public struct` and one
-undocumented stored property:
-
-| the project `.swiftlint.yml` | swiftlint | the script |
-|---|---|---|
-| no file | exit 0, 2 entries | 2 findings, exit 0 |
-| `warning_threshold: 5` | exit 0, 2 entries | 2 findings, exit 0 |
-| `warning_threshold: 1` | exit 2, 3 entries | 2 findings, exit 0 |
-
-The script tested `[ "$status" -ne 0 ]`, so it read status 2 as a broken tool.
-It then reported 0 findings and exited 1 for the third row, and the engine read
-that exit as a broken tool. One line in the project file switched the gate off.
-The script now accepts status 2, and the third row keeps the 2 findings of the
-first row.
-
-The `jq` filter selects `rule_id == "missing_docs"`, so the `warning_threshold`
-entry never becomes a finding.
-
-The status alone does not tell a measured run from a broken run. At status 2
-the REPORT tells the two apart: the threshold run writes a JSON array, and the
-version-mismatch run writes 0 bytes. The report makes that one distinction. At
-status 1 the report is 0 bytes for the clean run beside a project `excluded:`
-list, and 0 bytes for the run over the directory `hollow`, which holds no
-Swift file. Each status swiftlint 0.65.0 answers with was measured against the
-child configuration this script writes:
-
-| what the run is | status | stdout |
-|---|---|---|
-| a file whose every public item carries a doc comment | 0 | an empty array, 5 bytes |
-| one file that holds 2 undocumented public items | 0 | 2 entries |
-| the same file beside `warning_threshold: 1` | 2 | 3 entries |
-| the same file beside `swiftlint_version: 99.0.0` | 2 | 0 bytes |
-| the same file beside a project `excluded:` that covers it | 1 | 0 bytes |
-| one file whose only line is `public func oops( {` | 0 | 1 entry |
-| a path that holds no file | 1 | 0 bytes |
-| the directory `hollow`, which holds no Swift file | 1 | 0 bytes |
-| a `--config` path that holds no file | 134 | 0 bytes |
-| a project configuration that holds `child_config:` | 134 | 0 bytes |
-| a command-line option that does not exist | 64 | 0 bytes |
-
-Each row that measured states the number of ENTRIES, and no number of bytes.
-The JSON reporter writes the absolute path of the file into each entry, so the
-byte count of a report that holds an entry moves with the length of that path.
-A later run from a different directory gives a different byte count for the same
-run, and a byte count in this table would then read as false. The entry count
-does not move with the path, and the entry count is what the script reads. A
-report of 0 bytes, and an empty array of 5 bytes, carry no path, so those two
-counts do not move.
-
-The two runs of status 2 differ in the report. The threshold run wrote 3
-entries. The version run wrote 0 bytes and linted no file: swiftlint compares
-`swiftlint_version:` with the version it is, and at a difference it writes
-`warning: Currently running SwiftLint 0.65.0 but configuration specified
-version 99.0.0.` to stderr and stops. Each run that measured wrote a JSON
-array, at status 0 or 2. Each other run wrote 0 bytes, at status 1, 134, 64 or
-2. A report of 0 bytes does not make a run broken. The run beside a project
-`excluded:` that covers the file writes 0 bytes at status 1, and it gives a
-clean answer. The guard on each file and the test on stderr separate that run
-from a run that broke. The two paragraphs below state each test and its limit.
-
-So the script accepts status 0, and it accepts status 2 only when the report
-holds a JSON array of one entry or more. At each other status, and at status 2
-with a report of 0 bytes, the script makes one more test, on stderr. Stderr
-that holds `Error: No lintable files found at paths:` at the start of a line
-exits 0 with no finding, and each other shape exits 1. The section "Each stderr
-reading takes swiftlint's own message, and not a file name" above states why the
-test is anchored. That branch is how the project's `excluded:` list reaches a
-clean answer, and the section "A run whose every file the project excludes"
-above states it. Measured with a project `.swiftlint.yml` that states
-`excluded: [src]`, over one file under `src/` that holds an undocumented
-`public struct` and one undocumented stored property: swiftlint writes
-`Error: No lintable files found at paths: 'src/Docs.swift'` to stderr, writes 0
-bytes to stdout, and exits 1; the script reports no finding and exits 0.
-
-The stderr string names the path, and it does not name the reason. Measured
-against the child configuration this script writes, 4 shapes each wrote 0
-bytes at status 1 with the line `Error: No lintable files found at paths:`: a
-project
-`excluded: [src]` list over `src/Docs.swift`; the directory `hollow`, which
-holds no Swift file; the path `src/Absent.swift`, which holds no file; the
-file `src/Notes.txt`, whose name does not end in `.swift`. The script reports
-0 findings and exits 0 for each of the 4 shapes, and it states one marked line
-for each path of the run. The `[ ! -e "$file" ]` test runs before swiftlint, and
-it states the path that holds no file; the branch that reads the stderr message
-states each path that IS there. So no path of a run that judged nothing goes
-unstated, and no path is stated twice. No reading separates the other 3 shapes
-from one another, and the marked line names the path rather than the cause.
-
-The acceptance test
-`the_shipped_swift_missing_docs_tool_rule_stays_clean_over_a_hollow_directory`
-holds the run over that directory to no finding and no tool error.
-
-Measured over one file that holds an undocumented `public struct` and one
-undocumented stored property, beside a project `.swiftlint.yml` that states
-`swiftlint_version:`: at `0.65.0` the script reports 2 findings and exits 0; at
-`0.64.0`, at `99.0.0` and at `0.1.0` the script reports 0 findings and exits 1,
-which the engine reads as a broken tool. A script that accepted every status 2
-reported 0 findings and exited 0 for each of those three values, and the engine
-read a dirty file as clean.
-
-`warning_threshold:` and a finding of error severity are the two shapes that
-make swiftlint exit 2 with a report of one entry or more, and a project cannot
-reach the second. The child states `warning: [open, public]` and no `error:`
-list, and a child block replaces the parent block whole. Measured with a
-project configuration that states `missing_docs:` with
-`error: [open, public]`, over the same file: swiftlint exits 0 and writes 2
-entries of warning severity. Measured with a child that states the same
-`error:` list instead: swiftlint exits 2 and writes 2 entries of error
-severity.
-
-The acceptance test
-`the_shipped_swift_missing_docs_tool_rule_measures_beside_a_project_warning_threshold`
-holds the run to the 2 findings of the third row of the first table. The
-acceptance test
-`the_shipped_swift_missing_docs_tool_rule_breaks_beside_a_project_version_mismatch`
-holds the run beside `swiftlint_version: 99.0.0` to no finding and one tool
-error.
-
-## The rule owns its own options
-
-A project configuration can state options for `missing_docs`, and the parent's
-block reaches the run when the child states none. Measured with a parent that
-states `excludes_inherited_types: false` and a child that states no
-`missing_docs:` block, over one undocumented `public struct Wide: Equatable`
-holding one undocumented stored property: the run reports 2 findings.
-
-The child's `missing_docs:` block replaces the parent's block whole, so the
-script writes every option the rule has. Each value is swiftlint's own default,
-written out so the project cannot change it:
-
-| option | the value the script states |
-|---|---|
-| `warning` | `[open, public]` |
-| `excludes_extensions` | `true` |
-| `excludes_inherited_types` | `true` |
-| `excludes_trivial_init` | `false` |
-| `evaluate_effective_access_control_level` | `false` |
-
-Measured against a project configuration that states `disabled_rules:
-[missing_docs]`, `warning: [open]` and `excludes_inherited_types: false`, over
-one file that holds an undocumented `public struct Wide: Equatable` with one
-stored property and an undocumented `public struct Plain` with one stored
-property: the run reports the 2 rows of `Plain` and no other. The same run with
-the option block removed from the script reports 0. The acceptance test
-`the_shipped_swift_missing_docs_tool_rule_keeps_its_own_rule_options` holds
-that pair of counts.
-
-A project cannot switch the rule off. `only_rules` in the child beats
-`disabled_rules` in the parent. Measured with a parent that states
-`disabled_rules: [missing_docs]` and no option block, over one file that holds
-an undocumented `public struct` and one undocumented stored property: the run
-reports 2 findings.
-
-## What swiftlint carves out for itself
-
-Measured on one probe file that holds each shape below and each shape of the
-section under this one. The run reports 7 findings, at rows 22, 25, 26, 27, 28,
-35 and 36. Each shape here reports nothing.
-
-- **A private or internal declaration.** `struct InternalStructure` with an
-  internal stored property, `private struct PrivateStructure` with a private
-  stored property, and `func internalFunction()` each report nothing.
-  `warning: [open, public]` is the cause. This is the prompt rule's private
-  carve-out, reproduced by the option.
-- **A protocol conformance written in an extension.** `extension Documented:
-  CustomStringConvertible` and the `public var description` inside it report
-  nothing. The extension declares an inherited type, so
-  `excludes_inherited_types: true` passes over it. Measured: the same run with
-  that option set to `false` reports row 18, the `public var description`. This
-  is the prompt rule's "Obvious implementations (Display, Debug, ToString,
-  etc.)" carve-out, reproduced by the option.
-- **An extension declaration.** `public extension Documented` at row 21 reports
-  nothing. Measured: the same run with `excludes_extensions: false` reports row
-  21. The MEMBER inside that extension still reports, and it is row 22 of the
-  seven.
-- **An XCTest class and its test method.** `final class ThingTests:
-  XCTestCase` and the `func testThing()` inside it report nothing. Both are
-  internal, so `warning: [open, public]` is the whole cause. swiftlint gives
-  `missing_docs` no test option at all.
-
-## What swiftlint does not carve out
-
-Each shape here is one of the 7 findings above.
-
-- **A getter and a setter, inside a type that declares no inherited type.** The
-  `missing-docs` prompt rule carves out "Simple getters/setters with
-  self-explanatory names". Measured: the undocumented
-  `public var value: Int { 1 }` at row 27 and the undocumented `public func
-  setValue(_ next: Int)` at row 28 each report. Both stand inside a type that
-  declares no inherited type, and the inherited type decides. Measured on a
-  second probe of two files: one holds `public struct Plain` with the same two
-  undocumented items, and the run reports 3 findings, at rows 1, 2 and 3; the
-  other holds `public struct Wide: Equatable` with the same two undocumented
-  items, and the run reports 0 findings. `excludes_inherited_types: true`
-  passes over the whole of `Wide`. So a public getter and a public setter each
-  need a doc comment inside a type that declares no inherited type.
-  `missing-docs.md` states the same condition.
-- **A trivial initializer.** The undocumented `public init() {}` at row 26
-  reports. `excludes_trivial_init: false` is the cause. Measured: the same run
-  with that option set to `true` reports 6 findings and drops row 26.
-- **A public helper inside a test file.** `public final class TestSupport` at
-  row 35 and its `public func makeThing()` at row 36 each report. The
-  `missing-docs` prompt rule asks for exactly this: "Identify test items from
-  the structural marker on the item itself ... not from the file name or path."
-  swiftlint reads the access level and never the path, so the test carve-out
-  holds for an internal test and holds for nothing else.
-
-`evaluate_effective_access_control_level` moved no row of this probe. Measured:
-the same run with that option set to `true` reports the same 7 rows.
-
-The recourse for any of these is the inline suppression at the end of this
-file.
-
-## A run cannot answer zero for a broken tool
-
-swiftlint exits 1 for a file that is not there, and it writes nothing to
-stdout. A shell pipeline takes the exit status of its LAST command, and that
-command was `jq`, so the earlier pipe exited 0 and reported nothing. That reads
-exactly like a clean file.
-
-The script writes swiftlint's report to a file rather than into a pipe, so the
-status of swiftlint reaches the gate above. A path the run cannot judge is
-another shape, and it is not a broken tool: the section "A path the run cannot
-judge" below states each shape, and states the marked line the script writes for
-it at exit 0.
-
-A Swift file that does not parse is not one of these. Measured over one file
-that holds `public func oops( {`: swiftlint recovers from the parse error,
-reports 1 `missing_docs` finding and exits 0. That count agrees with the row
-of the status table above. swiftlint states no parse failure of its own, so
-no filter can drop one.
-
-`mktemp -d` makes the working directory the script writes the configuration and
-the report into, and `trap 'rm -rf "$work"' EXIT` removes it. The trap covers
-every way the script leaves: a clean run, a finding, and a failure.
-
-## A path the run cannot judge
-
-A `files`-scope run is handed paths, and the engine reads the work-list rather
-than the disk, so a path can reach the run and refuse it. Each way it refuses is
-ONE item of a run that judged the other files, and
-`builtin/validators/README.md` states the channel: a line opening
-`sah-diagnostic:` on stderr, at exit 0.
-
-Measured with swiftlint 0.65.0 against the child configuration this script
-writes, over `Sources/Docs.swift`, which holds one undocumented `public struct`
-and one undocumented stored property, beside each refusing path:
-
-| the refusing path | status | stdout | stderr |
-|---|---|---|---|
-| a path that holds no file | 0 | 2 entries | 0 bytes |
-| a file whose bytes are not UTF-8 | 0 | 2 entries | ``Could not read contents of `<path>` `` |
-| a file with no read permission | 0 | 2 entries | the same decode line |
-
-Each row carries the status and the report of a healthy run, and swiftlint
-judged `Docs.swift` in every one of them. The child states
-`warning: [open, public]` and no `error:` list, so no finding of this rule
-reaches error severity and swiftlint exits 0 for a file that holds one. So
-neither the status nor the report states a refusing path, and the run holds
-2 findings that a nonzero exit would throw away.
-
-swiftlint names the file for rows 2 and 3, and it says NOTHING for row 1.
-Measured over the same run with `--quiet` taken off: swiftlint writes
-`Linting Swift files at paths Sources/Docs.swift, Sources/Absent.swift`, then
-`Linting 'Docs.swift' (1/1)`, and no word of the path it dropped. Row 1
-therefore takes a test of the path, and rows 2 and 3 take a reading of
-swiftlint's own message:
-
-- `[ ! -e "$file" ]` runs before swiftlint, and it writes
-  `sah-diagnostic: missing-docs-swift found no file at <path>, so its
-  declarations are unread`.
-- The `sed` substitution takes swiftlint's own decode line and writes
-  `sah-diagnostic: swiftlint could not read the contents of <path>, so its
-  declarations are unread`. swiftlint writes the ABSOLUTE path into that line,
-  so the marked line carries one.
-
-Measured with the shipped script, each refusing path beside `Docs.swift`: 2
-findings on stdout, ONE marked line on stderr, exit 0. Measured over each
-refusing path alone: no finding, the same one marked line, exit 0. Measured over
-`Docs.swift` beside all three paths: 2 findings, 3 marked lines, exit 0.
-
-`exit 1` is the answer this rule used to give, and it was wrong twice over.
-Measured over `Docs.swift` beside each path:
-
-| the refusing path | the earlier shape | the shipped script |
-|---|---|---|
-| a path that holds no file | 0 findings, exit 1, `missing-docs-swift cannot read Sources/Absent.swift` | 2 findings, exit 0, 1 diagnostic |
-| a file whose bytes are not UTF-8 | 0 findings, exit 1, the rule's tool-error line | 2 findings, exit 0, 1 diagnostic |
-| a file with no read permission | 0 findings, exit 1, `missing-docs-swift cannot read Sources/Forbidden.swift` | 2 findings, exit 0, 1 diagnostic |
-
-Every row of the earlier shape threw the 2 findings away, which is what
-`builtin/validators/README.md` refuses: a nonzero exit fails the WHOLE run, so
-one unjudged path throws away every finding the run did make.
-
-`[ ! -r "$file" ]` was the earlier test, and it cannot answer all three rows.
-Measured against the three staged paths: the test is true for the path that
-holds no file and for the file with no read permission, and FALSE for the file
-whose bytes are not UTF-8 — the mode lets a reader open that one. So a run gated
-on that test alone reads the third file as clean.
-
-swiftlint reads a source file as UTF-8 and as nothing else, which is what makes
-rows 2 and 3 one message. A Swift file a person saved in Latin-1, a binary file
-under a `.swift` name, and a file whose mode refuses a read each make swiftlint
-write ``Could not read contents of `<path>` ``, and swiftlint then lints no line
-of that file.
-
-Three acceptance tests hold the three rows, one for each —
-`the_shipped_swift_missing_docs_tool_rule_declines_a_path_that_holds_no_file`,
-`..._declines_a_file_it_cannot_decode` and `..._declines_a_file_it_may_not_read`.
-Each stages `Sources/Docs.swift` beside the path, and holds the run to reporting
-its 2 findings AND to stating one diagnostic that names the path. A run that
-lost either half fails them.
-
-The decode substitution is anchored on the start of a line, because swiftlint
-writes a path into stderr as well. Measured with swiftlint 0.65.0 over one file
-named `Could not read contents of.swift` under `Generated/`, beside a project
-`.swiftlint.yml` that states `excluded: [Generated]`: swiftlint writes
-`Error: No lintable files found at paths: 'Generated/Could not read contents
-of.swift'`, and an earlier test spelled `grep -qF 'Could not read contents of'`
-matched that path echo and exited 1 over a run that measured correctly. Measured
-with the shipped script over the same run: no finding, 1 diagnostic that names
-the file, exit 0.
-The section "Each stderr reading takes swiftlint's own message, and not a file
-name" above states each row of that measurement.
-
-## A run answers for the files it is given, and for no other
-
-`swiftlint lint` with no path argument walks the whole tree under the working
-directory. A `files`-scope script that hands `"$@"` straight to swiftlint
-therefore answers for every Swift file under the repository root when the run
-carries no file. That answer exits 0, so it reads as a measured result.
-
-The script counts its arguments first. A count of zero exits 0 with no finding.
-Measured over a probe tree of `Top.swift` and `deep/nested/Other.swift`, with no
-argument: without the guard the script reported 4 findings over those two files
-and exited 0; with the guard it reports none and exits 0. The same script over
-the two files reports 4. The acceptance test
-`the_shipped_swift_missing_docs_tool_rule_reads_only_the_files_it_is_given`
-holds both halves: the run with no argument, and the run over the two files.
-
-## The rule declares no install commands
-
-Homebrew is the supported way to install swiftlint, and it installs the current
-version only, so a Homebrew command cannot pin one. Mint can pin one —
-`mint install realm/SwiftLint@0.65.0` — but it builds swiftlint from source and
-links the result into `~/.mint/bin`, which is not on the path, so the command
-cannot make `check_command` pass. The `doctor.fix_hint` states
-`brew install swiftlint` instead. `sah doctor` shows that hint as the fix; the
-install lifecycle never runs it.
+| a path that holds no file | one marked line, no tool run |
+| a directory, or a file with no read permission | one marked line, no tool run |
+| a file whose bytes are not UTF-8 | the tool writes an untagged line, so one marked line |
+| a file the parser cannot read | the tool writes untagged lines, so one marked line |
+| a file that holds findings | the findings, exit 0 |
+
+The scope is `files`, and a run given no file exits 0 at once with no finding.
+
+The project's own `.swift-format` does not reach the run, because the script
+names `--configuration`. Measured over a project `.swift-format` that sets
+`AllPublicDeclarationsHaveDocumentation` to `false`: the run still reports the
+undocumented declarations. A project cannot switch the gate off.
+
+## What the tool reports, and what it leaves alone
+
+Measured with Apple Swift 6.4.2, over probe files that hold each shape below.
+
+REPORTED:
+
+- A `public` struct, class, enum, protocol, function, method, initializer,
+  subscript, property, constant and typealias that has no doc comment. Both `///` and `/** */` count as doc comments. A plain
+  `//` comment does not.
+- A trivial `public init() {}`.
+- A getter, in every type. A `public var name: String { "" }`
+  inside `public struct Wide: Equatable` reports, and so does the `public var
+  description` of a protocol conformance written in an extension. The type's
+  inherited types change nothing.
+- A `public` member of a `private` type, and a `public` helper in a test file.
+  The tool reads the access modifier and the doc comment, and never the path.
+
+NOT REPORTED:
+
+- A declaration with no `public` modifier: `internal`, `private`,
+  `fileprivate` and the default. So an `XCTestCase` class and its test methods
+  stay silent, and so does a `func` inside a `public extension` that carries no
+  modifier of its own.
+- An `open` declaration. The rule documents itself as "public or open", and the
+  code reads `.public` alone. Measured: `open class Base { open func m() {} }`
+  reports nothing. This is a gap, and no other rule of this set covers it.
+- A `public override` member. The code skips every declaration that carries
+  `override`.
+- An enum case, and a requirement of a protocol.
+
+The `missing-docs.md` prompt rule states which of its carve-outs this gate
+keeps. The gate keeps neither the getter carve-out nor the obvious-
+implementation carve-out for Swift: it reports what the list above says and
+nothing else.
 
 ## How to exempt one declaration
 
-Selection in the filter is attribution, not exemption: to exempt one
-declaration, write `// swiftlint:disable:next missing_docs` above it in the
-code. To exempt a whole directory, add it to the `excluded:` list of the
-project's own `.swiftlint.yml`.
+Write the directive in the code, where a reader sees it:
+
+| the directive | where it stands | reported |
+|---|---|---|
+| `// swift-format-ignore: AllPublicDeclarationsHaveDocumentation` | the line above the declaration | NO |
+| `// swift-format-ignore` | the line above the declaration | NO |
+| `// swift-format-ignore-file` | the top of the file | NO, for every declaration |
+| `// swift-format-ignore` | after the declaration, on the same line | YES — a trailing comment does nothing |
+
+Each line form covers ONE declaration. The file form takes the whole file out,
+and it is the way generated code leaves the gate: the `missing-docs` prompt rule
+carves generated code out, and the tool carries no generated-code check of its
+own. A rule name the tool does not know is accepted and silences nothing.
+
+## What the fixture pair holds
+
+The failing fixture holds one undocumented public structure, one undocumented
+public method and one undocumented public function, beside one documented
+function. Measured with the shipped script: **3 findings**, exit 0.
+
+The passing fixture documents every public declaration. Measured with the
+shipped script: 0 findings, exit 0. The raw run over it writes two
+`[Indentation]` lines, and the filter drops both, so the doctor's own fixture
+pair measures the filter as well as the rule.
+
+The doctor materializes the fixture directory flat and hands this rule one
+path, so neither fixture reads the other.
