@@ -79,22 +79,16 @@ https://github.com/swissarmyhammer/swissarmyhammer/releases/latest/download/Kanb
 
 Drag `Kanban.app` to `/Applications`. With no package manager to link the CLI, the app self-installs the `kanban` command onto your `PATH` at launch: it creates a `kanban` symlink in a user-writable `PATH` directory (preferring your Homebrew `bin`), falling back to `/usr/local/bin` with an admin-password prompt if needed. It is silent, idempotent, and self-healing — if the link is ever missing, the next launch offers to recreate it.
 
-> macOS (Apple Silicon) is the only platform with a prebuilt app today. On Linux/Windows, install the CLI (Option B) or build the app from source.
+> macOS (Apple Silicon) is the only platform with a prebuilt app or CLI. On other platforms, build from source.
 
-### Option B — CLI only (headless, Linux, CI)
+### Option B — CLI only (headless, CI)
 
-No GUI — just the `kanban` binary (CLI + MCP server). The right choice for servers, Linux, and CI.
+No GUI — just the `kanban` binary (CLI + MCP server). The right choice for servers and CI.
 
-**macOS / Linux (Homebrew formula):**
+**macOS (Homebrew formula):**
 
 ```bash
 brew install swissarmyhammer/tap/kanban-cli
-```
-
-**Linux (install script):**
-
-```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/swissarmyhammer/swissarmyhammer/releases/latest/download/kanban-cli-installer.sh | sh
 ```
 
 **From source (any platform):**

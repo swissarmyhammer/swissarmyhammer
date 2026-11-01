@@ -12,7 +12,7 @@ installers = ["homebrew", "shell"]
 # A GitHub repo to push Homebrew formulas to
 tap = "swissarmyhammer/homebrew-tap"
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+targets = ["aarch64-apple-darwin"]
 host = ["aarch64-apple-darwin"]
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
@@ -22,8 +22,6 @@ allow-dirty = ["ci", "msi"]
 dispatch-releases = true
 # Include shell completions in release archives
 include = ["completions/"]
-# Use self-hosted runner for macOS builds, GitHub-hosted for Linux
+# Use the self-hosted runner for macOS builds
 [dist.github-custom-runners]
 aarch64-apple-darwin = "self-hosted"
-
-# System dependencies installed via build-setup.sh (allow-dirty ci)

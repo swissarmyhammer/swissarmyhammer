@@ -27,12 +27,6 @@ put the `mirdan` CLI on your `PATH`):
 brew install --cask swissarmyhammer/tap/mirdan
 ```
 
-### Linux
-
-```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/swissarmyhammer/swissarmyhammer/releases/latest/download/mirdan-cli-installer.sh | sh
-```
-
 ### From source
 
 ```bash

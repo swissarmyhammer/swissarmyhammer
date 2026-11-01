@@ -33,12 +33,6 @@ Agents that rely on text search and file reads waste tokens and miss structure. 
 brew install swissarmyhammer/tap/code-context
 ```
 
-### Linux
-
-```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/swissarmyhammer/swissarmyhammer/releases/latest/download/code-context-cli-installer.sh | sh
-```
-
 ### From source
 
 ```bash
