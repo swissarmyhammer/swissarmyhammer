@@ -1,10 +1,26 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01m6ahjysfvjb84retm5z3cp3j
+  text: |-
+    Decision: KEEP the diagnostics leader watcher. Reason, by evidence: (1) start_diagnostics_watcher_with_notifier is called in swissarmyhammer-tools/src/mcp/server/code_context.rs, so the watcher is live. (2) The watcher does not use the files tool. It watches the disk and runs didChange plus pull for each changed file. Host Edit and Write tools, formatters and git checkout still write to disk without telling sah, so the job is still needed. (3) The real-path test leader_watcher::watcher_redreport_on_direct_disk_write writes a type error to disk and checks the re-report. It passes with real rust-analyzer. No follower-only forwarding code for the files tool exists in the crate, so nothing is removed.
+    Changes: comments only. Removed `files edit`, closed write surface and inline-on-edit fold-in wording from watcher.rs, diagnose.rs, config.rs, language.rs, lib.rs, tests/leader_watcher.rs, and the same fold-in wording in swissarmyhammer-tools/src/mcp/tools/diagnostics/mod.rs. The remaining word fold-in in diagnose.rs means folding broken dependents into a report, not the files tool.
+    Checks: cargo check --workspace --tests ok. cargo nextest run -p swissarmyhammer-diagnostics: 96 passed, 0 failed. clippy -D warnings ok for diagnostics and tools. fmt ok.
+    Review: `review file` on the 7 changed files gave findings only on code lines I did not change (watcher.rs logging/AsRef, diagnose.rs logging and test helpers, leader_watcher.rs test helpers, tools diagnostics mod.rs error handling). I changed comment lines only, so none of the findings sit on lines I changed. I did not fix them. They need a separate card if wanted.
+  timestamp: 2026-11-01T03:13:57.551354+00:00
+- actor: claude-code
+  id: 01m6ahk0zpn3hawfdde8zgedcz
+  text: |-
+    ### implement — changed
+    - evidence: 7 files (comments only): crates/swissarmyhammer-diagnostics/src/{watcher,diagnose,config,language,lib}.rs, crates/swissarmyhammer-diagnostics/tests/leader_watcher.rs, crates/swissarmyhammer-tools/src/mcp/tools/diagnostics/mod.rs. nextest 96/96 pass, clippy and fmt clean.
+    - next: /review. Review lists 40 findings on code lines I did not change.
+  timestamp: 2026-11-01T03:13:59.798193+00:00
 depends_on:
 - 01M69XPFH14ZS35Y9KNM3W7NA4
-position_column: todo
-position_ordinal: ffff8f80
+position_column: doing
+position_ordinal: '8480'
 project: remove-files-tool
 title: Decide the fate of the diagnostics leader watcher after the files tool goes
 ---

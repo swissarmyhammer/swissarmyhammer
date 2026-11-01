@@ -1,10 +1,9 @@
 //! Diagnostics configuration.
 //!
-//! This is derived state, never persisted to disk. It carries the knobs the two
-//! consumers (the `diagnostics` MCP tool and the inline-on-edit fold-in) share:
-//! which severities to report, how long to let diagnostics settle before
-//! reporting, a cap on the number of records per report, and a per-language
-//! enable/disable override.
+//! This is derived state, never persisted to disk. It carries the knobs the
+//! `diagnostics` MCP tool uses: which severities to report, how long to let
+//! diagnostics settle before reporting, a cap on the number of records per
+//! report, and a per-language enable/disable override.
 
 use std::collections::BTreeMap;
 use std::time::Duration;

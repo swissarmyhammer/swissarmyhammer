@@ -1,9 +1,9 @@
 //! Integration: the leader-owned diagnostics file watcher re-reports on a
-//! disk write it never made through the closed edit surface.
+//! disk write it never made itself.
 //!
 //! A single leader process owns one real `rust-analyzer` session and runs the
 //! diagnostics watcher over the workspace. The test writes a file with a type
-//! error *directly to disk* (the way a follower's `files edit`, a formatter, or
+//! error *directly to disk* (the way a host Edit tool, a formatter, or
 //! `git checkout` would) and asserts the watcher debounces the change, issues
 //! `didChange` into the session, and the session re-reports a diagnostic for the
 //! file — without anyone syncing the analyzer by hand.
@@ -272,8 +272,8 @@ async fn watcher_redreport_on_direct_disk_write() {
     );
     tokio::time::sleep(Duration::from_secs(WATCHER_STARTUP_DELAY_SECS)).await;
 
-    // Write a type error DIRECTLY to disk — the path the closed edit surface
-    // can't see (a follower's direct write / a formatter / git checkout).
+    // Write a type error DIRECTLY to disk — the path sah can't see
+    // (a host Edit tool / a formatter / git checkout).
     std::fs::write(
         &main_rs,
         "fn main() {\n    let _x: u32 = \"not a number\";\n}\n",

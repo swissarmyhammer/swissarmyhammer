@@ -1,5 +1,4 @@
-//! The single `diagnose` entry point shared by the `diagnostics` tool and the
-//! `files edit` fold-in.
+//! The single `diagnose` entry point used by the `diagnostics` tool.
 //!
 //! `diagnose` answers one question sharply: *what broke?* It always reports the
 //! files you asked about, and of their one-hop dependents it folds in **only the
@@ -160,7 +159,7 @@ where
 ///
 /// [`diagnose`] collapses a never-quiescing settle to an empty report, which is
 /// indistinguishable from "clean". A consumer that must tell "still analyzing"
-/// apart from "clean" — notably the inline-on-edit fold-in, which surfaces a
+/// apart from "clean" — notably the `diagnostics` tool, which surfaces a
 /// `pending` marker so the model knows the report is provisional — calls
 /// [`diagnose_with_outcome`] instead and reads [`pending`](Self::pending).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,7 +253,7 @@ where
     // with ServerCancelled / ContentModified / retrigger — see
     // [`LspSession::is_ready`]) cannot give an authoritative "clean": an empty
     // settled set then reflects "not analyzed yet", not "no problems". Report
-    // `pending` so the consumer (e.g. the inline fold-in) surfaces that instead
+    // `pending` so the consumer (the `diagnostics` tool) surfaces that instead
     // of mistaking a not-yet-loaded server's silence for a clean file.
     let not_ready = session.is_running() && !session.is_ready();
 
@@ -650,7 +649,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn outcome_reports_not_pending_when_settled() {
         // A normal settle (advance past the debounce window) yields the report
-        // with `pending == false` — the inline fold-in relies on this flag to
+        // with `pending == false` — the `diagnostics` tool relies on this flag to
         // tell "clean" apart from "still analyzing".
         let session = not_running_session();
         seed(
@@ -756,7 +755,7 @@ mod tests {
         // report. The cache is NOT pre-seeded and nothing pulled beforehand —
         // `diagnose` must pull the target itself so the report is populated.
         // This is the fix for the diagnose path depending on the watcher's
-        // asynchronous pulls: `check file` / inline-edit now reflect the
+        // asynchronous pulls: `check file` now reflects the
         // server's current answer directly.
         let client = Arc::new(Mutex::new(Some(RecordingTransport {
             diagnostic_response: Some(json!({

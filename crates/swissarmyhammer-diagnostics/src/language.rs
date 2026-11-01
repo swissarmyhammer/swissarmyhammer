@@ -2,10 +2,9 @@
 //!
 //! A path is "diagnosable" when its file extension is handled by some LSP server
 //! the supervisor knows about — i.e. there is a language server that could
-//! produce diagnostics for it. Both consumers of this crate (the `diagnostics`
-//! MCP tool and the inline-on-edit fold-in) call this ONE helper, so the
-//! `.md`/`.txt` exclusion is defined and tested in exactly one place rather than
-//! reimplemented twice.
+//! produce diagnostics for it. The `diagnostics` MCP tool and the file watcher
+//! call this ONE helper, so the `.md`/`.txt` exclusion is defined and tested in
+//! exactly one place rather than reimplemented twice.
 //!
 //! The set of diagnosable extensions is derived from the supervisor's
 //! server-spec `file_extensions` (via [`swissarmyhammer_lsp::all_servers`]); it

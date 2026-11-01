@@ -1,9 +1,8 @@
 //! The leader-owned diagnostics file watcher (one per workdir).
 //!
-//! A follower process spawns no LSP server (see `^7a5h2bj`), and the closed
-//! `files edit` write surface only covers edits made through the tool. A
-//! follower's *direct* `files edit` write, plus leaks no closed surface can
-//! cover — a subprocess, a formatter, a `git checkout` — all land on disk
+//! A follower process spawns no LSP server (see `^7a5h2bj`), and sah does not
+//! see edits made by the host's own Edit and Write tools. Those edits, plus
+//! edits from a subprocess, a formatter, or a `git checkout`, all land on disk
 //! without the leader's session hearing about them. This watcher closes that
 //! gap: it watches the workspace, debounces the change burst, and for each
 //! changed *diagnosable* file feeds the new content into the leader's one
@@ -42,7 +41,7 @@ use crate::language::is_diagnosable;
 /// refreshed file so a host can be told a native edit was seen.
 ///
 /// This is the watcher-push courtesy channel for the hardest case — a foreign
-/// host doing a native edit where the tool's closed write surface never ran. The
+/// host doing a native edit that sah never saw. The
 /// watcher still detects the change but can only reach the host, not wake an idle
 /// model, so this is explicitly *not* load-bearing: a `None` notifier (or a panic
 /// inside one) must never change whether the file is re-diagnosed.
@@ -410,7 +409,7 @@ mod tests {
         let (session, client) = recording_session();
         // First refresh opens it.
         assert!(refresh_file(&session, &rs));
-        // A real on-disk edit (a follower's direct write / external tool).
+        // A real on-disk edit (a host Edit tool / external tool).
         std::fs::write(&rs, "fn main() { let x = 1; }\n").unwrap();
         assert!(refresh_file(&session, &rs));
 
@@ -418,7 +417,7 @@ mod tests {
         let t = guard.as_ref().unwrap();
         assert_eq!(t.notification_count("textDocument/didOpen"), 1);
         // The second refresh, with changed text, is a didChange — this is the
-        // path that catches a write the closed edit surface never saw.
+        // path that catches a write sah never saw.
         assert_eq!(t.notification_count("textDocument/didChange"), 1);
         assert_eq!(t.request_count("textDocument/diagnostic"), 2);
     }

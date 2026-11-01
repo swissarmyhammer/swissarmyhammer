@@ -8,10 +8,9 @@
 //! **no** LSP client — it sits on top of the shared session/supervisor in
 //! [`swissarmyhammer_lsp`], subscribing to that session's diagnostics fan-out.
 //!
-//! It is a crate (not a module of a consumer) because it has two consumers — the
-//! `diagnostics` MCP tool and the inline-on-edit fold-in — and belongs to
-//! neither. Nothing here is persisted to disk: config and any report are derived
-//! state.
+//! It is a crate (not a module of a consumer) because the `diagnostics` MCP tool
+//! and the leader file watcher both use it, and it belongs to neither. Nothing
+//! here is persisted to disk: config and any report are derived state.
 //!
 //! ## Severity
 //!

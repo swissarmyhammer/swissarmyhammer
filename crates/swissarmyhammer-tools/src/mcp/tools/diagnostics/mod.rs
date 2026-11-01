@@ -348,8 +348,8 @@ impl DiagnosticsTool {
 }
 
 /// Resolve the live session and blast-radius dependents for `paths`, then drive
-/// [`diagnose_with_outcome`] — the shared report-producing core used by both the
-/// `diagnostics` tool's `check` ops and the inline-on-edit fold-in.
+/// [`diagnose_with_outcome`] — the report-producing core of the `diagnostics`
+/// tool's `check` ops.
 ///
 /// `paths` must already be **absolute** diagnosable paths (the caller does the
 /// scope resolution / `is_diagnosable` filtering). `repo` is the repository root
