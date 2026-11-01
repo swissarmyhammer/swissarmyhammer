@@ -80,12 +80,31 @@ const SWIFT_MISSING_DOCS_PROBE_PATH: &str = "Sources/Probe.swift";
 /// Where a probe stages a SECOND Swift file of the same run.
 const SWIFT_MISSING_DOCS_SECOND_PATH: &str = "Sources/Second.swift";
 
+/// Both files of a two-file run, in the order a probe stages them.
+const SWIFT_MISSING_DOCS_TWO_PATHS: [&str; 2] = [
+    SWIFT_MISSING_DOCS_PROBE_PATH,
+    SWIFT_MISSING_DOCS_SECOND_PATH,
+];
+
+/// Runs the shipped Swift missing-docs script over the staged files, and
+/// answers the `path:line` rows it reports.
+///
+/// Every probe of this module that drives the script itself reaches it through
+/// here: the loader, the toolchain precondition and the exit-0 expectation have
+/// one implementation. `judged` names the files the run carries.
+fn swift_missing_docs_script_findings(staged: &[(&str, &str)], judged: &[&str]) -> Vec<String> {
+    let loader = builtin_loader();
+    require_tool_installed(&loader, SWIFT_PROJECT_TYPES, SWIFT_MISSING_DOCS_RULE);
+
+    shipped_script_findings(&loader, SWIFT_MISSING_DOCS_RULE, staged, judged).expect(
+        "the shipped Swift missing-docs script must judge every file it is given and exit 0",
+    )
+}
+
 /// Reads the shipped pass fixture, and answers the `path:line` rows the
 /// shipped script reports over it.
 fn swift_missing_docs_pass_fixture_findings() -> Vec<String> {
     let loader = builtin_loader();
-    require_tool_installed(&loader, SWIFT_PROJECT_TYPES, SWIFT_MISSING_DOCS_RULE);
-
     let shipped = shipped_asset(
         &loader,
         &FIXTURE_TEMPLATE_ASSET,
@@ -93,13 +112,10 @@ fn swift_missing_docs_pass_fixture_findings() -> Vec<String> {
     );
     let content = std::fs::read_to_string(shipped).expect("read the shipped pass fixture");
 
-    shipped_script_findings(
-        &loader,
-        SWIFT_MISSING_DOCS_RULE,
+    swift_missing_docs_script_findings(
         &[(SWIFT_MISSING_DOCS_PASS_PATH, content.as_str())],
         &[SWIFT_MISSING_DOCS_PASS_PATH],
     )
-    .expect("the shipped Swift missing-docs script must judge its pass fixture and exit 0")
 }
 
 /// Acceptance: the shipped Swift missing-docs tool rule reports NOTHING over
@@ -346,28 +362,15 @@ fn the_shipped_swift_missing_docs_tool_rule_reads_the_exemption_directives() {
 /// first file alone and the second would read as clean.
 #[test]
 fn the_shipped_swift_missing_docs_tool_rule_reports_every_file_that_reports() {
-    let loader = builtin_loader();
-    require_tool_installed(&loader, SWIFT_PROJECT_TYPES, SWIFT_MISSING_DOCS_RULE);
-
-    let staged = [
-        (SWIFT_MISSING_DOCS_PROBE_PATH, SWIFT_STAGED_DECLARATIONS),
-        (SWIFT_MISSING_DOCS_SECOND_PATH, SWIFT_STAGED_DECLARATIONS),
-    ];
-    let rows = shipped_script_findings(
-        &loader,
-        SWIFT_MISSING_DOCS_RULE,
-        &staged,
+    let rows = swift_missing_docs_script_findings(
         &[
-            SWIFT_MISSING_DOCS_PROBE_PATH,
-            SWIFT_MISSING_DOCS_SECOND_PATH,
+            (SWIFT_MISSING_DOCS_PROBE_PATH, SWIFT_STAGED_DECLARATIONS),
+            (SWIFT_MISSING_DOCS_SECOND_PATH, SWIFT_STAGED_DECLARATIONS),
         ],
-    )
-    .expect("the shipped Swift missing-docs script must judge both probe files and exit 0");
+        &SWIFT_MISSING_DOCS_TWO_PATHS,
+    );
 
-    for path in [
-        SWIFT_MISSING_DOCS_PROBE_PATH,
-        SWIFT_MISSING_DOCS_SECOND_PATH,
-    ] {
+    for path in SWIFT_MISSING_DOCS_TWO_PATHS {
         assert_eq!(
             rows.iter().filter(|row| row.starts_with(path)).count(),
             2,
@@ -425,6 +428,23 @@ const SWIFT_MISSING_DOCS_FORBIDDEN_SOURCE: &str = concat!(
     "}\n"
 );
 
+/// The `path:line` rows of the structure and the property that
+/// `Sources/Judged.swift` holds undocumented.
+///
+/// Every decline probe expects these two rows, so the row logic has one home.
+fn swift_missing_docs_judged_rows() -> Vec<String> {
+    [SWIFT_STAGED_STRUCTURE_HEAD, SWIFT_STAGED_PROPERTY_HEAD]
+        .into_iter()
+        .map(|head| {
+            expected_row(
+                SWIFT_MISSING_DOCS_JUDGED_PATH,
+                SWIFT_STAGED_DECLARATIONS,
+                head,
+            )
+        })
+        .collect()
+}
+
 /// The `missing-docs-swift` probe over a refusing path beside
 /// `Sources/Judged.swift`.
 ///
@@ -433,17 +453,6 @@ const SWIFT_MISSING_DOCS_FORBIDDEN_SOURCE: &str = concat!(
 /// them is what a nonzero exit over a declined item costs, and staying silent
 /// about the path is what reads that path as a clean file.
 fn swift_missing_docs_decline_probe() -> ShippedDeclineProbe {
-    let structure = expected_row(
-        SWIFT_MISSING_DOCS_JUDGED_PATH,
-        SWIFT_STAGED_DECLARATIONS,
-        SWIFT_STAGED_STRUCTURE_HEAD,
-    );
-    let property = expected_row(
-        SWIFT_MISSING_DOCS_JUDGED_PATH,
-        SWIFT_STAGED_DECLARATIONS,
-        SWIFT_STAGED_PROPERTY_HEAD,
-    );
-
     ShippedDeclineProbe {
         project_types: SWIFT_PROJECT_TYPES,
         rule: SWIFT_MISSING_DOCS_RULE,
@@ -452,7 +461,7 @@ fn swift_missing_docs_decline_probe() -> ShippedDeclineProbe {
             SWIFT_STAGED_DECLARATIONS.to_string(),
         )],
         path: SWIFT_MISSING_DOCS_UNREADABLE_PATH,
-        expected: vec![structure, property],
+        expected: swift_missing_docs_judged_rows(),
     }
 }
 
@@ -510,16 +519,7 @@ const SWIFT_MISSING_DOCS_UNPARSABLE_SOURCE: &str = "public func oops( {\n";
 /// and the file that wrote one is declined whole.
 #[test]
 fn the_shipped_swift_missing_docs_tool_rule_declines_a_file_the_parser_cannot_read() {
-    let structure = expected_row(
-        SWIFT_MISSING_DOCS_JUDGED_PATH,
-        SWIFT_STAGED_DECLARATIONS,
-        SWIFT_STAGED_STRUCTURE_HEAD,
-    );
-    let property = expected_row(
-        SWIFT_MISSING_DOCS_JUDGED_PATH,
-        SWIFT_STAGED_DECLARATIONS,
-        SWIFT_STAGED_PROPERTY_HEAD,
-    );
+    let expected = swift_missing_docs_judged_rows();
 
     verify_unjudged_file_is_declined(
         SWIFT_PROJECT_TYPES,
@@ -532,7 +532,7 @@ fn the_shipped_swift_missing_docs_tool_rule_declines_a_file_the_parser_cannot_re
             ),
         ],
         SWIFT_MISSING_DOCS_UNREADABLE_PATH,
-        &[structure.as_str(), property.as_str()],
+        &expected.iter().map(String::as_str).collect::<Vec<_>>(),
     );
 }
 
