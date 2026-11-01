@@ -208,7 +208,7 @@ it holds must stand. `builtin/validators/README.md` states the answer for this
 shape: "One status can carry both a measured run and a broken run. The status of
 a failure is then the same as the status of a finding. The script must then test
 the REPORT beside the status, and accept the shared status only for the report
-shape a measured run writes." The four shipped swiftlint rules make the same
+shape a measured run writes." The three shipped swiftlint rules make the same
 test.
 
 The FILTERED findings answer none of the four. One member that compiles fills

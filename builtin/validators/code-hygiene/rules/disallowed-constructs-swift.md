@@ -380,7 +380,7 @@ tree under the working directory, and that answer exits 0, so it reads as a
 measured result.
 
 Everything from the two `--config` paths down to the status test is the shape the
-four shipped swiftlint rules share, and `magic-numbers-swift` states each
+three shipped swiftlint rules share, and this rule states each
 measurement behind it:
 
 - the PARENT config is the project's own `.swiftlint.yml`, named only when the
@@ -473,7 +473,7 @@ stage a probe repository of their own for the test-target split.
 
 Homebrew is the supported way to install swiftlint and it installs the current
 version only, so a Homebrew command cannot pin one — the same reason
-`function-length-swift`, `magic-numbers-swift`, `missing-docs-swift` and
+`function-length-swift`, `magic-numbers-swift` and
 `dead-code-swift` each state. The `doctor.fix_hint` names the Homebrew command
 instead. `sah doctor` shows that hint as the fix; the install lifecycle never
 runs it.

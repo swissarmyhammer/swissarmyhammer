@@ -1175,7 +1175,7 @@ one throws out of `@ts-morph/common` or out of cosmiconfig before a module graph
 exists, so 0 bytes on stdout there is the silence of a project ts-prune never
 read. The status separates the two for every shape measured here, so this script
 tests the status and needs no test on the report and none on stderr. That is
-where it differs from the four shipped swiftlint rules, each of which has one
+where it differs from the three shipped swiftlint rules, each of which has one
 status carrying both answers and must read the report beside it.
 
 The earlier shape of this script threw that status away. Each project's pipe

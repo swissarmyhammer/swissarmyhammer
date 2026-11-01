@@ -279,8 +279,8 @@ read a dirty file as clean.
 ## How the run is shaped
 
 The script names TWO configuration files. swiftlint reads a list of `--config`
-paths as a parent-child hierarchy. The four shipped swiftlint rules share this
-shape, and `missing-docs-swift` states each measurement behind it.
+paths as a parent-child hierarchy. The three shipped swiftlint rules share this
+shape, and `disallowed-constructs-swift` states each measurement behind it.
 
 - The PARENT is the project's own `.swiftlint.yml` at the repository root. The
   script names it only when the file is there, because a `--config` path that
@@ -480,7 +480,7 @@ Each row carries the status and the report of a healthy run, and swiftlint
 judged `Judged.swift` in every one of them. The child states `error: 250` beside
 `warning: 250`, so a finding of this rule reaches error severity and swiftlint
 exits 2 for it, which the section "What the script accepts at status 2" above
-states. That is the one place this rule differs from `missing-docs-swift` and
+states. That is the one place this rule differs from `disallowed-constructs-swift` and
 `magic-numbers-swift`, whose child states no `error:` list and whose same three
 rows therefore stand at exit 0. So neither the status nor the report states a
 refusing path, and the run holds 1 finding that a nonzero exit would throw away.
