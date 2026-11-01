@@ -8,7 +8,7 @@ fn test_builtin_models_generation() {
     let names: Vec<&str> = agents.iter().map(|(name, _)| *name).collect();
 
     // The builtin library is embedding models only
-    assert_eq!(names, vec!["nomic-embed-code", "qwen-embedding"]);
+    assert_eq!(names, vec!["qwen-embedding"]);
 
     // Verify each agent has valid YAML content with executor(s) key
     for (name, content) in agents {
@@ -27,17 +27,7 @@ fn test_builtin_models_specific_content() {
     let agents = get_builtin_models();
     let agents_map: std::collections::HashMap<&str, &str> = agents.into_iter().collect();
 
-    // nomic-embed-code is llama.cpp only — at 7B params the ANE is far slower
-    let nomic_content = agents_map
-        .get("nomic-embed-code")
-        .expect("nomic-embed-code model should exist");
-    assert!(nomic_content.contains("type: llama-embedding"));
-    assert!(
-        !nomic_content.contains("type: ane-embedding"),
-        "nomic-embed-code must not offer an ANE executor"
-    );
-
-    // Test qwen-embedding has multi-executor format with ANE + llama fallback
+    // qwen-embedding names only the ANE executor; no builtin needs llama.cpp
     let embed_content = agents_map
         .get("qwen-embedding")
         .expect("qwen-embedding agent should exist");
@@ -46,7 +36,10 @@ fn test_builtin_models_specific_content() {
         "qwen-embedding should use multi-executor format"
     );
     assert!(embed_content.contains("type: ane-embedding"));
-    assert!(embed_content.contains("type: llama-embedding"));
+    assert!(
+        !embed_content.contains("llama-embedding"),
+        "qwen-embedding must not name a llama.cpp executor"
+    );
     assert!(embed_content.contains("macos-arm64"));
 }
 

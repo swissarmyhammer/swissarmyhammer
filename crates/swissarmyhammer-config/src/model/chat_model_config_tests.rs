@@ -16,26 +16,25 @@ fn write_sah_config(content: &str) {
 }
 
 /// The embedding stack loads its models by name through `ModelManager`.
-/// Collapsing the chat side must leave that path intact: both embedding
-/// YAMLs still resolve, still parse, and still select an embedding executor.
+/// Collapsing the chat side must leave that path intact: the embedding
+/// YAML still resolves, still parses, and still selects an embedding executor.
 #[test]
 fn embedding_models_still_resolve_through_model_manager() {
-    for name in ["nomic-embed-code", "qwen-embedding"] {
-        let info = ModelManager::find_agent_by_name(name)
-            .unwrap_or_else(|e| panic!("builtin embedding model `{name}` must resolve: {e}"));
-        let config = parse_model_config(&info.content)
-            .unwrap_or_else(|e| panic!("builtin embedding model `{name}` must parse: {e}"));
-        let executor = config
-            .select_executor()
-            .unwrap_or_else(|| panic!("`{name}` must offer an executor for this platform"));
-        assert!(
-            matches!(
-                executor,
-                ModelExecutorConfig::LlamaEmbedding(_) | ModelExecutorConfig::AneEmbedding(_)
-            ),
-            "`{name}` must select an embedding executor, got {executor:?}"
-        );
-    }
+    let name = "qwen-embedding";
+    let info = ModelManager::find_agent_by_name(name)
+        .unwrap_or_else(|e| panic!("builtin embedding model `{name}` must resolve: {e}"));
+    let config = parse_model_config(&info.content)
+        .unwrap_or_else(|e| panic!("builtin embedding model `{name}` must parse: {e}"));
+    let executor = config
+        .select_executor()
+        .unwrap_or_else(|| panic!("`{name}` must offer an executor for this platform"));
+    assert!(
+        matches!(
+            executor,
+            ModelExecutorConfig::LlamaEmbedding(_) | ModelExecutorConfig::AneEmbedding(_)
+        ),
+        "`{name}` must select an embedding executor, got {executor:?}"
+    );
 }
 
 /// `builtin/models/` is now an embedding-only library. A leftover chat YAML
@@ -46,7 +45,7 @@ fn builtin_models_are_all_embedding_models() {
     let names: Vec<&str> = models.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(
         names,
-        vec!["nomic-embed-code", "qwen-embedding"],
+        vec!["qwen-embedding"],
         "builtin/models/ must hold only the embedding models"
     );
 }

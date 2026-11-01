@@ -233,7 +233,7 @@ fn test_project_agent_overrides_user() {
     let env = TestEnvironment::new();
 
     let project_override = test_agent_yaml(
-        "Project override of Nomic Embed Code",
+        "Project override of Qwen Embedding",
         "ane-embedding",
         Some(
             r#"config:
@@ -244,15 +244,15 @@ fn test_project_agent_overrides_user() {
         ),
     );
 
-    env.create_project_agent("nomic-embed-code", &project_override);
+    env.create_project_agent("qwen-embedding", &project_override);
     env.activate();
 
     let agents = ModelManager::list_agents().expect("Should list all agents with precedence");
 
     // When cwd == git root, both Project and GitRoot scan the same models/ dir;
     // GitRoot runs after Project in the merge order and overwrites, so source is GitRoot.
-    assert_agent_has_source(&agents, "nomic-embed-code", ModelConfigSource::GitRoot);
-    assert_agent_description_contains(&agents, "nomic-embed-code", "Project override");
+    assert_agent_has_source(&agents, "qwen-embedding", ModelConfigSource::GitRoot);
+    assert_agent_description_contains(&agents, "qwen-embedding", "Project override");
 }
 
 #[serial_test::serial(cwd)]

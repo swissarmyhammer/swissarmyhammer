@@ -25,10 +25,6 @@ fn test_agent_manager_load_builtin_models() {
     // Check for known builtin agents
     let agent_names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
     assert!(
-        agent_names.contains(&"nomic-embed-code"),
-        "Should contain the nomic-embed-code embedding model"
-    );
-    assert!(
         agent_names.contains(&"qwen-embedding"),
         "Should contain the qwen-embedding embedding model"
     );
@@ -208,10 +204,6 @@ fn test_agent_manager_list_agents_precedence() {
 
     // Should contain known builtin agents unless overridden
     let agent_names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
-    assert!(
-        agent_names.contains(&"nomic-embed-code"),
-        "Should contain the nomic-embed-code embedding model"
-    );
     assert!(
         agent_names.contains(&"qwen-embedding"),
         "Should contain the qwen-embedding embedding model"
@@ -506,19 +498,6 @@ fn test_agent_manager_find_agent_by_name_not_found() {
         }
         _ => panic!("Should return NotFound error"),
     }
-}
-
-#[test]
-fn test_agent_manager_find_agent_by_name_precedence() {
-    // This test will pass the existing agent names from builtin agents
-    // Test with known builtin agent
-    let result = ModelManager::find_agent_by_name("nomic-embed-code");
-    assert!(result.is_ok(), "Should find nomic-embed-code model");
-
-    let agent = result.unwrap();
-    assert_eq!(agent.name, "nomic-embed-code");
-    // Should be builtin unless overridden by project or user agents
-    assert_eq!(agent.source, ModelConfigSource::Builtin);
 }
 
 #[test]

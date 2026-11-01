@@ -1053,27 +1053,8 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Embedder construction and accessor tests — llama backend (no model download)
+    // Embedder construction
     // -------------------------------------------------------------------------
-
-    /// `from_model_name` succeeds for a llama-embedding model (no download needed).
-    /// Tests the success path: config resolution, executor selection, backend construction,
-    /// and accessor methods.
-    #[test]
-    fn from_model_name_llama_embedding_succeeds() {
-        let rt = rt();
-        rt.block_on(async {
-            // nomic-embed-code uses llama-embedding only (no ANE), so it takes
-            // the LlamaEmbedding branch on all platforms.
-            let embedder = Embedder::from_model_name("nomic-embed-code")
-                .await
-                .expect("Should construct llama-embedding embedder without downloading");
-
-            assert_eq!(embedder.backend_name(), "llama");
-            assert_eq!(embedder.model_name(), "nomic-embed-code");
-            assert_eq!(embedder.max_sequence_length(), 512);
-        });
-    }
 
     /// `Embedder::default()` resolves the default model name.
     /// On macOS ARM64, qwen-embedding selects the ANE backend which needs model
@@ -1085,7 +1066,8 @@ mod tests {
         rt.block_on(async {
             let result = Embedder::default().await;
             // On macOS ARM64: may fail due to ANE model resolution (needs download).
-            // On other platforms: uses llama-embedding, should succeed.
+            // On other platforms: qwen-embedding offers only an ANE executor, so
+            // construction fails with `NoCompatibleExecutor`.
             // Either way, should not panic.
             match result {
                 Ok(embedder) => {
@@ -1098,127 +1080,6 @@ mod tests {
                     assert!(!msg.is_empty(), "Error should have a descriptive message");
                 }
             }
-        });
-    }
-
-    /// `is_loaded()` returns false before `load()` is called.
-    #[test]
-    fn embedder_is_loaded_returns_false_before_load() {
-        let rt = rt();
-        rt.block_on(async {
-            let embedder = Embedder::from_model_name("nomic-embed-code")
-                .await
-                .expect("Should construct embedder");
-            assert!(
-                !embedder.is_loaded(),
-                "Should not be loaded before load() is called"
-            );
-        });
-    }
-
-    /// `embedding_dimension()` returns a value (possibly None before loading).
-    #[test]
-    fn embedder_embedding_dimension_before_load() {
-        let rt = rt();
-        rt.block_on(async {
-            let embedder = Embedder::from_model_name("nomic-embed-code")
-                .await
-                .expect("Should construct embedder");
-            // Before loading, dimension may be None or Some depending on backend.
-            // Just verify it doesn't panic.
-            let _dim = embedder.embedding_dimension();
-        });
-    }
-
-    /// `embed_text` on an unloaded model returns an error (not a panic).
-    #[test]
-    fn embedder_embed_text_before_load_returns_error() {
-        let rt = rt();
-        rt.block_on(async {
-            let embedder = Embedder::from_model_name("nomic-embed-code")
-                .await
-                .expect("Should construct embedder");
-            // Embedding without loading should fail gracefully
-            let result = embedder.embed_text("hello").await;
-            assert!(
-                result.is_err(),
-                "embed_text on unloaded model should return error"
-            );
-        });
-    }
-
-    /// `embed_text` with a very long text (exceeding max_sequence_length) on an
-    /// unloaded model goes through the chunked path and still returns an error.
-    #[test]
-    fn embedder_embed_text_long_text_before_load_returns_error() {
-        let rt = rt();
-        rt.block_on(async {
-            let embedder = Embedder::from_model_name("nomic-embed-code")
-                .await
-                .expect("Should construct embedder");
-            // Create text that exceeds max_sequence_length * 3 chars to trigger chunked path
-            let long_text = "word ".repeat(2000); // ~10000 chars >> 512*3=1536
-            let result = embedder.embed_text(&long_text).await;
-            assert!(
-                result.is_err(),
-                "embed_text with long text on unloaded model should return error"
-            );
-        });
-    }
-
-    /// Exercises the `TextEmbedder::load` delegation path against a real model.
-    ///
-    /// Despite the historical name, this is a model-load test, not an
-    /// error-path test: when the `nomic-embed-code` weights are cached it takes
-    /// the `Ok` branch and loads a multi-GB GGUF (and on a cold cache it
-    /// downloads gigabytes from HuggingFace). It is therefore gated behind the
-    /// `embedding-models` feature like the other model-dependent tests, and run
-    /// via `cargo nextest run --features embedding-models --profile embedding-models`.
-    /// Deterministic, fast coverage of the genuine missing-file error path
-    /// lives at the llama-embedding layer (`test_load_missing_local_file_returns_error`).
-    #[cfg(feature = "embedding-models")]
-    #[test]
-    fn embedder_load_without_model_file_returns_error() {
-        let rt = rt();
-        rt.block_on(async {
-            let embedder = Embedder::from_model_name("nomic-embed-code")
-                .await
-                .expect("Should construct embedder");
-            // load() will try to resolve/download the model file and fail
-            // if the model is not already cached.
-            let result = embedder.load().await;
-            // On a fresh machine without cached model, this should fail.
-            // On a machine with cached model, it succeeds — either outcome is fine.
-            match result {
-                Ok(()) => {
-                    assert!(
-                        embedder.is_loaded(),
-                        "After successful load, is_loaded should be true"
-                    );
-                }
-                Err(e) => {
-                    // Just verify it's a real error, not garbage
-                    let msg = e.to_string();
-                    assert!(!msg.is_empty(), "Error should have a message");
-                }
-            }
-        });
-    }
-
-    /// The `normalize` field is read from config (true for nomic-embed-code).
-    /// This is verified indirectly by successful construction.
-    #[test]
-    fn embedder_normalize_field_from_config() {
-        let rt = rt();
-        rt.block_on(async {
-            // nomic-embed-code has normalize: true in its config
-            let embedder = Embedder::from_model_name("nomic-embed-code")
-                .await
-                .expect("Should construct embedder");
-            // normalize is private, but it's set during construction.
-            // We verify construction succeeded (which means the config was parsed
-            // and normalize was read without error).
-            assert_eq!(embedder.model_name(), "nomic-embed-code");
         });
     }
 

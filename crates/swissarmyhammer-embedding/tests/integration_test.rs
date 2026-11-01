@@ -19,7 +19,7 @@ fn rt() -> tokio::runtime::Runtime {
 
 use model_embedding::cosine_similarity;
 
-// -- Qwen3 Embedding (ANE on macOS arm64, llama.cpp elsewhere) ----------------
+// -- Qwen3 Embedding (ANE on macOS arm64 only) -------------------------------
 
 #[test]
 fn qwen_embedding_load_and_embed() {
@@ -98,5 +98,27 @@ fn qwen_embedding_similarity() {
             sim_code > sim_unrelated,
             "Similar code should have higher similarity ({sim_code:.4}) than unrelated text ({sim_unrelated:.4})"
         );
+    });
+}
+
+/// Real path on the Mac runner: the builtin `qwen-embedding` model resolves
+/// to the ANE backend, loads, and embeds one text.
+#[cfg(target_os = "macos")]
+#[test]
+fn qwen_embedding_embeds_one_text_on_ane() {
+    let rt = rt();
+    rt.block_on(async {
+        let embedder = Embedder::from_model_name("qwen-embedding")
+            .await
+            .expect("Failed to create qwen-embedding embedder");
+        assert_eq!(embedder.backend_name(), "ane");
+        embedder.load().await.expect("Failed to load model");
+
+        let result = embedder
+            .embed_text("fn add(a: i32, b: i32) -> i32 { a + b }")
+            .await
+            .expect("Failed to embed text");
+
+        assert_eq!(result.dimension(), 1024, "Expected 1024-dim embedding");
     });
 }
