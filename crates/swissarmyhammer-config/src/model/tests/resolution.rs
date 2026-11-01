@@ -1,7 +1,7 @@
 //! Which executor a model resolves to.
 //!
-//! The old single-executor form and the new executors list, and how the
-//! platform narrows the choice before the universal entry is taken.
+//! The old single-executor form and the new executors list, and which entry
+//! the selection takes.
 
 use super::*;
 
@@ -103,80 +103,24 @@ fn selected_repo(config: &ModelConfig) -> String {
 }
 
 #[test]
-fn test_platform_selection_prefers_platform_match() {
+fn test_selection_takes_the_first_executor() {
+    let entry = |repo: &str| ExecutorEntry {
+        platform: None,
+        executor: ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
+            source: ModelSource::HuggingFace {
+                repo: repo.to_string(),
+                filename: None,
+                folder: None,
+            },
+            normalize: true,
+            max_sequence_length: None,
+        }),
+    };
     let config = ModelConfig {
-        executors: vec![
-            ExecutorEntry {
-                platform: Some(Platform::current()),
-                executor: ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
-                    source: ModelSource::HuggingFace {
-                        repo: "test/ane".to_string(),
-                        filename: None,
-                        folder: None,
-                    },
-                    normalize: true,
-                    max_sequence_length: None,
-                }),
-            },
-            ExecutorEntry {
-                platform: None,
-                executor: ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
-                    source: ModelSource::HuggingFace {
-                        repo: "test/universal".to_string(),
-                        filename: None,
-                        folder: None,
-                    },
-                    normalize: true,
-                    max_sequence_length: None,
-                }),
-            },
-        ],
+        executors: vec![entry("test/first"), entry("test/second")],
         quiet: false,
     };
-    // First entry matches current platform, so it should be selected
-    assert_eq!(selected_repo(&config), "test/ane");
-}
-
-#[test]
-fn test_platform_selection_falls_back_to_universal() {
-    // Use a platform that doesn't match current
-    let non_matching_platform = if Platform::current() == Platform::MacosArm64 {
-        Platform::LinuxX8664
-    } else {
-        Platform::MacosArm64
-    };
-
-    let config = ModelConfig {
-        executors: vec![
-            ExecutorEntry {
-                platform: Some(non_matching_platform),
-                executor: ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
-                    source: ModelSource::HuggingFace {
-                        repo: "test/ane".to_string(),
-                        filename: None,
-                        folder: None,
-                    },
-                    normalize: true,
-                    max_sequence_length: None,
-                }),
-            },
-            ExecutorEntry {
-                platform: None,
-                executor: ModelExecutorConfig::AneEmbedding(EmbeddingModelConfig {
-                    source: ModelSource::HuggingFace {
-                        repo: "test/universal".to_string(),
-                        filename: None,
-                        folder: None,
-                    },
-                    normalize: true,
-                    max_sequence_length: None,
-                }),
-            },
-        ],
-        quiet: false,
-    };
-    // First entry doesn't match, second is universal fallback
-    assert_eq!(selected_repo(&config), "test/universal");
+    assert_eq!(selected_repo(&config), "test/first");
 }
 
 #[test]
@@ -207,9 +151,4 @@ fn test_ane_embedding_round_trip() {
         deserialized.executors[0].platform,
         Some(Platform::MacosArm64)
     );
-}
-
-#[test]
-fn test_platform_current_is_stable() {
-    assert_eq!(Platform::current(), Platform::current());
 }

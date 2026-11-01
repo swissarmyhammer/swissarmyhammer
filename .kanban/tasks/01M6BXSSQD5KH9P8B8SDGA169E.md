@@ -91,8 +91,24 @@ comments:
     - evidence: one local commit on top of 7a89b57b4. 9 files: 1 deletion (missing_docs.rs), 6 new files in missing_docs/ (mod, dart, go, python, swift, typescript), 2 kanban files for this task. The sha is in the commit log, as the commit holds this comment.
     - next: review
   timestamp: 2026-11-01T17:03:51.464066+00:00
-position_column: doing
-position_ordinal: '8980'
+- actor: claude-code
+  id: 01m6c1qtmkvvst2rrkbbfppz80
+  text: |-
+    ### review — clean
+    - evidence: review sha 3490265fb~1..3490265fb: 0 findings (attempted 14, failed 0, skipped 0). 7 files reviewed. No file hit the prompt cap. Largest file: missing_docs/dart.rs, 38216 bytes (cap 262144). Test count: 50 before, 50 after. Every old fn name is present; only 2 new Swift helper fns added. Prior item (prompt-cap on missing_docs.rs) is checked and fixed.
+    - next: task moves to done.
+  timestamp: 2026-11-01T17:15:28.787154+00:00
+- actor: claude-code
+  id: 01m6c1re8xgyjtk3wy06rbr2jg
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — missing_docs.rs split into six files
+    - test: green — cargo nextest validators, 836 passed
+    - commit: 3490265fb
+    - review: clean — 0 findings, task moved to done
+  timestamp: 2026-11-01T17:15:48.893041+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffde80
 title: Delete tests that assert on skill text or source text
 ---
 Goal: no test asserts on the text of a skill or on source code text. User rule: such tests must go.

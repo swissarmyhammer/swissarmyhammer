@@ -118,69 +118,65 @@ another_unknown: 42
     assert!(!config.quiet);
 }
 
-#[test]
-fn test_model_config_select_executor_no_match() {
-    // Exercises `select_executor()` returning `None` when all entries have
-    // non-matching platform constraints.
-    let config = ModelConfig {
-        executors: vec![ExecutorEntry {
-            // Use a platform that definitely doesn't match current
-            platform: Some(Platform::LinuxX8664),
-            executor: embedding_model_config().executors.remove(0).executor,
-        }],
-        quiet: false,
-    };
-    // On macOS ARM this won't match LinuxX8664
-    // We can't guarantee which platform we're on, so just test the method works
-    let _result = config.select_executor();
+/// A model YAML whose single executor entry names `platform`.
+fn model_yaml_for_platform(platform: &str) -> String {
+    format!(
+        r#"
+executors:
+  - platform: {platform}
+    executor:
+      type: ane-embedding
+      config:
+        source: !HuggingFace
+          repo: test/embed
+"#
+    )
 }
 
 #[test]
-fn platform_wire_names_are_stable() {
-    // `platform:` is written into user model YAML, so these strings are a
-    // contract. Renaming a variant must not change them.
-    let expected = [
-        (Platform::MacosArm64, "macos-arm64"),
-        (Platform::MacosX8664, "macos-x86-64"),
-        (Platform::LinuxX8664, "linux-x86-64"),
-        (Platform::LinuxAarch64, "linux-aarch64"),
-    ];
-    for (platform, wire) in expected {
-        assert_eq!(
-            serde_yaml_ng::to_string(&platform).unwrap().trim(),
-            wire,
-            "wire name for {platform:?}"
-        );
-        assert_eq!(
-            serde_yaml_ng::from_str::<Platform>(wire).unwrap(),
-            platform,
-            "parsing wire name {wire}"
+fn model_config_naming_a_removed_platform_is_rejected() {
+    for removed in ["macos-x86-64", "linux-x86-64", "linux-aarch64"] {
+        let error = serde_yaml_ng::from_str::<ModelConfig>(&model_yaml_for_platform(removed))
+            .expect_err(&format!("`{removed}` must be rejected"))
+            .to_string();
+        assert!(
+            error.contains(removed) && error.contains("macos-arm64"),
+            "error for `{removed}` must name it and the allowed platform: {error}"
         );
     }
+}
+
+#[test]
+fn model_config_naming_apple_silicon_is_accepted() {
+    let config: ModelConfig =
+        serde_yaml_ng::from_str(&model_yaml_for_platform("macos-arm64")).expect("should parse");
+    assert_eq!(config.executors[0].platform, Some(Platform::MacosArm64));
+}
+
+#[test]
+fn platform_wire_name_is_apple_silicon() {
+    assert_eq!(
+        serde_yaml_ng::to_string(&Platform::MacosArm64)
+            .unwrap()
+            .trim(),
+        "macos-arm64"
+    );
 }
 
 #[test]
 fn test_platform_serialization_roundtrip() {
-    // Exercises Platform serialization/deserialization for all variants.
-    let platforms = vec![
-        Platform::MacosArm64,
-        Platform::MacosX8664,
-        Platform::LinuxX8664,
-        Platform::LinuxAarch64,
-    ];
-    for platform in platforms {
-        let json = serde_json::to_string(&platform)
-            .unwrap_or_else(|_| panic!("Failed to serialize {:?}", platform));
-        let deserialized: Platform = serde_json::from_str(&json)
-            .unwrap_or_else(|_| panic!("Failed to deserialize {:?}", platform));
-        assert_eq!(platform, deserialized);
-    }
+    let json = serde_json::to_string(&Platform::MacosArm64).expect("serialize");
+    let deserialized: Platform = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(Platform::MacosArm64, deserialized);
 }
 
 #[test]
-fn test_platform_current() {
-    // Exercises `Platform::current()` — just verifies it doesn't panic.
-    let _current = Platform::current();
+fn config_without_executors_has_no_executor() {
+    let config = ModelConfig {
+        executors: Vec::new(),
+        quiet: false,
+    };
+    assert!(config.executor().is_err());
 }
 
 #[test]

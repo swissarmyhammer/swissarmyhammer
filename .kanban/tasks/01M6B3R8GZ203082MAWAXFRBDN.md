@@ -28,10 +28,26 @@ comments:
     - evidence: f30a2291d refactor(embedding): remove the llama-embedding backend (19 files: Cargo.lock, swissarmyhammer-embedding, swissarmyhammer-config, task files)
     - next: review
   timestamp: 2026-11-01T13:49:35.894090+00:00
+- actor: claude-code
+  id: 01m6bp4g7wrf8xcccamqgk9kc1
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (commit 8b839ba68). counts: findings 0, confirmed 0, refuted 0, attempted 21, failed 0. 16 files reviewed. Not reviewed: .kanban files (ignore rule), Cargo.lock (no validator).
+    - next: task moved to done.
+  timestamp: 2026-11-01T13:52:41.212214+00:00
+- actor: claude-code
+  id: 01m6bp4vb9x93tsknbqh23w8yr
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 17 files
+    - test: green — cargo nextest, 2423 plus 961 passed
+    - commit: 8b839ba68
+    - review: clean — 0 findings, task moved to done
+  timestamp: 2026-11-01T13:52:52.585722+00:00
 depends_on:
 - 01M6B3R61DEYGXGXTTBA0XV2SE
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffd580
 title: Remove llama-embedding backend from swissarmyhammer-embedding
 ---
 Goal: `Embedder` has one backend, ANE.

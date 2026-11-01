@@ -11,8 +11,8 @@
 //!   carries, in front matter and in comments.
 //! - [`manager`] — `ModelManager`: loading a directory, the precedence of
 //!   builtin, user and project models, and finding the configuration file.
-//! - [`resolution`] — which executor a model resolves to, and how the
-//!   platform narrows the choice.
+//! - [`resolution`] — which executor a model resolves to, and which
+//!   entry the selection takes.
 //! - [`paths`] — the checks a configuration path and a directory must pass.
 //! - [`loading`] — reading one model file, and what a directory walk keeps.
 //! - [`config_structure`] — `ensure_config_structure` against each layout it

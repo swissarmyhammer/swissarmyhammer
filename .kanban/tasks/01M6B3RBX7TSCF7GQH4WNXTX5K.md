@@ -24,10 +24,26 @@ comments:
     - evidence: commit subject "refactor(embedding): delete the llama-embedding crate and drop llama-cpp-2". Files: crates/llama-embedding deleted; Cargo.toml, Cargo.lock, benches/embedding_benchmark, crates/model-embedding, crates/model-loader, crates/ane-embedding/src/lib.rs, ARCHITECTURE.md, .config/nextest.toml, .github/workflows/ci.yml, and the task's .kanban files. The sha is in the step reply.
     - next: review
   timestamp: 2026-11-01T14:01:02.469395+00:00
+- actor: claude-code
+  id: 01m6bps5r3ddphvk1asshzv8gc
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (8f242ebee). counts: findings 0, confirmed 0, refuted 0, attempted 7, failed 0. 23 files reviewed. No validator matched .config/nextest.toml, ARCHITECTURE.md, Cargo.lock.
+    - next: task moved to done.
+  timestamp: 2026-11-01T14:03:58.595228+00:00
+- actor: claude-code
+  id: 01m6bpsp9vteggsegjvhvz0v7g
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — crate deleted, workspace deps removed
+    - test: green — cargo nextest workspace, 13373 passed
+    - commit: 8f242ebee
+    - review: clean — 0 findings, task moved to done
+  timestamp: 2026-11-01T14:04:15.547453+00:00
 depends_on:
 - 01M6B3R8GZ203082MAWAXFRBDN
-position_column: doing
-position_ordinal: '8480'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffd680
 title: Delete llama-embedding crate and llama-cpp workspace dependencies
 ---
 Goal: the Cargo build no longer compiles llama.cpp.

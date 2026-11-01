@@ -25,8 +25,24 @@ comments:
     - evidence: one local commit, subject "ci(release): run every release job on the self-hosted runner". It holds .github/workflows/release.yml, the 2 kanban files of this task, and the 2 kanban files of task 01M6C36YC1HHGMDA7GFVXQDPJ9. Find the sha with `git log -1 --format=%h --grep='run every release job'`, because a commit cannot hold its own sha. Not pushed.
     - next: review
   timestamp: 2026-11-01T17:58:36.282493+00:00
-position_column: doing
-position_ordinal: '80'
+- actor: claude-code
+  id: 01m6c487056da32eck36f1ps4s
+  text: |-
+    ### review — clean
+    - evidence: review sha a1b42ef0d~1..a1b42ef0d. 0 findings, 0 confirmed, 0 refuted. 1 file reviewed. 4 .kanban files skipped by .reviewignore.
+    - next: task moved to done. Real check after push: run the release workflow with the dry-run tag input.
+  timestamp: 2026-11-01T17:59:22.885905+00:00
+- actor: claude-code
+  id: 01m6c48krj22e5bcmtw3zs1e40
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — release.yml, 1 file
+    - test: green — no Rust changed, nextest skipped with diff evidence; actionlint 0 errors
+    - commit: a1b42ef0d
+    - review: clean — 0 findings, task moved to done
+  timestamp: 2026-11-01T17:59:35.954179+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffe480
 title: Run every release job on the self-hosted runner
 ---
 Goal: no job in this repo runs on a GitHub-hosted runner. This matches the other Foundation packages and the shared `swissarmyhammer/workflows` workflows, which use `self-hosted`.

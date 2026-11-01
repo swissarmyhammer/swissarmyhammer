@@ -35,8 +35,10 @@
 //!
 //! Embedding models are declared in YAML files and loaded by name. Each file
 //! names an executor. The only executor type is `ane-embedding` (Apple Neural
-//! Engine). A file may list several entries, and the first one compatible with
-//! the running platform wins. Any other `type`, such as the removed
+//! Engine). A file may list several entries, and the first one wins. The
+//! optional `platform:` key of an entry accepts only `macos-arm64`, because
+//! sah runs on Apple Silicon alone. Any other `platform`, such as
+//! `linux-x86-64`, and any other `type`, such as the removed
 //! `llama-embedding`, fails to parse.
 //!
 //! ```yaml
@@ -204,56 +206,16 @@ impl From<Option<String>> for DefaultModel {
     }
 }
 
-/// Runtime platform for executor selection
+/// The one platform sah runs on: macOS on Apple Silicon.
+///
+/// A model YAML may name it in a `platform:` key. Any other value, such as
+/// `macos-x86-64` or `linux-x86-64`, fails to parse and the error names
+/// `macos-arm64` as the allowed value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Platform {
     /// macOS ARM64 (Apple Silicon) platform.
     MacosArm64,
-    /// macOS x86-64 (Intel) platform.
-    ///
-    /// The wire name is pinned because `kebab-case` renaming derives it from
-    /// the variant spelling, and user model YAML already carries the value.
-    #[serde(rename = "macos-x86-64")]
-    MacosX8664,
-    /// Linux x86-64 platform.
-    ///
-    /// The wire name is pinned for the same reason as [`Platform::MacosX8664`].
-    #[serde(rename = "linux-x86-64")]
-    LinuxX8664,
-    /// Linux ARM64 (aarch64) platform.
-    LinuxAarch64,
-}
-
-impl Platform {
-    /// Detect the current compile-time platform
-    pub fn current() -> Self {
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        {
-            Platform::MacosArm64
-        }
-        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-        {
-            Platform::MacosX8664
-        }
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        {
-            Platform::LinuxX8664
-        }
-        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-        {
-            Platform::LinuxAarch64
-        }
-        #[cfg(not(any(
-            all(target_os = "macos", target_arch = "aarch64"),
-            all(target_os = "macos", target_arch = "x86_64"),
-            all(target_os = "linux", target_arch = "x86_64"),
-            all(target_os = "linux", target_arch = "aarch64"),
-        )))]
-        {
-            Platform::LinuxX8664
-        } // fallback
-    }
 }
 
 /// Embedding model executor type enumeration
@@ -267,7 +229,7 @@ pub enum ModelExecutorType {
     AneEmbedding,
 }
 
-/// An executor entry with optional platform constraint for multi-executor configs.
+/// An executor entry with an optional platform marker for multi-executor configs.
 ///
 /// YAML format:
 /// ```yaml
@@ -280,7 +242,8 @@ pub enum ModelExecutorType {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutorEntry {
-    /// Optional platform constraint. If None, this executor is a universal fallback.
+    /// Optional platform marker. It accepts only [`Platform::MacosArm64`], so a
+    /// config that names another platform fails to parse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<Platform>,
     /// The executor configuration.
@@ -290,11 +253,10 @@ pub struct ExecutorEntry {
 /// Complete embedding model configuration with executor-specific settings
 ///
 /// Supports both the singular `executor:` format and the `executors:` list
-/// format with platform-based selection. The first compatible executor in the
-/// list is selected at runtime.
+/// format. The first executor in the list is selected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ModelConfig {
-    /// Ordered list of executor entries; first compatible match wins.
+    /// Ordered list of executor entries; the first one wins.
     pub executors: Vec<ExecutorEntry>,
     /// Global quiet mode
     pub quiet: bool,
@@ -416,27 +378,22 @@ pub enum ModelSource {
 }
 
 impl ModelConfig {
-    /// Select the first executor compatible with the current platform.
+    /// Select the first executor in the list.
     ///
-    /// Returns `None` if no executor matches (e.g., all entries have
-    /// platform constraints that don't match the current platform).
+    /// Returns `None` if the list is empty. Every platform marker is
+    /// [`Platform::MacosArm64`], the only platform sah runs on, so no entry
+    /// is skipped.
     pub fn select_executor(&self) -> Option<&ModelExecutorConfig> {
-        let current = Platform::current();
-        self.executors
-            .iter()
-            .find(|e| e.platform.is_none() || e.platform == Some(current))
-            .map(|e| &e.executor)
+        self.executors.first().map(|e| &e.executor)
     }
 
-    /// Convenience accessor: returns the selected executor for the current platform.
+    /// Convenience accessor: returns the selected executor.
     ///
-    /// Backward-compatible replacement for the old `config.executor` field.
-    /// Returns `Err(ModelError::ConfigError)` if no executor matches — see
+    /// Returns `Err(ModelError::ConfigError)` if the list is empty — see
     /// `select_executor()` for the `Option`-returning alternative.
     pub fn executor(&self) -> Result<&ModelExecutorConfig, ModelError> {
-        self.select_executor().ok_or_else(|| {
-            ModelError::ConfigError("no compatible executor for current platform".to_string())
-        })
+        self.select_executor()
+            .ok_or_else(|| ModelError::ConfigError("model config lists no executors".to_string()))
     }
 
     /// Get the executor type from the configuration

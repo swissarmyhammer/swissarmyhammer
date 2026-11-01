@@ -61,8 +61,24 @@ comments:
     - evidence: 034feea83 test(embedding): share one helper across the integration tests. Files: crates/swissarmyhammer-embedding/tests/integration_test.rs, .kanban/tasks/01M6B3R61DEYGXGXTTBA0XV2SE.jsonl, .kanban/tasks/01M6B3R61DEYGXGXTTBA0XV2SE.md
     - next: review
   timestamp: 2026-11-01T13:38:14.383447+00:00
-position_column: doing
-position_ordinal: '8480'
+- actor: claude-code
+  id: 01m6bndvzx69tgg16x4k50gkr1
+  text: |-
+    ### review — clean
+    - evidence: review sha HEAD~1..HEAD (f8a333ee0): 0 findings, 0 confirmed, 0 refuted. Prior item 1 fixed: duplicate test removed, shared helper load_qwen_embedder in crates/swissarmyhammer-embedding/tests/integration_test.rs, ANE assertion cfg-gated inside qwen_embedding_load_and_embed. Prior item 2 fixed: const QWEN3_EMBEDDING_DIM at line 25, no bare 1024 left.
+    - next: none. Task moved to done.
+  timestamp: 2026-11-01T13:40:19.581660+00:00
+- actor: claude-code
+  id: 01m6bne9cqh540dx79qf0eezp2
+  text: |-
+    ### finish iteration 2 — clean
+    - implement: changed — 1 file
+    - test: green — cargo nextest, 28 passed plus 3 integration passed
+    - commit: f8a333ee0
+    - review: clean — 0 findings, task moved to done
+  timestamp: 2026-11-01T13:40:33.303772+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffd480
 title: Make Qwen3 on ANE the only builtin embedding model
 ---
 Goal: no builtin embedding model needs llama.cpp.
