@@ -675,6 +675,12 @@ mod tests {
     const TEST_SLEEP_MINIMAL: Duration = Duration::from_millis(1);
     /// Short worker sleep used where a slightly longer cadence is needed.
     const TEST_SLEEP_SHORT: Duration = Duration::from_millis(5);
+    /// Wait for the worker loop to run one pass over the fixture.
+    const TEST_WAIT_ONE_PASS: Duration = Duration::from_millis(20);
+    /// Wait for the worker loop to enter its idle or client-unavailable sleep.
+    const TEST_WAIT_ENTER_SLEEP: Duration = Duration::from_millis(30);
+    /// Wait for the worker loop to recover from a poisoned DB mutex.
+    const TEST_WAIT_POISON_RECOVERY: Duration = Duration::from_millis(50);
     /// Synthetic file size written into `indexed_files` test rows.
     const TEST_FILE_SIZE: u32 = 1024;
 
@@ -1004,7 +1010,7 @@ mod tests {
             )
         });
 
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(TEST_WAIT_ONE_PASS);
         shutdown_clone.store(true, Ordering::Relaxed);
 
         let result = handle.join().expect("Worker thread should not panic");
@@ -1046,7 +1052,7 @@ mod tests {
         });
 
         // Give the loop time to enter the client-unavailable sleep at least once.
-        thread::sleep(Duration::from_millis(30));
+        thread::sleep(TEST_WAIT_ENTER_SLEEP);
         shutdown_clone.store(true, Ordering::Relaxed);
 
         let result = handle.join().expect("Worker thread should not panic");
@@ -1087,7 +1093,7 @@ mod tests {
             )
         });
 
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(TEST_WAIT_ONE_PASS);
         shutdown_clone.store(true, Ordering::Relaxed);
 
         let result = handle.join().expect("Worker thread should not panic");
@@ -1159,7 +1165,7 @@ mod tests {
             shutdown,
         );
 
-        thread::sleep(Duration::from_millis(30));
+        thread::sleep(TEST_WAIT_ENTER_SLEEP);
         shutdown_clone.store(true, Ordering::Relaxed);
 
         handle.join().expect("Worker thread should not panic");
@@ -1199,7 +1205,7 @@ mod tests {
             )
         });
 
-        thread::sleep(Duration::from_millis(30));
+        thread::sleep(TEST_WAIT_ENTER_SLEEP);
         shutdown_clone.store(true, Ordering::Relaxed);
         let _ = handle.join().expect("Worker thread should not panic");
 
@@ -2048,7 +2054,7 @@ mod tests {
         });
 
         // Give the loop time to hit the poisoned mutex and recover
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(TEST_WAIT_POISON_RECOVERY);
         shutdown_clone.store(true, Ordering::Relaxed);
 
         let result = handle
@@ -2109,7 +2115,7 @@ mod tests {
         });
 
         // Give the loop time to recover from the poisoned DB mutex and process
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(TEST_WAIT_POISON_RECOVERY);
         shutdown_clone.store(true, Ordering::Relaxed);
 
         let result = handle
