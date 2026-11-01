@@ -15,6 +15,29 @@ comments:
     - note: a stray untracked nested copy ./swissarmyhammer/ exists inside the repo root (not touched).
     - next: /review
   timestamp: 2026-10-31T23:49:59.839941+00:00
+- actor: claude-code
+  id: 01m6a69syst4efpe2pbafd1dd9
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD; 2 findings, 2 confirmed, 0 refuted; session_root_resolution.rs:94, session_root_resolution.rs:98 (both duplication/duplication)
+    - next: implementer fixes both findings, then review again
+  timestamp: 2026-10-31T23:56:43.353196+00:00
+- actor: claude-code
+  id: 01m6a6a9frh6n30shpctkfbzga
+  text: |-
+    ### finish iteration 1 — findings
+    - implement: changed — 74 files, files tool removed
+    - test: green — cargo nextest, 13547 passed
+    - commit: ccec07894
+    - review: findings — crates/swissarmyhammer-tools/tests/integration/session_root_resolution.rs:94, crates/swissarmyhammer-tools/tests/integration/session_root_resolution.rs:98
+  timestamp: 2026-10-31T23:56:59.256125+00:00
+- actor: claude-code
+  id: 01m6a6crvtvh9fd25ayv99myr4
+  text: |-
+    ### implement — changed
+    - evidence: session_root_resolution.rs now has write_diff_fixture(dir) and git_diff_tool_call(session_root, left, right). Both tests use them. No other duplication remains in the file. cargo fmt, clippy -D warnings on swissarmyhammer-tools --tests, and nextest session_root_resolution (2 passed) are clean.
+    - next: /review
+  timestamp: 2026-10-31T23:58:20.538520+00:00
 depends_on:
 - 01M69XPBKCWV1Q2JAP5MBCW1EK
 position_column: doing
@@ -34,3 +57,10 @@ Work:
 
 Depends on the card that stops the native deny.
 Done when: `cargo build --workspace` and `cargo nextest run --workspace` pass and no `files` tool is in the tool list. #remove-files
+
+## Review Findings (2026-10-31 18:53)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 58 file(s) reviewed, 16 not reviewed.
+
+- [x] `crates/swissarmyhammer-tools/tests/integration/session_root_resolution.rs:94` `duplication/duplication` — The fixture writes in the new test copy the left.rs and right.rs writes from the first test. Only the target directory differs, so the two fixtures can drift apart. Extract a shared fixture helper, for example write_diff_fixture(dir), that writes left.rs and right.rs. Call it from both tests with the directory each test needs.
+- [x] `crates/swissarmyhammer-tools/tests/integration/session_root_resolution.rs:98` `duplication/duplication` — The new test git_diff_does_not_fall_back_to_process_cwd repeats the setup of git_diff_relative_paths_resolve_against_session_root. Both build a git registry, build a context rooted at a session dir, look up the git tool, and build the same JSON argument map with op, left and right. If one copy changes, the other can drift. Extract a helper, for example git_diff_tool_call(context, left, right), that performs the registry lookup, the argument build and the execute call. Each test then passes its own session dir and expectation to it.

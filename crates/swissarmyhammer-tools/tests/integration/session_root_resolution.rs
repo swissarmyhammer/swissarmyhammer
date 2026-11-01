@@ -44,35 +44,49 @@ fn response_text(result: &rmcp::model::CallToolResult) -> String {
     }
 }
 
+/// Write the `left.rs` and `right.rs` pair that the diff tests compare.
+fn write_diff_fixture(dir: &std::path::Path) {
+    std::fs::write(dir.join("left.rs"), "fn old_name() {}\n").unwrap();
+    std::fs::write(dir.join("right.rs"), "fn new_name() {}\n").unwrap();
+}
+
+/// Run the `git` tool `get diff` op on relative `left`/`right` paths, with
+/// the tool context rooted at `session_root`.
+async fn git_diff_tool_call(
+    session_root: &std::path::Path,
+    left: &str,
+    right: &str,
+) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+    let registry = git_registry();
+    let context = context_rooted_at(session_root);
+    let tool = registry.get_tool("git").unwrap();
+
+    let arguments = json!({
+        "op": "get diff",
+        "left": left,
+        "right": right,
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    tool.execute(arguments, &context).await
+}
+
 /// Relative `left`/`right` paths resolve against the session working
 /// directory, not the process CWD.
 #[tokio::test]
 #[serial_test::serial(cwd)]
 async fn git_diff_relative_paths_resolve_against_session_root() {
     let repo = tempfile::TempDir::new().unwrap();
-    std::fs::write(repo.path().join("left.rs"), "fn old_name() {}\n").unwrap();
-    std::fs::write(repo.path().join("right.rs"), "fn new_name() {}\n").unwrap();
+    write_diff_fixture(repo.path());
 
     // Process CWD points at an unrelated dir that holds neither file.
     let elsewhere = tempfile::TempDir::new().unwrap();
     let _cwd_guard = CurrentDirGuard::new(elsewhere.path())
         .expect("Failed to pin process CWD away from the repo");
 
-    let registry = git_registry();
-    let context = context_rooted_at(repo.path());
-    let tool = registry.get_tool("git").unwrap();
-
-    let arguments = json!({
-        "op": "get diff",
-        "left": "left.rs",
-        "right": "right.rs",
-    })
-    .as_object()
-    .unwrap()
-    .clone();
-
-    let result = tool
-        .execute(arguments, &context)
+    let result = git_diff_tool_call(repo.path(), "left.rs", "right.rs")
         .await
         .expect("diff with relative paths should resolve against the session root");
     let text = response_text(&result);
@@ -91,24 +105,10 @@ async fn git_diff_does_not_fall_back_to_process_cwd() {
 
     // The files exist only under the process CWD.
     let process_cwd = tempfile::TempDir::new().unwrap();
-    std::fs::write(process_cwd.path().join("left.rs"), "fn old_name() {}\n").unwrap();
-    std::fs::write(process_cwd.path().join("right.rs"), "fn new_name() {}\n").unwrap();
+    write_diff_fixture(process_cwd.path());
     let _cwd_guard = CurrentDirGuard::new(process_cwd.path()).expect("Failed to pin process CWD");
 
-    let registry = git_registry();
-    let context = context_rooted_at(session.path());
-    let tool = registry.get_tool("git").unwrap();
-
-    let arguments = json!({
-        "op": "get diff",
-        "left": "left.rs",
-        "right": "right.rs",
-    })
-    .as_object()
-    .unwrap()
-    .clone();
-
-    tool.execute(arguments, &context)
+    git_diff_tool_call(session.path(), "left.rs", "right.rs")
         .await
         .expect_err("a file that exists only under the process CWD must not be read");
 }
