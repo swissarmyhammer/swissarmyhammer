@@ -56,7 +56,7 @@ detailed section, cross-referenced below.
 - **`swissarmyhammer-tools`** — its MCP server bootstrap
   (`crates/swissarmyhammer-tools/src/mcp/server.rs`) gains the
   `expose_rust_module` calls that hand the existing in-process tools
-  (`files`, `kanban`, `code_context`, `git`, `shell`, …) to the plugin
+  (`kanban`, `code_context`, `git`, `shell`, …) to the plugin
   registry. The tools keep their `McpTool` / `ToolRegistry` home in
   this crate; only the exposure glue is new. (See *Rust — in-process
   Rust module*.)
@@ -94,8 +94,8 @@ existing operation infrastructure rather than forking it.
      `tools/call("bar", args)`.
    - **Operation tool:** one tool bundling many `(verb, noun)`
      operations behind an `op` argument — the pattern
-     `swissarmyhammer-operations` already generates for `files`,
-     `kanban`, `code_context`, etc. `this.foo.bar.<noun>.<verb>(args)`
+     `swissarmyhammer-operations` already generates for `kanban`,
+     `code_context`, etc. `this.foo.bar.<noun>.<verb>(args)`
      → `tools/call("bar", { op: "<verb> <noun>", ...args })`. `op` is
      an ordinary argument key; the tool's own handler reads it. The
      SDK builds the `op` string from the path purely as ergonomic
@@ -183,7 +183,7 @@ arguments map straight through.
 Most tools the host ships are **operation tools**: a single MCP tool
 that bundles many `(verb, noun)` operations behind an `op` argument.
 This is the shape `swissarmyhammer-operations` already produces for
-`files`, `kanban`, `code_context`, `git`, `shell`, and the rest — one
+`kanban`, `code_context`, `git`, `shell`, and the rest — one
 tool name, an `op` string like `"add task"`, and the operation's
 parameters flat alongside it. The plugin platform inherits that shape;
 it does not define a new one.
@@ -269,7 +269,7 @@ The wire call is an ordinary `tools/call`: the tool name, and an
 arguments map whose `op` key selects the operation. Every other
 parameter is a flat sibling of `op` — there is no separate verb field
 and no noun in the tool name. This is how operation tools are invoked
-today (`FilesTool::execute` reads `arguments["op"]` and matches it);
+today (`KanbanTool::execute` reads `arguments["op"]` and matches it);
 the plugin platform does not change it.
 
 ```text
@@ -427,7 +427,7 @@ plugins (or the host itself) can register them under any name they
 choose.
 
 The host modules worth exposing are the existing in-process MCP tools —
-`files`, `kanban`, `code_context`, `git`, `shell`, and the rest — which
+`kanban`, `code_context`, `git`, `shell`, and the rest — which
 all live in **`swissarmyhammer-tools`**. Wiring them up is therefore a
 change to `swissarmyhammer-tools`: its MCP server bootstrap
 (`crates/swissarmyhammer-tools/src/mcp/server.rs`) gains the
@@ -491,7 +491,6 @@ its existing tools to the plugin platform:
 
 ```rust
 // swissarmyhammer-tools MCP bootstrap — new wiring
-host.expose_rust_module("files",        FilesTool::new());
 host.expose_rust_module("kanban",       KanbanTool::new(state.clone()));
 host.expose_rust_module("code_context", CodeContextTool::new(db.clone()));
 // … one per tool already in swissarmyhammer-tools …
@@ -759,7 +758,7 @@ collects its operations as `&[&dyn Operation]` and calls
 of `oneOf`/`anyOf` for Claude API compatibility. Its `tools/call`
 handler is an `op` match (read `arguments["op"]`, strip it, deserialize
 the rest into the matching operation struct, run its `Execute` impl) —
-exactly how `FilesTool::execute` works today.
+exactly how `KanbanTool::execute` works today.
 
 **What this design adds.** Nothing above produces the noun → verb →
 parameters `_meta` tree that *Service Consumption* depends on. Two
@@ -1396,34 +1395,33 @@ The plugin host should expose a `PluginHost::for_tests()` constructor
 that takes explicit roots (project plugins dir, optional user/builtin
 roots) rather than reading global config.
 
-### Reference integration test: the `files` MCP server
+### Reference integration test: the `kanban` MCP server
 
-The `files` MCP server (`swissarmyhammer-tools/src/mcp/tools/files`)
+The `kanban` MCP server (`swissarmyhammer-tools/src/mcp/tools/kanban`)
 is the right target for a first integration test because it is real
-(in-process rmcp), it has observable state (the filesystem), and
-verification reduces to "did the files land on disk where we expect."
+(in-process rmcp), it has observable state (the board on disk), and
+verification reduces to "did the tasks land on disk where we expect."
 
 In prose:
 
 1. The test creates a `TempDir` and runs from it (the host inherits
    the cwd). It builds a `PluginHost::for_tests` pointing at
    `<tempdir>/plugins/` as the project plugin root.
-2. The host wraps the real `FilesTool` in an `InProcessServer` and
+2. The host wraps the real `KanbanTool` in an `InProcessServer` and
    registers it under a known name. No mocks.
 3. The test writes a small probe plugin to `<tempdir>/plugins/probe/`
    — a real `plugin.json` and a real entry `.ts` file. The plugin's
-   `load()` does three things, using only the registered files
-   server: write a probe file in cwd, read it back, then write the
-   readback content into a second probe file. (Reporting through a
-   second written file means the test never needs a special host-side
-   reporter hook — observation is the filesystem, the same as for any
-   other test.)
+   `load()` does three things, using only the registered kanban
+   server: add a probe task, read it back, then add a second task
+   with the readback title. (Reporting through a second written task
+   means the test never needs a special host-side reporter hook —
+   observation is the board on disk, the same as for any other test.)
 4. The test triggers discovery. The host transpiles the plugin,
    creates a fresh isolate, and runs `load()`.
-5. The test asserts both probe files exist in the temp dir with their
-   expected contents. The first file proves the `op` dispatch reached
-   the real `files` tool handler. The second file proves the return
-   value crossed back through the dispatcher into the isolate. If any
+5. The test asserts both probe tasks exist on the board in the temp
+   dir with their expected titles. The first task proves the `op`
+   dispatch reached the real `kanban` tool handler. The second task
+   proves the return value crossed back through the dispatcher into the isolate. If any
    stage of the pipeline is broken, at least one assertion fails.
 
 This test exercises the whole pipeline — manifest load, TS transpile,
@@ -1439,7 +1437,7 @@ server, observe an effect that only happens if the platform works.
 
 | Capability                       | What the test proves                                       |
 | -------------------------------- | ---------------------------------------------------------- |
-| **In-process server dispatch**   | A plugin call into the real `files` operation tool writes a real file (the case above) |
+| **In-process server dispatch**   | A plugin call into the real `kanban` operation tool writes a real task to the board (the case above) |
 | **CLI subprocess server**        | Plugin registers `{ cli: [...] }`; host spawns it; calls go through stdio and return |
 | **URL server**                   | Plugin registers `{ url: ... }`; host calls it; mock HTTP endpoint records the request shape |
 | **Operation `_meta` round-trip** | An operation tool's `io.swissarmyhammer/operations` `_meta` tree is read by the SDK; `this.<server>.<tool>.<noun>.<verb>({...})` reaches the tool as `tools/call("<tool>", { op: "<verb> <noun>", ... })` |
@@ -1474,7 +1472,7 @@ server, observe an effect that only happens if the platform works.
 
 Plugin platform integration tests live in
 `swissarmyhammer-plugin/tests/integration/`, with one file per
-capability. The `files` reference test is `files_dispatch_e2e.rs`.
+capability. The `kanban` reference test is `kanban_dispatch_e2e.rs`.
 The naming convention matches the existing `*_e2e.rs` pattern already
 used by the code-context and skill suites.
 

@@ -4,7 +4,7 @@
 
 The `diagnostics` tool is the shipped path. Ask for diagnostics and you get them.
 
-Inline-on-edit — folding a report into the `files` write/edit result — shipped and
+Inline-on-edit — folding a report into the result of a file write or edit tool — shipped and
 was taken out again. It made every edit wait for the LSP: a blast-radius lookup,
 then a serial sync and pull for the edited file and each dependent, then a settle
 window. The edit itself was already done; the model paid seconds to learn nothing
@@ -88,7 +88,7 @@ followers becoming socket clients instead of constructing their own `LspDaemon`.
 subagents connect to the leader's socket like any other follower.
 
 The leader's watcher keeps the shared view consistent across processes — a follower's
-direct `files edit` write is caught by the watcher, which issues `didChange`, so
+direct file write is caught by the watcher, which issues `didChange`, so
 followers need not sync the analyzer themselves. One watcher per workdir.
 
 **Handoff:** if the leader exits, `try_promote` elects a follower, which re-spawns and
@@ -150,7 +150,7 @@ out of turn):
 
 - **Own the loop (llama-agent).** Forwarded as an ACP `session/update` to the editor
   gutter.
-- **Any host, edit via your tool.** The model calls `diagnostics` when it wants a
+- **Any host.** The model calls `diagnostics` when it wants a
   report. The edit itself carries none, so nothing waits on the LSP.
 - **Foreign host, native edit.** The ceiling. Your tool never runs; the watcher still
   detects and can emit `notifications/message`, but that's host/human-facing and
@@ -159,23 +159,24 @@ out of turn):
 Soft levers for the last case: make the pull habitual via tool description; expose
 diagnostics as a subscribable MCP resource (`notifications/resources/updated`).
 
-## Closing the write surface (shorting out native edits)
+## Closing the write surface (shorting out native edits) — withdrawn
 
-The hard lever that promotes the native-edit case to model-facing: force every
-mutation through the instrumented tools. In Claude Code, permission `deny` on
-`Edit` / `Write` / `MultiEdit` plus a `PreToolUse` hook that redirects to `files
-edit`. This is host config the user installs (an MCP server can't disable a host's
-built-in tools); swissarmyhammer ships the fragment. Hook-capable hosts only.
+This section is the record of an idea that no longer applies. It needed an
+instrumented write tool, and that tool is gone. No swissarmyhammer tool writes files
+now, so there is nothing to route native edits to.
 
-Editing can't be closed without shell already closed — an open `Bash` writes files
-via `cat >`/`sed -i`, bypassing the tool and the diagnostics. So shell shorting is the
-prerequisite; the goal is a **closed write surface**: no uninstrumented path by which
-a file can change. The watcher remains the async backstop for what still leaks
-(subprocesses, formatters, `git checkout`).
+The idea was to force every mutation through an instrumented tool. In Claude Code,
+that means permission `deny` on `Edit` / `Write` / `MultiEdit` plus a `PreToolUse`
+hook that redirects to the instrumented tool. This is host config the user installs
+(an MCP server can't disable a host's built-in tools). Hook-capable hosts only.
 
-Tradeoff: native `Edit` is fast and the model is tuned to it; routing through MCP adds
-latency and makes you own edit reliability. Worth it only while `files edit` stays at
-least as reliable as the tool it displaces.
+Closing edits also needs shell closed — an open `Bash` writes files via
+`cat >`/`sed -i`, bypassing any tool. The goal was a **closed write surface**: no
+uninstrumented path by which a file can change.
+
+What remains is the watcher. It is the async backstop for every file change, from a
+native edit, a subprocess, a formatter, or `git checkout`. The model calls
+`diagnostics` to get a report.
 
 ## Delivery surfaces
 
@@ -208,8 +209,7 @@ warnings, short settle, capped, all detected languages. No persistence. The
 
 `swissarmyhammer-diagnostics` — settle/debounce, report types, config — on the shared
 client in `swissarmyhammer-lsp` (owns no client of its own). Its consumers are the
-`diagnostics` tool and the watcher. Layout and dependency directions are in the
-file-edit-tools doc.
+`diagnostics` tool and the watcher.
 
 The tool ships in `swissarmyhammer-tools`; watcher-push and ACP forwarding are
 llama-agent extras.
