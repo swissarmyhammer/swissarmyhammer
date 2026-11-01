@@ -5,6 +5,18 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+/// Absolute working directory that the session tests use.
+const TMP_DIR: &str = "/tmp";
+
+/// Message of the expect call on session creation.
+const ABSOLUTE_DIR_EXPECTATION: &str = "test working directory must be absolute";
+
+/// Message text that the session tests use.
+const HELLO_TEXT: &str = "hello";
+
+/// Tool call id that the tool call request test uses.
+const TEST_CALL_ID: &str = "call_123";
+
 // ============================================================================
 // Conversation manager type tests
 // ============================================================================
@@ -49,15 +61,15 @@ fn test_tool_execution_status_eq() {
 fn test_tool_call_request_serialization() {
     use claude_agent::conversation_manager::ToolCallRequest;
     let req = ToolCallRequest {
-        id: "call_123".to_string(),
+        id: TEST_CALL_ID.to_string(),
         name: "fs_read".to_string(),
         arguments: json!({"path": "/tmp/test.txt"}),
     };
     let json = serde_json::to_string(&req).unwrap();
-    assert!(json.contains("call_123"));
+    assert!(json.contains(TEST_CALL_ID));
     assert!(json.contains("fs_read"));
     let deserialized: ToolCallRequest = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized.id, "call_123");
+    assert_eq!(deserialized.id, TEST_CALL_ID);
 }
 
 // ============================================================================
@@ -169,10 +181,10 @@ fn test_session_id_from_ulid() {
 #[test]
 fn test_session_new() {
     let id = claude_agent::session::SessionId::new();
-    let session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"))
-        .expect("test working directory must be absolute");
+    let session = claude_agent::session::Session::new(id, PathBuf::from(TMP_DIR))
+        .expect(ABSOLUTE_DIR_EXPECTATION);
     assert_eq!(session.id, id);
-    assert_eq!(session.cwd, PathBuf::from("/tmp"));
+    assert_eq!(session.cwd, PathBuf::from(TMP_DIR));
     assert!(session.context.is_empty());
     assert_eq!(session.turn_request_count, 0);
     assert_eq!(session.turn_token_count, 0);
@@ -182,11 +194,11 @@ fn test_session_new() {
 #[test]
 fn test_session_add_message() {
     let id = claude_agent::session::SessionId::new();
-    let mut session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"))
-        .expect("test working directory must be absolute");
+    let mut session = claude_agent::session::Session::new(id, PathBuf::from(TMP_DIR))
+        .expect(ABSOLUTE_DIR_EXPECTATION);
     let msg = claude_agent::session::Message::new(
         claude_agent::session::MessageRole::User,
-        "hello".to_string(),
+        HELLO_TEXT.to_string(),
     );
     session.add_message(msg);
     assert_eq!(session.context.len(), 1);
@@ -195,8 +207,8 @@ fn test_session_add_message() {
 #[test]
 fn test_session_turn_counters() {
     let id = claude_agent::session::SessionId::new();
-    let mut session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"))
-        .expect("test working directory must be absolute");
+    let mut session = claude_agent::session::Session::new(id, PathBuf::from(TMP_DIR))
+        .expect(ABSOLUTE_DIR_EXPECTATION);
 
     assert_eq!(session.turn_request_count(), 0);
     assert_eq!(session.turn_token_count(), 0);
@@ -223,8 +235,8 @@ fn test_session_turn_counters() {
 #[test]
 fn test_session_available_commands() {
     let id = claude_agent::session::SessionId::new();
-    let mut session = claude_agent::session::Session::new(id, PathBuf::from("/tmp"))
-        .expect("test working directory must be absolute");
+    let mut session = claude_agent::session::Session::new(id, PathBuf::from(TMP_DIR))
+        .expect(ABSOLUTE_DIR_EXPECTATION);
 
     let cmd1 = agent_client_protocol::schema::AvailableCommand::new("test", "A test command");
 
@@ -239,7 +251,7 @@ fn test_session_available_commands() {
 #[test]
 fn test_message_from_update() {
     let before = SystemTime::now();
-    let update = SessionUpdate::AgentMessageChunk(text_chunk("hello"));
+    let update = SessionUpdate::AgentMessageChunk(text_chunk(HELLO_TEXT));
     let msg = claude_agent::session::Message::from_update(update.clone());
     assert_recorded(&msg, &update, before);
 }
@@ -249,9 +261,9 @@ fn test_message_new_user() {
     let before = SystemTime::now();
     let msg = claude_agent::session::Message::new(
         claude_agent::session::MessageRole::User,
-        "hello".to_string(),
+        HELLO_TEXT.to_string(),
     );
-    let expected = SessionUpdate::UserMessageChunk(text_chunk("hello"));
+    let expected = SessionUpdate::UserMessageChunk(text_chunk(HELLO_TEXT));
     assert_recorded(&msg, &expected, before);
 }
 
@@ -290,7 +302,7 @@ fn test_session_manager_new_isolated() {
 #[test]
 fn test_session_manager_create_and_get_session() {
     let mgr = claude_agent::session::SessionManager::new();
-    let id = mgr.create_session(PathBuf::from("/tmp"), None).unwrap();
+    let id = mgr.create_session(PathBuf::from(TMP_DIR), None).unwrap();
     let session = mgr.get_session(&id).unwrap();
     assert!(session.is_some());
     let session = session.unwrap();
@@ -300,8 +312,8 @@ fn test_session_manager_create_and_get_session() {
 #[test]
 fn test_session_manager_list_sessions() {
     let mgr = claude_agent::session::SessionManager::new();
-    mgr.create_session(PathBuf::from("/tmp"), None).unwrap();
-    mgr.create_session(PathBuf::from("/tmp"), None).unwrap();
+    mgr.create_session(PathBuf::from(TMP_DIR), None).unwrap();
+    mgr.create_session(PathBuf::from(TMP_DIR), None).unwrap();
     let sessions = mgr.list_sessions().unwrap();
     assert_eq!(sessions.len(), 2);
 }
@@ -309,7 +321,7 @@ fn test_session_manager_list_sessions() {
 #[test]
 fn test_session_manager_remove_session() {
     let mgr = claude_agent::session::SessionManager::new();
-    let id = mgr.create_session(PathBuf::from("/tmp"), None).unwrap();
+    let id = mgr.create_session(PathBuf::from(TMP_DIR), None).unwrap();
     assert!(mgr.get_session(&id).unwrap().is_some());
     let _ = mgr.remove_session(&id);
     assert!(mgr.get_session(&id).unwrap().is_none());

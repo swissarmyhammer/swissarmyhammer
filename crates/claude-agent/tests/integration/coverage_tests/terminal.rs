@@ -9,6 +9,30 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+/// Session id in ULID form that the create params tests use.
+const TEST_SESSION_ULID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+/// Wire name of the session id field.
+const SESSION_ID_KEY: &str = "sessionId";
+
+/// Wire name of the terminal id field.
+const TERMINAL_ID_KEY: &str = "terminalId";
+
+/// Wire name of the exit code field.
+const EXIT_CODE_KEY: &str = "exitCode";
+
+/// Signal name that the exit status tests use.
+const SIGKILL_SIGNAL: &str = "SIGKILL";
+
+/// Text that the output tests write and read back.
+const HELLO_WORLD: &str = "hello world";
+
+/// Command that the create params tests use.
+const ECHO_COMMAND: &str = "echo";
+
+/// Directory that the terminal tests use as a working directory.
+const TMP_DIR: &str = "/tmp";
+
 /// Output limit of the session that `create_test_terminal_session` builds.
 const TEST_OUTPUT_BYTE_LIMIT: u64 = 100;
 
@@ -24,8 +48,10 @@ const TEST_SESSION_ID: &str = "sess123";
 /// Terminal id used by the output and release params tests.
 const TEST_TERMINAL_ID: &str = "term_456";
 
-/// Terminal id used by the create response test.
-const TEST_CREATED_TERMINAL_ID: &str = "term_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+/// Terminal id that the create response test uses, built from the shared ULID.
+fn test_created_terminal_id() -> String {
+    format!("term_{TEST_SESSION_ULID}")
+}
 
 // ============================================================================
 // TerminalManager tests
@@ -129,12 +155,12 @@ async fn test_terminal_manager_create_terminal_with_working_dir() {
         .terminal(true)
         .fs(agent_client_protocol::schema::FileSystemCapabilities::new());
     manager.set_client_capabilities(caps).await;
-    let result = manager.create_terminal(Some("/tmp".to_string())).await;
+    let result = manager.create_terminal(Some(TMP_DIR.to_string())).await;
     assert!(result.is_ok());
     let terminal_id = result.unwrap();
     let terminals = manager.terminals.read().await;
     let session = terminals.get(&terminal_id).unwrap();
-    assert_eq!(session.working_dir, std::path::PathBuf::from("/tmp"));
+    assert_eq!(session.working_dir, std::path::PathBuf::from(TMP_DIR));
 }
 
 #[tokio::test]
@@ -182,8 +208,8 @@ async fn test_terminal_manager_execute_command_no_capability() {
 async fn test_terminal_manager_prepare_environment_empty() {
     let manager = TerminalManager::new();
     let env = manager.prepare_environment(vec![]).unwrap();
-    // Should contain at least system env vars
-    assert!(!env.is_empty());
+    // With no custom variables, the result is exactly the system environment
+    assert_eq!(env, std::env::vars().collect::<HashMap<_, _>>());
 }
 
 #[tokio::test]
@@ -248,7 +274,7 @@ async fn test_terminal_manager_change_directory_not_found() {
 async fn test_terminal_manager_change_directory_terminal_not_found() {
     let manager = TerminalManager::new();
     let result = manager
-        .change_directory("nonexistent_terminal", "/tmp")
+        .change_directory("nonexistent_terminal", TMP_DIR)
         .await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("not found"));
@@ -272,7 +298,7 @@ async fn test_terminal_manager_cleanup_session_terminals_empty() {
 fn create_test_terminal_session() -> TerminalSession {
     TerminalSession {
         process: None,
-        working_dir: PathBuf::from("/tmp"),
+        working_dir: PathBuf::from(TMP_DIR),
         environment: HashMap::new(),
         command: None,
         args: Vec::new(),
@@ -290,9 +316,9 @@ fn create_test_terminal_session() -> TerminalSession {
 #[tokio::test]
 async fn test_terminal_session_add_output_basic() {
     let session = create_test_terminal_session();
-    session.add_output(b"hello world").await;
+    session.add_output(HELLO_WORLD.as_bytes()).await;
     let output = session.get_output_string().await;
-    assert_eq!(output, "hello world");
+    assert_eq!(output, HELLO_WORLD);
     assert!(!session.is_output_truncated().await);
 }
 
@@ -313,7 +339,7 @@ async fn test_terminal_session_add_output_multiple() {
     session.add_output(b"hello ").await;
     session.add_output(b"world").await;
     let output = session.get_output_string().await;
-    assert_eq!(output, "hello world");
+    assert_eq!(output, HELLO_WORLD);
 }
 
 #[tokio::test]
@@ -389,7 +415,7 @@ async fn test_terminal_session_utf8_truncation_preserves_boundaries() {
     // a session with a small byte limit and multibyte characters
     let session = TerminalSession {
         process: None,
-        working_dir: PathBuf::from("/tmp"),
+        working_dir: PathBuf::from(TMP_DIR),
         environment: HashMap::new(),
         command: None,
         args: Vec::new(),
@@ -410,7 +436,8 @@ async fn test_terminal_session_utf8_truncation_preserves_boundaries() {
 
     // The output should still be valid UTF-8 after truncation
     let output = session.get_output_string().await;
-    assert!(!output.is_empty());
+    // Limit 10 drops the first 3 bytes of the 12 written: "h" and the two bytes of "é"
+    assert_eq!(output, "llowörld");
     // Verify the string is valid UTF-8 (get_output_string uses from_utf8_lossy)
     assert!(!output.contains('\u{FFFD}')); // No replacement characters
 }
@@ -453,24 +480,24 @@ async fn test_terminal_session_wait_for_exit_no_process() {
 #[test]
 fn test_terminal_create_params_serialization() {
     let params = TerminalCreateParams {
-        session_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
-        command: "echo".to_string(),
+        session_id: TEST_SESSION_ULID.to_string(),
+        command: ECHO_COMMAND.to_string(),
         args: Some(vec!["hello".to_string()]),
         env: Some(vec![terminal_manager::EnvVariable {
             name: "FOO".to_string(),
             value: "bar".to_string(),
         }]),
-        cwd: Some("/tmp".to_string()),
+        cwd: Some(TMP_DIR.to_string()),
         output_byte_limit: Some(CREATE_PARAMS_OUTPUT_BYTE_LIMIT),
     };
     let json = serde_json::to_string(&params).unwrap();
-    assert!(json.contains("sessionId"));
-    assert!(json.contains("echo"));
+    assert!(json.contains(SESSION_ID_KEY));
+    assert!(json.contains(ECHO_COMMAND));
     assert!(json.contains("outputByteLimit"));
 
     let deserialized: TerminalCreateParams = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized.session_id, "01ARZ3NDEKTSV4RRFFQ69G5FAV");
-    assert_eq!(deserialized.command, "echo");
+    assert_eq!(deserialized.session_id, TEST_SESSION_ULID);
+    assert_eq!(deserialized.command, ECHO_COMMAND);
     assert_eq!(
         deserialized.output_byte_limit,
         Some(CREATE_PARAMS_OUTPUT_BYTE_LIMIT)
@@ -479,8 +506,8 @@ fn test_terminal_create_params_serialization() {
 
 #[test]
 fn test_terminal_create_params_minimal() {
-    let json = r#"{"sessionId":"01ARZ3NDEKTSV4RRFFQ69G5FAV","command":"bash"}"#;
-    let params: TerminalCreateParams = serde_json::from_str(json).unwrap();
+    let json = serde_json::json!({(SESSION_ID_KEY): TEST_SESSION_ULID, "command": "bash"});
+    let params: TerminalCreateParams = serde_json::from_value(json).unwrap();
     assert_eq!(params.command, "bash");
     assert!(params.args.is_none());
     assert!(params.env.is_none());
@@ -495,8 +522,8 @@ fn test_terminal_output_params_serialization() {
         terminal_id: TEST_TERMINAL_ID.to_string(),
     };
     let json = serde_json::to_string(&params).unwrap();
-    assert!(json.contains("sessionId"));
-    assert!(json.contains("terminalId"));
+    assert!(json.contains(SESSION_ID_KEY));
+    assert!(json.contains(TERMINAL_ID_KEY));
 
     let deserialized: TerminalOutputParams = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized.session_id, TEST_SESSION_ID);
@@ -510,8 +537,8 @@ fn test_terminal_release_params_serialization() {
         terminal_id: TEST_TERMINAL_ID.to_string(),
     };
     let json = serde_json::to_string(&params).unwrap();
-    assert!(json.contains("sessionId"));
-    assert!(json.contains("terminalId"));
+    assert!(json.contains(SESSION_ID_KEY));
+    assert!(json.contains(TERMINAL_ID_KEY));
 
     let deserialized: TerminalReleaseParams = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized.session_id, TEST_SESSION_ID);
@@ -521,23 +548,23 @@ fn test_terminal_release_params_serialization() {
 #[test]
 fn test_terminal_create_response_serialization() {
     let response = TerminalCreateResponse {
-        terminal_id: TEST_CREATED_TERMINAL_ID.to_string(),
+        terminal_id: test_created_terminal_id(),
     };
     let json = serde_json::to_string(&response).unwrap();
-    assert!(json.contains("terminalId"));
-    assert!(json.contains(TEST_CREATED_TERMINAL_ID));
+    assert!(json.contains(TERMINAL_ID_KEY));
+    assert!(json.contains(&test_created_terminal_id()));
 
     let wire: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(
         wire,
-        serde_json::json!({"terminalId": TEST_CREATED_TERMINAL_ID})
+        serde_json::json!({(TERMINAL_ID_KEY): test_created_terminal_id()})
     );
 }
 
 #[test]
 fn test_terminal_output_response_serialization() {
     let response = TerminalOutputResponse {
-        output: "hello world\n".to_string(),
+        output: format!("{HELLO_WORLD}\n"),
         truncated: false,
         exit_status: Some(ExitStatus {
             exit_code: Some(0),
@@ -545,9 +572,9 @@ fn test_terminal_output_response_serialization() {
         }),
     };
     let json = serde_json::to_string(&response).unwrap();
-    assert!(json.contains("hello world"));
+    assert!(json.contains(HELLO_WORLD));
     assert!(json.contains("exitStatus"));
-    assert!(json.contains("exitCode"));
+    assert!(json.contains(EXIT_CODE_KEY));
 }
 
 #[test]
@@ -567,15 +594,15 @@ fn test_terminal_output_response_no_exit_status() {
 fn test_exit_status_serialization() {
     let status = ExitStatus {
         exit_code: Some(1),
-        signal: Some("SIGKILL".to_string()),
+        signal: Some(SIGKILL_SIGNAL.to_string()),
     };
     let json = serde_json::to_string(&status).unwrap();
-    assert!(json.contains("exitCode"));
-    assert!(json.contains("SIGKILL"));
+    assert!(json.contains(EXIT_CODE_KEY));
+    assert!(json.contains(SIGKILL_SIGNAL));
 
     let wire: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(
         wire,
-        serde_json::json!({"exitCode": 1, "signal": "SIGKILL"})
+        serde_json::json!({(EXIT_CODE_KEY): 1, "signal": SIGKILL_SIGNAL})
     );
 }

@@ -41,6 +41,34 @@ comments:
     - Open after round 2 (old tests, moved verbatim; the reviewer finds new items in old code each pass): mcp.rs duplicate test of ProtocolError code; terminal.rs (shared capability helper, "/tmp" constant, weak asserts, repeated wire literals); session.rs (shared Session helper, duplicate parse tests, token constants). Some ask to delete tests, which conflicts with "keep every test". Needs a person to decide.
     - Wrong finding: tool_classification.rs "make conversation_manager.rs call classify_tool" — conversation_manager.rs has no kind classification code.
   timestamp: 2026-11-01T01:48:27.797733+00:00
+- actor: claude-code
+  id: 01m6aeckbmnv7z3mfywesrwkww
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD (iteration 2): 3 findings (agent_misc.rs:145, terminal.rs:456, terminal.rs:482). Prior 2 items fixed and checked.
+    - next: implementer fixes the 3 open items. Keep every test.
+  timestamp: 2026-11-01T02:18:03.508463+00:00
+- actor: claude-code
+  id: 01m6aed472g4trennter5pr3fr
+  text: |-
+    ### finish iteration 2 — findings
+    - implement: changed — search code title arm, coverage_tests split into 10 modules
+    - test: green — cargo nextest, 13552 passed
+    - commit: c643da892
+    - review: findings — crates/claude-agent/tests/integration/coverage_tests/agent_misc.rs:145, crates/claude-agent/tests/integration/coverage_tests/terminal.rs:456, crates/claude-agent/tests/integration/coverage_tests/terminal.rs:482
+  timestamp: 2026-11-01T02:18:20.770711+00:00
+- actor: claude-code
+  id: 01m6aejqwmm3k11hx7hcrv7c04
+  text: |-
+    ### implement — changed
+    - Fixed the 3 open findings and the same cause in all of coverage_tests/.
+    - agent_misc.rs: version test now compares VERSION with env!("CARGO_PKG_VERSION").
+    - terminal.rs: one TEST_SESSION_ULID constant; the created terminal id and the minimal JSON build from it. The env test compares with the system env. The UTF-8 test asserts the exact output "llowörld".
+    - plan.rs: id tests parse the id as a ULID instead of a non-empty check.
+    - Repeated literals (3 or more) named as constants in config.rs, mcp.rs, plan.rs, session.rs, terminal.rs, tool_classification.rs, tool_types.rs, agent_misc.rs. No test removed.
+    - checks: cargo fmt -p claude-agent, cargo clippy -p claude-agent --all-targets -D warnings clean, cargo nextest -p claude-agent 1100 passed.
+    - next: review
+  timestamp: 2026-11-01T02:21:24.756311+00:00
 depends_on:
 - 01M69XPBKCWV1Q2JAP5MBCW1EK
 position_column: doing
@@ -77,3 +105,14 @@ Done when: no skill, agent, validator or doc names the removed tool, and `cargo 
 - [x] `crates/claude-agent/tests/integration/coverage_tests.rs:1` `review-engine/prompt-cap` — This file exceeds the review prompt cap — 341291 rendered bytes against the 262144-byte per-file cap — so these validators could not review it: duplication. Split the file into smaller modules that fit the review prompt cap.
 
 Hand-check (markdown and wording, 2026-10-31): no changed file names `read file`, `write file`, `edit file`, `glob files`, `grep files`, `mcp__sah__files` or `files tool`. No skill, agent, validator or doc text denies Bash, Edit, Read or Write. `builtin/agents/double-check/AGENT.md` allow list is `read grep glob mcp__sah__code_context mcp__sah__git`. Hashline remnants (`Cargo.toml`, `crates/swissarmyhammer-hashline`, `crates/swissarmyhammer-edit-match/src/lib.rs`) belong to card ^6n3a6ky and are not a finding here.
+
+## Review Findings (2026-10-31 20:52)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 12 file(s) reviewed, 2 not reviewed.
+
+> 2 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 2 file(s)
+
+- [x] `crates/claude-agent/tests/integration/coverage_tests/agent_misc.rs:145` `test-integrity/no-test-cheating` — test_version_constant asserts only that the VERSION constant is non-empty. The assertion would still pass for any non-empty string, so the test proves nothing about the crate's version. This is a trivial assertion that reads as coverage. Assert the exact expected value, or compare VERSION with the package version (for example `env!("CARGO_PKG_VERSION")`), so a wrong or stale value fails the test.
+- [x] `crates/claude-agent/tests/integration/coverage_tests/terminal.rs:456` `code-hygiene/magic-numbers` — The session ULID literal "01ARZ3NDEKTSV4RRFFQ69G5FAV" is written out at three sites in this file (lines 456, 472 and 482). Repeating it means a change to the test session id must be made in three places, and the file already names its other repeated test ids as constants (TEST_SESSION_ID, TEST_TERMINAL_ID). Add a file-level constant, for example `const TEST_SESSION_ULID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";`, and use it at all three sites. For the raw JSON at line 482, build the string with `format!` or `serde_json::json!` so the constant is the only copy.
+- [x] `crates/claude-agent/tests/integration/coverage_tests/terminal.rs:482` `code-hygiene/magic-numbers` — The session ULID literal "01ARZ3NDEKTSV4RRFFQ69G5FAV" is written a third time, inside a raw JSON string. The copy is hidden in the literal, so a change to the constant would silently leave this input behind. Build the JSON with `format!` or `serde_json::json!` from the shared constant, so the constant is the only copy of the value.

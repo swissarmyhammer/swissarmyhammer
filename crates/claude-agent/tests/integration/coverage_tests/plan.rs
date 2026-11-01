@@ -2,6 +2,15 @@
 
 use claude_agent::plan::*;
 
+/// Content of the plain entries that the status and notes tests build.
+const TASK_CONTENT: &str = "task";
+
+/// Content of the entries that the ACP conversion tests build.
+const NAMED_TASK_CONTENT: &str = "Test task";
+
+/// Content of the entries that the lookup tests build.
+const SHORT_TASK_CONTENT: &str = "Test";
+
 // ============================================================================
 // Plan tests
 // ============================================================================
@@ -63,12 +72,12 @@ fn test_plan_entry_new() {
     assert!(entry.notes.is_none());
     assert!(entry.created_at.is_some());
     assert!(entry.updated_at.is_some());
-    assert!(!entry.id.is_empty());
+    assert!(ulid::Ulid::from_string(&entry.id).is_ok());
 }
 
 #[test]
 fn test_plan_entry_update_status() {
-    let mut entry = PlanEntry::new("task".to_string(), Priority::Medium);
+    let mut entry = PlanEntry::new(TASK_CONTENT.to_string(), Priority::Medium);
     assert_eq!(entry.status, PlanEntryStatus::Pending);
     assert!(!entry.is_in_progress());
     assert!(!entry.is_complete());
@@ -84,28 +93,28 @@ fn test_plan_entry_update_status() {
 
 #[test]
 fn test_plan_entry_failed_is_complete() {
-    let mut entry = PlanEntry::new("task".to_string(), Priority::Low);
+    let mut entry = PlanEntry::new(TASK_CONTENT.to_string(), Priority::Low);
     entry.update_status(PlanEntryStatus::Failed);
     assert!(entry.is_complete());
 }
 
 #[test]
 fn test_plan_entry_cancelled_is_complete() {
-    let mut entry = PlanEntry::new("task".to_string(), Priority::Low);
+    let mut entry = PlanEntry::new(TASK_CONTENT.to_string(), Priority::Low);
     entry.update_status(PlanEntryStatus::Cancelled);
     assert!(entry.is_complete());
 }
 
 #[test]
 fn test_plan_entry_set_notes() {
-    let mut entry = PlanEntry::new("task".to_string(), Priority::Medium);
+    let mut entry = PlanEntry::new(TASK_CONTENT.to_string(), Priority::Medium);
     entry.set_notes("Important note".to_string());
     assert_eq!(entry.notes, Some("Important note".to_string()));
 }
 
 #[test]
 fn test_plan_entry_same_status_no_update() {
-    let mut entry = PlanEntry::new("task".to_string(), Priority::Medium);
+    let mut entry = PlanEntry::new(TASK_CONTENT.to_string(), Priority::Medium);
     let initial_updated = entry.updated_at;
     // Updating with same status should not change updated_at
     entry.update_status(PlanEntryStatus::Pending);
@@ -114,14 +123,14 @@ fn test_plan_entry_same_status_no_update() {
 
 #[test]
 fn test_plan_entry_to_acp_entry() {
-    let entry = PlanEntry::new("Test task".to_string(), Priority::High);
+    let entry = PlanEntry::new(NAMED_TASK_CONTENT.to_string(), Priority::High);
     let acp = entry.to_acp_entry();
-    assert_eq!(acp.content, "Test task");
+    assert_eq!(acp.content, NAMED_TASK_CONTENT);
 }
 
 #[test]
 fn test_plan_entry_to_acp_entry_with_notes() {
-    let mut entry = PlanEntry::new("Test task".to_string(), Priority::High);
+    let mut entry = PlanEntry::new(NAMED_TASK_CONTENT.to_string(), Priority::High);
     entry.set_notes("some notes".to_string());
     let acp = entry.to_acp_entry();
     assert!(acp.meta.is_some());
@@ -135,7 +144,7 @@ fn test_agent_plan_new() {
     let plan = AgentPlan::new();
     assert!(plan.entries.is_empty());
     assert!(plan.metadata.is_none());
-    assert!(!plan.id.is_empty());
+    assert!(ulid::Ulid::from_string(&plan.id).is_ok());
 }
 
 #[test]
@@ -149,13 +158,13 @@ fn test_agent_plan_add_entry() {
 #[test]
 fn test_agent_plan_get_entry() {
     let mut plan = AgentPlan::new();
-    let entry = PlanEntry::new("Test".to_string(), Priority::High);
+    let entry = PlanEntry::new(SHORT_TASK_CONTENT.to_string(), Priority::High);
     let entry_id = entry.id.clone();
     plan.add_entry(entry);
 
     let found = plan.get_entry(&entry_id);
     assert!(found.is_some());
-    assert_eq!(found.unwrap().content, "Test");
+    assert_eq!(found.unwrap().content, SHORT_TASK_CONTENT);
 
     assert!(plan.get_entry("nonexistent").is_none());
 }
@@ -163,7 +172,7 @@ fn test_agent_plan_get_entry() {
 #[test]
 fn test_agent_plan_update_entry_status() {
     let mut plan = AgentPlan::new();
-    let entry = PlanEntry::new("Test".to_string(), Priority::High);
+    let entry = PlanEntry::new(SHORT_TASK_CONTENT.to_string(), Priority::High);
     let entry_id = entry.id.clone();
     plan.add_entry(entry);
 
@@ -183,7 +192,7 @@ fn test_agent_plan_is_complete() {
     let mut plan = AgentPlan::new();
     assert!(!plan.is_complete()); // Empty plan is NOT complete (requires entries)
 
-    let entry = PlanEntry::new("task".to_string(), Priority::High);
+    let entry = PlanEntry::new(TASK_CONTENT.to_string(), Priority::High);
     let id = entry.id.clone();
     plan.add_entry(entry);
     assert!(!plan.is_complete());

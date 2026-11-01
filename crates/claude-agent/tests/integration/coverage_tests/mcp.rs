@@ -7,6 +7,9 @@ use claude_agent::error::*;
 use claude_agent::mcp::*;
 use serde_json::json;
 
+/// Name of the optional prompt argument in the argument tests.
+const FORMAT_ARGUMENT_NAME: &str = "format";
+
 // ============================================================================
 // McpServerManager tests
 // ============================================================================
@@ -66,11 +69,11 @@ fn test_mcp_prompt_argument_creation() {
 #[test]
 fn test_mcp_prompt_argument_optional() {
     let arg = McpPromptArgument {
-        name: "format".to_string(),
+        name: FORMAT_ARGUMENT_NAME.to_string(),
         description: None,
         required: false,
     };
-    assert_eq!(arg.name, "format");
+    assert_eq!(arg.name, FORMAT_ARGUMENT_NAME);
     assert!(arg.description.is_none());
     assert!(!arg.required);
 }
@@ -87,7 +90,7 @@ fn test_mcp_prompt_creation() {
                 required: true,
             },
             McpPromptArgument {
-                name: "format".to_string(),
+                name: FORMAT_ARGUMENT_NAME.to_string(),
                 description: None,
                 required: false,
             },

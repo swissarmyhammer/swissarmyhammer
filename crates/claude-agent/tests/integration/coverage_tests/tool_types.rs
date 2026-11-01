@@ -3,6 +3,28 @@
 use claude_agent::tool_types::*;
 use serde_json::json;
 
+/// Tool call id that the report tests use.
+const TEST_CALL_ID: &str = "tc_1";
+
+/// Title that the report tests use.
+const TEST_TITLE: &str = "Test";
+
+/// Tool name that the report tests use.
+const READ_TOOL_NAME: &str = "Read";
+
+/// Title that the ACP conversion test uses.
+const READING_FILE_TITLE: &str = "Reading file";
+
+/// Path that the location and raw input tests use.
+const TEST_FILE_PATH: &str = "/tmp/test.txt";
+
+/// Path that the location tests use for a source file.
+const SOURCE_FILE_PATH: &str = "/test/file.rs";
+/// Build a tool input that carries only a path.
+fn path_input(path: &str) -> serde_json::Value {
+    json!({"path": path})
+}
+
 // ============================================================================
 // ToolType tests (additional coverage)
 // ============================================================================
@@ -111,13 +133,13 @@ fn test_tool_call_status_to_acp_all_variants() {
 #[test]
 fn test_tool_call_report_new() {
     let report = ToolCallReport::new(
-        "tc_1".to_string(),
-        "Reading file".to_string(),
+        TEST_CALL_ID.to_string(),
+        READING_FILE_TITLE.to_string(),
         ToolKind::Read,
-        "Read".to_string(),
+        READ_TOOL_NAME.to_string(),
     );
-    assert_eq!(report.tool_call_id, "tc_1");
-    assert_eq!(report.title, "Reading file");
+    assert_eq!(report.tool_call_id, TEST_CALL_ID);
+    assert_eq!(report.title, READING_FILE_TITLE);
     assert_eq!(report.kind, ToolKind::Read);
     assert_eq!(report.status, ToolCallStatus::Pending);
     assert!(report.content.is_empty());
@@ -129,10 +151,10 @@ fn test_tool_call_report_new() {
 #[test]
 fn test_tool_call_report_update_status() {
     let mut report = ToolCallReport::new(
-        "tc_1".to_string(),
-        "Test".to_string(),
+        TEST_CALL_ID.to_string(),
+        TEST_TITLE.to_string(),
         ToolKind::Read,
-        "Read".to_string(),
+        READ_TOOL_NAME.to_string(),
     );
     report.update_status(ToolCallStatus::InProgress);
     assert_eq!(report.status, ToolCallStatus::InProgress);
@@ -143,13 +165,13 @@ fn test_tool_call_report_update_status() {
 #[test]
 fn test_tool_call_report_add_location() {
     let mut report = ToolCallReport::new(
-        "tc_1".to_string(),
-        "Test".to_string(),
+        TEST_CALL_ID.to_string(),
+        TEST_TITLE.to_string(),
         ToolKind::Read,
-        "Read".to_string(),
+        READ_TOOL_NAME.to_string(),
     );
     report.add_location(ToolCallLocation {
-        path: "/tmp/test.txt".to_string(),
+        path: TEST_FILE_PATH.to_string(),
         line: Some(10),
     });
     assert_eq!(report.locations.len(), 1);
@@ -158,24 +180,24 @@ fn test_tool_call_report_add_location() {
 #[test]
 fn test_tool_call_report_set_raw_io() {
     let mut report = ToolCallReport::new(
-        "tc_1".to_string(),
-        "Test".to_string(),
+        TEST_CALL_ID.to_string(),
+        TEST_TITLE.to_string(),
         ToolKind::Read,
-        "Read".to_string(),
+        READ_TOOL_NAME.to_string(),
     );
-    report.set_raw_input(json!({"path": "/tmp/test.txt"}));
+    report.set_raw_input(path_input(TEST_FILE_PATH));
     report.set_raw_output(json!("file contents here"));
-    assert_eq!(report.raw_input, Some(json!({"path": "/tmp/test.txt"})));
+    assert_eq!(report.raw_input, Some(path_input(TEST_FILE_PATH)));
     assert_eq!(report.raw_output, Some(json!("file contents here")));
 }
 
 #[test]
 fn test_tool_call_report_mark_state_sent() {
     let mut report = ToolCallReport::new(
-        "tc_1".to_string(),
-        "Test".to_string(),
+        TEST_CALL_ID.to_string(),
+        TEST_TITLE.to_string(),
         ToolKind::Read,
-        "Read".to_string(),
+        READ_TOOL_NAME.to_string(),
     );
     report.mark_state_sent();
     // Nothing changed since the mark, so a partial update carries no fields
@@ -192,34 +214,34 @@ fn test_tool_call_report_mark_state_sent() {
 #[test]
 fn test_tool_call_report_to_acp_tool_call() {
     let mut report = ToolCallReport::new(
-        "tc_1".to_string(),
-        "Reading file".to_string(),
+        TEST_CALL_ID.to_string(),
+        READING_FILE_TITLE.to_string(),
         ToolKind::Read,
-        "Read".to_string(),
+        READ_TOOL_NAME.to_string(),
     );
-    report.set_raw_input(json!({"path": "/test"}));
+    report.set_raw_input(path_input("/test"));
     report.add_location(ToolCallLocation {
         path: "/test".to_string(),
         line: None,
     });
 
     let acp_call = report.to_acp_tool_call();
-    assert_eq!(acp_call.tool_call_id.to_string(), "tc_1");
-    assert_eq!(acp_call.title, "Reading file");
+    assert_eq!(acp_call.tool_call_id.to_string(), TEST_CALL_ID);
+    assert_eq!(acp_call.title, READING_FILE_TITLE);
 }
 
 #[test]
 fn test_tool_call_report_to_acp_update_first() {
     let report = ToolCallReport::new(
-        "tc_1".to_string(),
-        "Test".to_string(),
+        TEST_CALL_ID.to_string(),
+        TEST_TITLE.to_string(),
         ToolKind::Read,
-        "Read".to_string(),
+        READ_TOOL_NAME.to_string(),
     );
     // First update (no previous state) - should include all fields
     let update = report.to_acp_tool_call_update();
-    assert_eq!(update.tool_call_id.to_string(), "tc_1");
-    assert_eq!(update.fields.title.as_deref(), Some("Test"));
+    assert_eq!(update.tool_call_id.to_string(), TEST_CALL_ID);
+    assert_eq!(update.fields.title.as_deref(), Some(TEST_TITLE));
     assert!(update.fields.status.is_some());
     assert!(update.fields.kind.is_some());
     assert!(update.fields.content.is_some());
@@ -229,17 +251,17 @@ fn test_tool_call_report_to_acp_update_first() {
 #[test]
 fn test_tool_call_report_partial_update_after_state_sent() {
     let mut report = ToolCallReport::new(
-        "tc_1".to_string(),
-        "Test".to_string(),
+        TEST_CALL_ID.to_string(),
+        TEST_TITLE.to_string(),
         ToolKind::Read,
-        "Read".to_string(),
+        READ_TOOL_NAME.to_string(),
     );
     report.mark_state_sent();
 
     // Change status
     report.update_status(ToolCallStatus::InProgress);
     let update = report.to_acp_tool_call_update();
-    assert_eq!(update.tool_call_id.to_string(), "tc_1");
+    assert_eq!(update.tool_call_id.to_string(), TEST_CALL_ID);
     assert_eq!(
         update.fields.status,
         Some(ToolCallStatus::InProgress.to_acp_status())
@@ -255,13 +277,13 @@ fn test_tool_call_report_partial_update_after_state_sent() {
 #[test]
 fn test_tool_call_report_update_with_context() {
     let mut report = ToolCallReport::new(
-        "tc_1".to_string(),
-        "Test".to_string(),
+        TEST_CALL_ID.to_string(),
+        TEST_TITLE.to_string(),
         ToolKind::Read,
-        "Read".to_string(),
+        READ_TOOL_NAME.to_string(),
     );
     report.add_location(ToolCallLocation {
-        path: "/tmp/test.txt".to_string(),
+        path: TEST_FILE_PATH.to_string(),
         line: None,
     });
     report.add_content(ToolCallContent::Content {
@@ -273,7 +295,7 @@ fn test_tool_call_report_update_with_context() {
     report.update_status(ToolCallStatus::Completed);
     // With context includes content/locations even if unchanged
     let update = report.to_acp_tool_call_update_with_context(true);
-    assert_eq!(update.tool_call_id.to_string(), "tc_1");
+    assert_eq!(update.tool_call_id.to_string(), TEST_CALL_ID);
     assert_eq!(update.fields.content.map(|c| c.len()), Some(1));
     assert_eq!(update.fields.locations.map(|l| l.len()), Some(1));
 }
@@ -281,7 +303,7 @@ fn test_tool_call_report_update_with_context() {
 #[test]
 fn test_tool_call_location_to_acp_with_line() {
     let loc = ToolCallLocation {
-        path: "/test/file.rs".to_string(),
+        path: SOURCE_FILE_PATH.to_string(),
         line: Some(42),
     };
     let acp = loc.to_acp_location();
@@ -291,7 +313,7 @@ fn test_tool_call_location_to_acp_with_line() {
 #[test]
 fn test_tool_call_location_to_acp_without_line() {
     let loc = ToolCallLocation {
-        path: "/test/file.rs".to_string(),
+        path: SOURCE_FILE_PATH.to_string(),
         line: None,
     };
     let acp = loc.to_acp_location();
@@ -301,7 +323,7 @@ fn test_tool_call_location_to_acp_without_line() {
 #[test]
 fn test_tool_call_content_diff_to_acp() {
     let content = ToolCallContent::Diff {
-        path: "/test/file.rs".to_string(),
+        path: SOURCE_FILE_PATH.to_string(),
         old_text: Some("old".to_string()),
         new_text: "new".to_string(),
     };

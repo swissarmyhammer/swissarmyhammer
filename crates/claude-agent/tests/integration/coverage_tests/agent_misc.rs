@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
+/// Tool name that the file location tests pass.
+const GLOB_TOOL_NAME: &str = "glob";
+
 // ============================================================================
 // File location extraction tests (additional coverage)
 // ============================================================================
@@ -15,7 +18,7 @@ fn test_extract_file_locations_glob_patterns() {
     let args = json!({
         "patterns": ["src/**/*.rs", "tests/**/*.rs"]
     });
-    let locations = ToolCallReport::extract_file_locations("glob", &args);
+    let locations = ToolCallReport::extract_file_locations(GLOB_TOOL_NAME, &args);
     assert_eq!(locations.len(), 2);
 }
 
@@ -37,7 +40,7 @@ fn test_extract_file_locations_string_not_path() {
 fn test_extract_file_locations_with_glob_wildcards() {
     // Test glob patterns are recognized as file paths via extract_file_locations
     let args = json!({"path": "*.rs"});
-    let locations = ToolCallReport::extract_file_locations("glob", &args);
+    let locations = ToolCallReport::extract_file_locations(GLOB_TOOL_NAME, &args);
     assert_eq!(locations.len(), 1);
     assert!(locations[0].path.contains("*.rs"));
 }
@@ -45,7 +48,7 @@ fn test_extract_file_locations_with_glob_wildcards() {
 #[test]
 fn test_extract_file_locations_with_bracket_glob() {
     let args = json!({"path": "test[0-9].txt"});
-    let locations = ToolCallReport::extract_file_locations("glob", &args);
+    let locations = ToolCallReport::extract_file_locations(GLOB_TOOL_NAME, &args);
     assert_eq!(locations.len(), 1);
 }
 
@@ -142,5 +145,5 @@ fn test_prompt_request_creation() {
 
 #[test]
 fn test_version_constant() {
-    assert!(!claude_agent::VERSION.is_empty());
+    assert_eq!(claude_agent::VERSION, env!("CARGO_PKG_VERSION"));
 }
