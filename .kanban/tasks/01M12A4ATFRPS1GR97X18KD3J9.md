@@ -66,8 +66,8 @@ comments:
 
     So this card has NOT passed the review gate. Its code is green and committed, and the gate is the only thing outstanding.
   timestamp: 2026-08-29T01:00:12.661854+00:00
-position_column: review
-position_ordinal: '8180'
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffe680
 title: 'kanban CLI: --tags joins an array into one hyphen-joined tag'
 ---
 The `kanban` CLI does not split a `--tags` array. It joins the whole argument
