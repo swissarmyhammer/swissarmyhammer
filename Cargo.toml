@@ -63,8 +63,6 @@ members = [
     "crates/swissarmyhammer-sem",
     "apps/code-context-cli",
     "crates/swissarmyhammer-cli-completions",
-    "crates/swissarmyhammer-hashline",
-    "crates/swissarmyhammer-edit-match",
 ]
 resolver = "2"
 
@@ -280,7 +278,6 @@ swissarmyhammer-common = { path = "crates/swissarmyhammer-common" }
 swissarmyhammer-config = { path = "crates/swissarmyhammer-config" }
 swissarmyhammer-diagnostics = { path = "crates/swissarmyhammer-diagnostics" }
 swissarmyhammer-directory = { path = "crates/swissarmyhammer-directory" }
-swissarmyhammer-edit-match = { path = "crates/swissarmyhammer-edit-match" }
 swissarmyhammer-doctor = { path = "crates/swissarmyhammer-doctor" }
 swissarmyhammer-embedding = { path = "crates/swissarmyhammer-embedding" }
 swissarmyhammer-entity = { path = "crates/swissarmyhammer-entity" }
@@ -289,7 +286,6 @@ swissarmyhammer-fields = { path = "crates/swissarmyhammer-fields" }
 swissarmyhammer-filter-expr = { path = "crates/swissarmyhammer-filter-expr" }
 swissarmyhammer-focus = { path = "crates/swissarmyhammer-focus" }
 swissarmyhammer-git = { path = "crates/swissarmyhammer-git" }
-swissarmyhammer-hashline = { path = "crates/swissarmyhammer-hashline" }
 swissarmyhammer-js = { path = "crates/swissarmyhammer-js" }
 swissarmyhammer-kanban = { path = "crates/swissarmyhammer-kanban" }
 swissarmyhammer-mcp-proxy = { path = "crates/swissarmyhammer-mcp-proxy" }

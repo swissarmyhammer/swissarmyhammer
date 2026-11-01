@@ -6523,13 +6523,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "swissarmyhammer-edit-match"
-version = "0.20.3"
-dependencies = [
- "proptest",
-]
-
-[[package]]
 name = "swissarmyhammer-embedding"
 version = "0.20.3"
 dependencies = [
@@ -6642,14 +6635,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "swissarmyhammer-hashline"
-version = "0.20.3"
-dependencies = [
- "crc32fast",
- "proptest",
 ]
 
 [[package]]
