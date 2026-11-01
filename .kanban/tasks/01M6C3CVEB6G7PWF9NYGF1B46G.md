@@ -23,8 +23,24 @@ comments:
     - evidence: one local commit, 4 crate files (swissarmyhammer-config model.rs, tests.rs, tests/types.rs, tests/resolution.rs) plus kanban ledger files of this batch. Commit sha is in the final report of the commit step (a sha cannot sit inside its own commit).
     - next: review
   timestamp: 2026-11-01T18:11:56.640666+00:00
-position_column: doing
-position_ordinal: '80'
+- actor: claude-code
+  id: 01m6c56cpffkwpj515drvmyf5x
+  text: |-
+    ### review — clean
+    - evidence: review sha 03871b2f7~1..03871b2f7. counts: findings 0, confirmed 0, refuted 0. 4 files reviewed. 14 files in .kanban/ excluded by .reviewignore.
+    - next: none. Task moved to done.
+  timestamp: 2026-11-01T18:15:51.759829+00:00
+- actor: claude-code
+  id: 01m6c56r9ycqxs8gmv4xzcdqxm
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — 4 files in swissarmyhammer-config
+    - test: green — cargo nextest workspace, 13241 passed
+    - commit: 03871b2f7
+    - review: clean — 0 findings, task moved to done
+  timestamp: 2026-11-01T18:16:03.646014+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffe580
 title: Remove Intel macOS and Linux variants from the Platform enum
 ---
 Goal: the config model knows one platform, macOS Apple Silicon.

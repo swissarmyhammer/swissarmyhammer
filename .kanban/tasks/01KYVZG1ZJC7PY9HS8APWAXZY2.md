@@ -17,6 +17,10 @@ comments:
 
     `collect_all_health_checks` in `health_registry.rs` still holds the third copy and still has no guard, whichever option wins.
   timestamp: 2026-07-31T12:01:36.570518+00:00
+- actor: claude-code
+  id: 01m6c2340jerfpwdxzdcesbngk
+  text: 'Trimmed dead parts after the removal of the files tool, shell tool and GUI app: corrected the stale "8 of 12 entries" count (the 12 included the removed files and shell families; the server now registers 9 families). The three copies still exist and the card is otherwise true.'
+  timestamp: 2026-11-01T17:21:38.834419+00:00
 position_column: todo
 position_ordinal: c480
 title: Three copies of the tool registration list (server, CLI, health_registry)
@@ -26,7 +30,7 @@ The list of `register_*_tools` calls exists in three places. Two of them already
 ## The three copies
 
 1. `crates/swissarmyhammer-tools/src/mcp/server.rs` — `McpServer::register_all_tools`. The reference list.
-2. `apps/swissarmyhammer-cli/src/mcp_integration.rs` — `CliToolContext::create_tool_registry`. Held 8 of 12 entries until ^6xjxebg.
+2. `apps/swissarmyhammer-cli/src/mcp_integration.rs` — `CliToolContext::create_tool_registry`. Held 8 of the 12 entries it then needed until ^6xjxebg (the 12 included the files and shell families, now removed; the server now registers 9 families).
 3. `crates/swissarmyhammer-tools/src/health_registry.rs` — `collect_all_health_checks`. Builds its own default skill, agent and prompt libraries, the same way the CLI now does.
 
 Copies 2 and 3 also duplicate the default library construction (`SkillLibrary::new()` + `load_defaults()`, `AgentLibrary::new()` + `load_defaults()`, `TemplateLibrary::default()`).

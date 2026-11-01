@@ -1,0 +1,1 @@
+{"id":"01M6B3R61FQ26WJYMJAYQRJF43","timestamp":"2026-11-01T08:31:23.183762Z","op":"create","item_id":"01M6B3R61EPZDNDB2H025HJE21","forward_patch":"--- original\n+++ modified\n@@ -0,0 +1,2 @@\n+color: 1d76db\n+tag_name: remove-llama-cpp\n","reverse_patch":"--- original\n+++ modified\n@@ -1,2 +0,0 @@\n-color: 1d76db\n-tag_name: remove-llama-cpp\n","transaction_id":null}

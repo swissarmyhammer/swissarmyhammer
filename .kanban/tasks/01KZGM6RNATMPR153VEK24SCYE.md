@@ -1,11 +1,16 @@
 ---
 assignees:
 - claude-code
+comments:
+- actor: claude-code
+  id: 01m6c230s23rpjdn6q74qrgj28
+  text: 'Trimmed dead parts after the removal of the files tool, shell tool and GUI app: removed the one finding in tools/shell/mod.rs:181 (file gone) and its heading. Count is now 29.'
+  timestamp: 2026-11-01T17:21:35.522336+00:00
 position_column: todo
 position_ordinal: ffa480
 title: pre-existing findings in files touched by the env-guard routing
 ---
-These 30 findings came from `review sha HEAD~2..HEAD` on ^811xj0q, recorded in its `## Review Findings (2026-08-08 06:36)` section.
+These 29 findings came from `review sha HEAD~2..HEAD` on ^811xj0q, recorded in its `## Review Findings (2026-08-08 06:36)` section.
 
 Commit `e678615c4` routed env-guard call sites (`EnvVarGuard` / `PathGuard`, 12 of 13 sites) through these files. The review scope therefore covered the whole of each file, not only the routed lines. Every finding below sits on a **pre-existing line** — none of them is that commit's work.
 
@@ -50,10 +55,6 @@ The findings are copied word for word below, grouped by file.
 ## crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs
 
 - [ ] `crates/swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs:1` — This file exceeds the review prompt cap — 364079 rendered bytes against the 262144-byte per-file cap — so these validators could not review it: duplication. Split the file into smaller modules that fit the review prompt cap.
-
-## crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs
-
-- [ ] `crates/swissarmyhammer-tools/src/mcp/tools/shell/mod.rs:181` — Public constructor `fn new()` panics via `.expect()` on a fallible initialization. Per the error-handling rule, panics are only for bugs (internal invariant violations), never for expected failure modes. If `ShellState::new()` can fail due to OS errors (permission denied, no temp directory, etc.), this should return `Result<Self>` instead of panicking. Change the constructor to return `Result<Self, E>` and propagate the error, or verify that `ShellState::new()` only fails on internal invariant violations (bugs), not OS-level failures. If panicking is intentional, add documentation explaining why this failure is unrecoverable.
 
 ## crates/swissarmyhammer-validators/src/validators/loader.rs
 

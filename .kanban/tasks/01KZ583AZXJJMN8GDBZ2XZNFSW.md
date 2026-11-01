@@ -40,8 +40,50 @@ comments:
 
     Log capture in tests: the workspace already standardises on `tracing-test` (`tracing-test = { version = "0.2", features = ["no-env-filter"] }` in the root `Cargo.toml`, used by 13 crates). Reference pattern: `crates/swissarmyhammer-kanban/tests/perspective_migration.rs` — `#[traced_test]` on the test plus `logs_contain(...)` assertions. `swissarmyhammer-entity` does not have the dev-dependency yet, so it gets added.
   timestamp: 2026-08-29T12:44:42.570268+00:00
-position_column: doing
-position_ordinal: '8380'
+- actor: claude-code
+  id: 01m6bqxjk70hgpp1vk4rceqsqn
+  text: |-
+    ### implement — changed
+    - Re-checked code: the audit in `io::copy_attachment` (tracing info: source, destination, bytes) and its io-level test are already committed (dc0246e2e). So a RED run against the real code was not possible.
+    - Added op-level test `test_add_attachment_audits_a_source_outside_the_board` in `crates/swissarmyhammer-kanban/src/attachment/add.rs`. It runs the real `AddAttachment::execute` with a source outside the board tree.
+    - Non-vacuity proof: with the `info!` call disabled, the test failed ("the audit record must name the source path"). Code restored; test passes.
+    - evidence: 1 file changed; `cargo test -p swissarmyhammer-kanban -p swissarmyhammer-entity`: 0 failed, 0 warnings, 0 ignored (kanban lib 1402 passed).
+    - next: /review
+  timestamp: 2026-11-01T14:23:51.399377+00:00
+- actor: claude-code
+  id: 01m6br0bhb0m2erz8s766t8cre
+  text: |-
+    ### test — green
+    - evidence: cargo build --workspace --all-targets exit 0, 0 warnings; cargo test -p swissarmyhammer-kanban -p swissarmyhammer-entity -p kanban-cli exit 0, 0 failed, 0 ignored, 0 warnings; test_add_attachment_audits_a_source_outside_the_board ok. Note: cargo nextest is 0.9.116 but the repo needs 0.9.145, so cargo test was used.
+    - next: review
+  timestamp: 2026-11-01T14:25:22.475690+00:00
+- actor: claude-code
+  id: 01m6br0ybjt53ag21yw0b2f9a7
+  text: |-
+    ### commit — changed
+    - evidence: 00e7513fb test(kanban): cover the AddAttachment audit record for sources outside the board (crates/swissarmyhammer-kanban/src/attachment/add.rs)
+    - next: none. Local commit only, not pushed.
+  timestamp: 2026-11-01T14:25:41.746228+00:00
+- actor: claude-code
+  id: 01m6br555qczmz0586m0n2p78h
+  text: |-
+    ### review — clean
+    - scope: review sha 00e7513fb~1..00e7513fb; counts: findings 0, confirmed 0, refuted 0, attempted 7, failed 0, skipped 0.
+    - evidence: crates/swissarmyhammer-kanban/src/attachment/add.rs (test_add_attachment_audits_a_source_outside_the_board runs the real AddAttachment op with a source outside the board and asserts the audit log names the source path and bytes). The audit itself is tracing::info! in crates/swissarmyhammer-entity/src/io.rs copy_attachment (field, source, destination, bytes), from commit dc0246e2e.
+    - card requirements per the 2026-08-29 decision: decision recorded (comment), audit record on every copy (copy_attachment), regression test for a copy from outside the board (this commit). No unmet requirement found.
+    - next: none. Task moved to done.
+  timestamp: 2026-11-01T14:27:59.799843+00:00
+- actor: claude-code
+  id: 01m6br5j4tx0j0gbge8fp5qpaz
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — added test_add_attachment_audits_a_source_outside_the_board (audit code already existed from dc0246e2e)
+    - test: green — 2074 passed, 0 failed, 0 warnings
+    - commit: 00e7513fb
+    - review: clean — 0 findings, task moved to done
+  timestamp: 2026-11-01T14:28:13.082213+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffd880
 title: AddAttachment.path lets a caller copy any locally-readable file into the board's .attachments/ (unbounded local file read)
 ---
 ## Concrete exploit path
