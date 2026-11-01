@@ -3,19 +3,37 @@
 use super::{JSON_RPC_INTERNAL_ERROR, JSON_RPC_INVALID_REQUEST, JSON_RPC_SERVER_ERROR};
 use claude_agent::error::*;
 
+/// Message of the protocol error.
+const PROTOCOL_MESSAGE: &str = "test protocol";
+
+/// Message of the tool error.
+const TOOL_FAILED_MESSAGE: &str = "tool failed";
+
+/// Message of the I/O not found error.
+const NOT_FOUND_MESSAGE: &str = "not found";
+
+/// Message of the process error.
+const PROCESS_FAILED_MESSAGE: &str = "process failed";
+
+/// Message of the config error.
+const BAD_CONFIG_MESSAGE: &str = "bad config";
+
+/// Message of the permission error.
+const NO_ACCESS_MESSAGE: &str = "no access";
+
 // ============================================================================
 // AgentError tests (additional coverage)
 // ============================================================================
 
 #[test]
 fn test_agent_error_serialization() {
-    let err = AgentError::Protocol("test protocol".to_string());
+    let err = AgentError::Protocol(PROTOCOL_MESSAGE.to_string());
     let json = serde_json::to_string(&err).unwrap();
-    assert!(json.contains("test protocol"));
+    assert!(json.contains(PROTOCOL_MESSAGE));
 
-    let err = AgentError::ToolExecution("tool failed".to_string());
+    let err = AgentError::ToolExecution(TOOL_FAILED_MESSAGE.to_string());
     let json = serde_json::to_string(&err).unwrap();
-    assert!(json.contains("tool failed"));
+    assert!(json.contains(TOOL_FAILED_MESSAGE));
 }
 
 #[test]
@@ -27,9 +45,9 @@ fn test_agent_error_server_error_display() {
 
 #[test]
 fn test_agent_error_io_display() {
-    let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "not found");
+    let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, NOT_FOUND_MESSAGE);
     let err: AgentError = io_err.into();
-    assert!(err.to_string().contains("not found"));
+    assert!(err.to_string().contains(NOT_FOUND_MESSAGE));
     assert_eq!(err.to_json_rpc_code(), JSON_RPC_INTERNAL_ERROR);
 }
 
@@ -44,19 +62,19 @@ fn test_agent_error_mcp_conversion() {
 #[test]
 fn test_agent_error_to_acp_error_all_variants() {
     // Process variant
-    let err = AgentError::Process("process failed".to_string());
+    let err = AgentError::Process(PROCESS_FAILED_MESSAGE.to_string());
     let acp_err: agent_client_protocol::Error = err.into();
-    assert!(acp_err.message.contains("process failed"));
+    assert!(acp_err.message.contains(PROCESS_FAILED_MESSAGE));
 
     // Config variant
-    let err = AgentError::Config("bad config".to_string());
+    let err = AgentError::Config(BAD_CONFIG_MESSAGE.to_string());
     let acp_err: agent_client_protocol::Error = err.into();
-    assert!(acp_err.message.contains("bad config"));
+    assert!(acp_err.message.contains(BAD_CONFIG_MESSAGE));
 
     // PermissionDenied variant
-    let err = AgentError::PermissionDenied("no access".to_string());
+    let err = AgentError::PermissionDenied(NO_ACCESS_MESSAGE.to_string());
     let acp_err: agent_client_protocol::Error = err.into();
-    assert!(acp_err.message.contains("no access"));
+    assert!(acp_err.message.contains(NO_ACCESS_MESSAGE));
 }
 
 // ============================================================================

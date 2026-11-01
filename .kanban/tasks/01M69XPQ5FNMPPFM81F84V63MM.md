@@ -69,6 +69,31 @@ comments:
     - checks: cargo fmt -p claude-agent, cargo clippy -p claude-agent --all-targets -D warnings clean, cargo nextest -p claude-agent 1100 passed.
     - next: review
   timestamp: 2026-11-01T02:21:24.756311+00:00
+- actor: claude-code
+  id: 01m6aewh1kk5s0vxyhfw4aw0az
+  text: |-
+    ### review — findings
+    - evidence: review sha HEAD~1..HEAD, 1 finding: crates/claude-agent/tests/integration/coverage_tests/tool_types.rs:222 (code-hygiene/magic-numbers). All 5 prior items are checked.
+    - next: add a constant for "/test" and use it at both sites in the test, then re-review.
+  timestamp: 2026-11-01T02:26:45.427449+00:00
+- actor: claude-code
+  id: 01m6aewxfbdrkdx7xhee6cfzxa
+  text: |-
+    ### finish iteration 3 — findings
+    - implement: changed — 8 test files, literals named, weak assertions tightened
+    - test: green — cargo nextest, 13552 passed
+    - commit: 6fe52804b
+    - review: findings — crates/claude-agent/tests/integration/coverage_tests/tool_types.rs:222
+  timestamp: 2026-11-01T02:26:58.155622+00:00
+- actor: claude-code
+  id: 01m6ag08w8srpv6g6ak61602r8
+  text: |-
+    ### implement — changed
+    - Named every literal that repeats in the 9 files of coverage_tests (strings and numbers), with doc comments. tool_types.rs now has TEST_DIR_PATH, FILE_CONTENTS_OUTPUT, TEST_LINE_NUMBER.
+    - Review file on all 8 changed files plus mod.rs-adjacent files. Fixed: serde round-trip helper (tool_types), session helper (session), client_caps / manager_with_terminal_capability / assert_err_contains / assert_terminal_count_is_zero / create_test_terminal_session_with_limit (terminal), debug_text and Debug-based assertions (mcp), pairwise TerminalState equality test. All tests kept.
+    - Final review file: 0 findings on every file. clippy -D warnings and fmt clean. nextest -p claude-agent: 1100 passed.
+    - next: review
+  timestamp: 2026-11-01T02:46:16.712271+00:00
 depends_on:
 - 01M69XPBKCWV1Q2JAP5MBCW1EK
 position_column: doing
@@ -116,3 +141,12 @@ Hand-check (markdown and wording, 2026-10-31): no changed file names `read file`
 - [x] `crates/claude-agent/tests/integration/coverage_tests/agent_misc.rs:145` `test-integrity/no-test-cheating` — test_version_constant asserts only that the VERSION constant is non-empty. The assertion would still pass for any non-empty string, so the test proves nothing about the crate's version. This is a trivial assertion that reads as coverage. Assert the exact expected value, or compare VERSION with the package version (for example `env!("CARGO_PKG_VERSION")`), so a wrong or stale value fails the test.
 - [x] `crates/claude-agent/tests/integration/coverage_tests/terminal.rs:456` `code-hygiene/magic-numbers` — The session ULID literal "01ARZ3NDEKTSV4RRFFQ69G5FAV" is written out at three sites in this file (lines 456, 472 and 482). Repeating it means a change to the test session id must be made in three places, and the file already names its other repeated test ids as constants (TEST_SESSION_ID, TEST_TERMINAL_ID). Add a file-level constant, for example `const TEST_SESSION_ULID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";`, and use it at all three sites. For the raw JSON at line 482, build the string with `format!` or `serde_json::json!` so the constant is the only copy.
 - [x] `crates/claude-agent/tests/integration/coverage_tests/terminal.rs:482` `code-hygiene/magic-numbers` — The session ULID literal "01ARZ3NDEKTSV4RRFFQ69G5FAV" is written a third time, inside a raw JSON string. The copy is hidden in the literal, so a change to the constant would silently leave this input behind. Build the JSON with `format!` or `serde_json::json!` from the shared constant, so the constant is the only copy of the value.
+
+## Review Findings (2026-10-31 21:25)
+
+> Scope: `review sha HEAD~1..HEAD` — reviewed the diffs only — lines this change added or modified. 8 file(s) reviewed, 2 not reviewed.
+
+> 2 file(s) not reviewed — excluded by an ignore rule:
+> - `.kanban/ (from .reviewignore)` — 2 file(s)
+
+- [x] `crates/claude-agent/tests/integration/coverage_tests/tool_types.rs:222` `code-hygiene/magic-numbers` — The path literal "/test" is written inline on a changed line. The same literal is already written at the unchanged line 224 of the same test. The change named its other repeated test paths (TEST_FILE_PATH and SOURCE_FILE_PATH), so this literal should also get a name. Add a constant such as `const TEST_DIR_PATH: &str = "/test";` and use it at both line 222 and line 224.

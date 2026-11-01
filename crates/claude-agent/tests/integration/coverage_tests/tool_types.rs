@@ -20,9 +20,30 @@ const TEST_FILE_PATH: &str = "/tmp/test.txt";
 
 /// Path that the location tests use for a source file.
 const SOURCE_FILE_PATH: &str = "/test/file.rs";
+
+/// Raw output that the raw IO test uses.
+const FILE_CONTENTS_OUTPUT: &str = "file contents here";
+
+/// Path that the ACP conversion test uses.
+const TEST_DIR_PATH: &str = "/test";
+
+/// Line number that the location tests use.
+const TEST_LINE_NUMBER: u32 = 42;
 /// Build a tool input that carries only a path.
 fn path_input(path: &str) -> serde_json::Value {
     json!({"path": path})
+}
+
+/// Assert that every value survives a JSON serialize and deserialize round trip.
+fn assert_serde_round_trip<T>(values: Vec<T>)
+where
+    T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+{
+    for value in values {
+        let json = serde_json::to_string(&value).unwrap();
+        let deserialized: T = serde_json::from_str(&json).unwrap();
+        assert_eq!(value, deserialized);
+    }
 }
 
 // ============================================================================
@@ -31,7 +52,7 @@ fn path_input(path: &str) -> serde_json::Value {
 
 #[test]
 fn test_tool_kind_serialization_all_variants() {
-    let kinds = vec![
+    assert_serde_round_trip(vec![
         ToolKind::Read,
         ToolKind::Edit,
         ToolKind::Delete,
@@ -41,12 +62,7 @@ fn test_tool_kind_serialization_all_variants() {
         ToolKind::Think,
         ToolKind::Fetch,
         ToolKind::Other,
-    ];
-    for kind in kinds {
-        let json = serde_json::to_string(&kind).unwrap();
-        let deserialized: ToolKind = serde_json::from_str(&json).unwrap();
-        assert_eq!(kind, deserialized);
-    }
+    ]);
 }
 
 #[test]
@@ -91,18 +107,13 @@ fn test_tool_kind_to_acp_kind_all_variants() {
 
 #[test]
 fn test_tool_call_status_serialization() {
-    let statuses = vec![
+    assert_serde_round_trip(vec![
         ToolCallStatus::Pending,
         ToolCallStatus::InProgress,
         ToolCallStatus::Completed,
         ToolCallStatus::Failed,
         ToolCallStatus::Cancelled,
-    ];
-    for status in statuses {
-        let json = serde_json::to_string(&status).unwrap();
-        let deserialized: ToolCallStatus = serde_json::from_str(&json).unwrap();
-        assert_eq!(status, deserialized);
-    }
+    ]);
 }
 
 #[test]
@@ -186,9 +197,9 @@ fn test_tool_call_report_set_raw_io() {
         READ_TOOL_NAME.to_string(),
     );
     report.set_raw_input(path_input(TEST_FILE_PATH));
-    report.set_raw_output(json!("file contents here"));
+    report.set_raw_output(json!(FILE_CONTENTS_OUTPUT));
     assert_eq!(report.raw_input, Some(path_input(TEST_FILE_PATH)));
-    assert_eq!(report.raw_output, Some(json!("file contents here")));
+    assert_eq!(report.raw_output, Some(json!(FILE_CONTENTS_OUTPUT)));
 }
 
 #[test]
@@ -219,9 +230,9 @@ fn test_tool_call_report_to_acp_tool_call() {
         ToolKind::Read,
         READ_TOOL_NAME.to_string(),
     );
-    report.set_raw_input(path_input("/test"));
+    report.set_raw_input(path_input(TEST_DIR_PATH));
     report.add_location(ToolCallLocation {
-        path: "/test".to_string(),
+        path: TEST_DIR_PATH.to_string(),
         line: None,
     });
 
@@ -304,10 +315,10 @@ fn test_tool_call_report_update_with_context() {
 fn test_tool_call_location_to_acp_with_line() {
     let loc = ToolCallLocation {
         path: SOURCE_FILE_PATH.to_string(),
-        line: Some(42),
+        line: Some(TEST_LINE_NUMBER.into()),
     };
     let acp = loc.to_acp_location();
-    assert_eq!(acp.line, Some(42));
+    assert_eq!(acp.line, Some(TEST_LINE_NUMBER));
 }
 
 #[test]

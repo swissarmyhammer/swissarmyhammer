@@ -48,9 +48,87 @@ const TEST_SESSION_ID: &str = "sess123";
 /// Terminal id used by the output and release params tests.
 const TEST_TERMINAL_ID: &str = "term_456";
 
+/// Environment variable name that the env test uses.
+const TEST_ENV_NAME: &str = "TEST_VAR";
+
+/// Environment variable value that the env test uses.
+const TEST_ENV_VALUE: &str = "test_value";
+
+/// Second environment variable name that the env test uses.
+const ANOTHER_ENV_NAME: &str = "ANOTHER_VAR";
+
+/// Second environment variable value that the env test uses.
+const ANOTHER_ENV_VALUE: &str = "another_value";
+
+/// Environment variable name for the path test.
+const PATH_ENV_NAME: &str = "PATH";
+
+/// Environment variable value for the path test.
+const CUSTOM_PATH_VALUE: &str = "/custom/path";
+
+/// Signal name that the exit status tests use.
+const SIGTERM_SIGNAL: &str = "SIGTERM";
+
+/// Command that the create params test uses.
+const BASH_COMMAND: &str = "bash";
+
+/// JSON key that carries the exit status.
+const EXIT_STATUS_KEY: &str = "exitStatus";
+
+/// Output text of a running terminal.
+const RUNNING_OUTPUT: &str = "running...";
+
+/// Short graceful stop timeout in seconds.
+const SHORT_TIMEOUT_SECS: u64 = 10;
+
+/// Long graceful stop timeout in seconds.
+const LONG_TIMEOUT_SECS: u64 = 30;
+
+/// Output byte limit small enough to trigger truncation.
+const TRUNCATION_BYTE_LIMIT: u64 = 10;
+
+/// Text that the missing capabilities error contains.
+const CAPABILITIES_MESSAGE: &str = "capabilities";
+
+/// Text that the disabled terminal capability error contains.
+const TERMINAL_CAPABILITY_MESSAGE: &str = "terminal capability";
+
+/// Text that the missing terminal error contains.
+const NOT_FOUND_MESSAGE: &str = "not found";
+
 /// Terminal id that the create response test uses, built from the shared ULID.
 fn test_created_terminal_id() -> String {
     format!("term_{TEST_SESSION_ULID}")
+}
+
+/// Build client capabilities with the terminal capability set as given.
+fn client_caps(terminal_enabled: bool) -> agent_client_protocol::schema::ClientCapabilities {
+    agent_client_protocol::schema::ClientCapabilities::new()
+        .terminal(terminal_enabled)
+        .fs(agent_client_protocol::schema::FileSystemCapabilities::new())
+}
+
+/// Assert that the manager holds no terminals.
+fn assert_terminal_count_is_zero(manager: &TerminalManager) {
+    let terminals = futures::executor::block_on(async { manager.terminals.read().await.len() });
+    assert_eq!(terminals, 0);
+}
+
+/// Build a manager that holds client capabilities with the terminal flag as given.
+async fn manager_with_terminal_capability(terminal_enabled: bool) -> TerminalManager {
+    let manager = TerminalManager::new();
+    manager
+        .set_client_capabilities(client_caps(terminal_enabled))
+        .await;
+    manager
+}
+
+/// Assert that the result is an error whose message contains the text.
+fn assert_err_contains<T>(result: Result<T, impl ToString>, needle: &str) {
+    match result {
+        Ok(_) => panic!("expected an error that contains {needle:?}"),
+        Err(err) => assert!(err.to_string().contains(needle)),
+    }
 }
 
 // ============================================================================
@@ -59,12 +137,19 @@ fn test_created_terminal_id() -> String {
 
 #[test]
 fn test_terminal_state_variants() {
-    assert_eq!(TerminalState::Created, TerminalState::Created);
-    assert_eq!(TerminalState::Running, TerminalState::Running);
-    assert_eq!(TerminalState::Finished, TerminalState::Finished);
-    assert_eq!(TerminalState::Killed, TerminalState::Killed);
-    assert_eq!(TerminalState::Released, TerminalState::Released);
-    assert_ne!(TerminalState::Created, TerminalState::Running);
+    // Each state equals only itself.
+    let states = [
+        TerminalState::Created,
+        TerminalState::Running,
+        TerminalState::Finished,
+        TerminalState::Killed,
+        TerminalState::Released,
+    ];
+    for (i, left) in states.iter().enumerate() {
+        for (j, right) in states.iter().enumerate() {
+            assert_eq!(left == right, i == j);
+        }
+    }
 }
 
 #[test]
@@ -76,8 +161,11 @@ fn test_terminal_state_debug() {
 
 #[test]
 fn test_graceful_shutdown_timeout_new() {
-    let timeout = GracefulShutdownTimeout::new(Duration::from_secs(10));
-    assert_eq!(timeout.as_duration(), Duration::from_secs(10));
+    let timeout = GracefulShutdownTimeout::new(Duration::from_secs(SHORT_TIMEOUT_SECS));
+    assert_eq!(
+        timeout.as_duration(),
+        Duration::from_secs(SHORT_TIMEOUT_SECS)
+    );
 }
 
 #[test]
@@ -91,10 +179,13 @@ fn test_graceful_shutdown_timeout_default() {
 
 #[test]
 fn test_graceful_shutdown_timeout_serialization() {
-    let timeout = GracefulShutdownTimeout::new(Duration::from_secs(30));
+    let timeout = GracefulShutdownTimeout::new(Duration::from_secs(LONG_TIMEOUT_SECS));
     let json = serde_json::to_string(&timeout).unwrap();
     let deserialized: GracefulShutdownTimeout = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized.as_duration(), Duration::from_secs(30));
+    assert_eq!(
+        deserialized.as_duration(),
+        Duration::from_secs(LONG_TIMEOUT_SECS)
+    );
 }
 
 #[test]
@@ -116,30 +207,18 @@ fn test_timeout_config_default() {
 #[test]
 fn test_terminal_manager_default() {
     let manager = TerminalManager::default();
-    let terminals = futures::executor::block_on(async {
-        let t = manager.terminals.read().await;
-        t.len()
-    });
-    assert_eq!(terminals, 0);
+    assert_terminal_count_is_zero(&manager);
 }
 
 #[test]
 fn test_terminal_manager_new() {
     let manager = TerminalManager::new();
-    let terminals = futures::executor::block_on(async {
-        let t = manager.terminals.read().await;
-        t.len()
-    });
-    assert_eq!(terminals, 0);
+    assert_terminal_count_is_zero(&manager);
 }
 
 #[tokio::test]
 async fn test_terminal_manager_create_terminal_with_caps() {
-    let manager = TerminalManager::new();
-    let caps = agent_client_protocol::schema::ClientCapabilities::new()
-        .terminal(true)
-        .fs(agent_client_protocol::schema::FileSystemCapabilities::new());
-    manager.set_client_capabilities(caps).await;
+    let manager = manager_with_terminal_capability(true).await;
     let result = manager.create_terminal(None).await;
     assert!(result.is_ok());
     let terminal_id = result.unwrap();
@@ -150,11 +229,7 @@ async fn test_terminal_manager_create_terminal_with_caps() {
 
 #[tokio::test]
 async fn test_terminal_manager_create_terminal_with_working_dir() {
-    let manager = TerminalManager::new();
-    let caps = agent_client_protocol::schema::ClientCapabilities::new()
-        .terminal(true)
-        .fs(agent_client_protocol::schema::FileSystemCapabilities::new());
-    manager.set_client_capabilities(caps).await;
+    let manager = manager_with_terminal_capability(true).await;
     let result = manager.create_terminal(Some(TMP_DIR.to_string())).await;
     assert!(result.is_ok());
     let terminal_id = result.unwrap();
@@ -169,32 +244,21 @@ async fn test_terminal_manager_create_terminal_without_capability() {
     // Without setting capabilities, create_terminal should fail
     let result = manager.create_terminal(None).await;
     assert!(result.is_err());
-    let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("capabilities"));
+    assert_err_contains(result, CAPABILITIES_MESSAGE);
 }
 
 #[tokio::test]
 async fn test_terminal_manager_create_terminal_with_capability() {
-    let manager = TerminalManager::new();
-    let caps = agent_client_protocol::schema::ClientCapabilities::new()
-        .terminal(true)
-        .fs(agent_client_protocol::schema::FileSystemCapabilities::new());
-    manager.set_client_capabilities(caps).await;
+    let manager = manager_with_terminal_capability(true).await;
     let result = manager.create_terminal(None).await;
     assert!(result.is_ok());
 }
 
 #[tokio::test]
 async fn test_terminal_manager_create_terminal_with_capability_disabled() {
-    let manager = TerminalManager::new();
-    let caps = agent_client_protocol::schema::ClientCapabilities::new()
-        .terminal(false)
-        .fs(agent_client_protocol::schema::FileSystemCapabilities::new());
-    manager.set_client_capabilities(caps).await;
+    let manager = manager_with_terminal_capability(false).await;
     let result = manager.create_terminal(None).await;
-    assert!(result.is_err());
-    let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("terminal capability"));
+    assert_err_contains(result, TERMINAL_CAPABILITY_MESSAGE);
 }
 
 #[tokio::test]
@@ -218,17 +282,17 @@ async fn test_terminal_manager_prepare_environment_with_vars() {
     let env = manager
         .prepare_environment(vec![
             terminal_manager::EnvVariable {
-                name: "TEST_VAR".to_string(),
-                value: "test_value".to_string(),
+                name: TEST_ENV_NAME.to_string(),
+                value: TEST_ENV_VALUE.to_string(),
             },
             terminal_manager::EnvVariable {
-                name: "ANOTHER_VAR".to_string(),
-                value: "another_value".to_string(),
+                name: ANOTHER_ENV_NAME.to_string(),
+                value: ANOTHER_ENV_VALUE.to_string(),
             },
         ])
         .unwrap();
-    assert_eq!(env.get("TEST_VAR").unwrap(), "test_value");
-    assert_eq!(env.get("ANOTHER_VAR").unwrap(), "another_value");
+    assert_eq!(env.get(TEST_ENV_NAME).unwrap(), TEST_ENV_VALUE);
+    assert_eq!(env.get(ANOTHER_ENV_NAME).unwrap(), ANOTHER_ENV_VALUE);
 }
 
 #[tokio::test]
@@ -238,9 +302,7 @@ async fn test_terminal_manager_prepare_environment_empty_name() {
         name: "".to_string(),
         value: "value".to_string(),
     }]);
-    assert!(result.is_err());
-    let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("empty"));
+    assert_err_contains(result, "empty");
 }
 
 #[tokio::test]
@@ -249,20 +311,16 @@ async fn test_terminal_manager_prepare_environment_override() {
     // Override PATH with a custom value
     let env = manager
         .prepare_environment(vec![terminal_manager::EnvVariable {
-            name: "PATH".to_string(),
-            value: "/custom/path".to_string(),
+            name: PATH_ENV_NAME.to_string(),
+            value: CUSTOM_PATH_VALUE.to_string(),
         }])
         .unwrap();
-    assert_eq!(env.get("PATH").unwrap(), "/custom/path");
+    assert_eq!(env.get(PATH_ENV_NAME).unwrap(), CUSTOM_PATH_VALUE);
 }
 
 #[tokio::test]
 async fn test_terminal_manager_change_directory_not_found() {
-    let manager = TerminalManager::new();
-    let caps = agent_client_protocol::schema::ClientCapabilities::new()
-        .terminal(true)
-        .fs(agent_client_protocol::schema::FileSystemCapabilities::new());
-    manager.set_client_capabilities(caps).await;
+    let manager = manager_with_terminal_capability(true).await;
     let terminal_id = manager.create_terminal(None).await.unwrap();
     let result = manager
         .change_directory(&terminal_id, "/nonexistent/path/does/not/exist")
@@ -276,8 +334,7 @@ async fn test_terminal_manager_change_directory_terminal_not_found() {
     let result = manager
         .change_directory("nonexistent_terminal", TMP_DIR)
         .await;
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("not found"));
+    assert_err_contains(result, NOT_FOUND_MESSAGE);
 }
 
 #[tokio::test]
@@ -296,6 +353,11 @@ async fn test_terminal_manager_cleanup_session_terminals_empty() {
 
 /// Helper to create a minimal terminal session for testing
 fn create_test_terminal_session() -> TerminalSession {
+    create_test_terminal_session_with_limit(TEST_OUTPUT_BYTE_LIMIT)
+}
+
+/// Helper to create a minimal terminal session with the given output byte limit
+fn create_test_terminal_session_with_limit(output_byte_limit: u64) -> TerminalSession {
     TerminalSession {
         process: None,
         working_dir: PathBuf::from(TMP_DIR),
@@ -303,7 +365,7 @@ fn create_test_terminal_session() -> TerminalSession {
         command: None,
         args: Vec::new(),
         session_id: None,
-        output_byte_limit: TEST_OUTPUT_BYTE_LIMIT,
+        output_byte_limit,
         output_buffer: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
         buffer_truncated: std::sync::Arc::new(tokio::sync::RwLock::new(false)),
         exit_status: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
@@ -373,7 +435,7 @@ async fn test_terminal_session_exit_status_with_signal() {
     let session = create_test_terminal_session();
     let status = ExitStatus {
         exit_code: None,
-        signal: Some("SIGTERM".to_string()),
+        signal: Some(SIGTERM_SIGNAL.to_string()),
     };
     session.set_exit_status(status).await;
 
@@ -381,7 +443,7 @@ async fn test_terminal_session_exit_status_with_signal() {
     assert!(result.is_some());
     let es = result.unwrap();
     assert!(es.exit_code.is_none());
-    assert_eq!(es.signal, Some("SIGTERM".to_string()));
+    assert_eq!(es.signal, Some(SIGTERM_SIGNAL.to_string()));
 }
 
 #[tokio::test]
@@ -413,21 +475,7 @@ async fn test_terminal_session_finished_state() {
 async fn test_terminal_session_utf8_truncation_preserves_boundaries() {
     // Test that truncation respects UTF-8 character boundaries by using
     // a session with a small byte limit and multibyte characters
-    let session = TerminalSession {
-        process: None,
-        working_dir: PathBuf::from(TMP_DIR),
-        environment: HashMap::new(),
-        command: None,
-        args: Vec::new(),
-        session_id: None,
-        output_byte_limit: 10, // Small limit to trigger truncation
-        output_buffer: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
-        buffer_truncated: std::sync::Arc::new(tokio::sync::RwLock::new(false)),
-        exit_status: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
-        state: std::sync::Arc::new(tokio::sync::RwLock::new(TerminalState::Created)),
-        output_task: None,
-        timeout_config: TimeoutConfig::default(),
-    };
+    let session = create_test_terminal_session_with_limit(TRUNCATION_BYTE_LIMIT);
 
     // Write multibyte UTF-8 data that exceeds the limit
     // "héllo" = [0x68, 0xC3, 0xA9, 0x6C, 0x6C, 0x6F] = 6 bytes
@@ -447,8 +495,7 @@ async fn test_terminal_session_wait_for_exit_released() {
     let session = create_test_terminal_session();
     *session.state.write().await = TerminalState::Released;
     let result = session.wait_for_exit().await;
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("released"));
+    assert_err_contains(result, "released");
 }
 
 #[tokio::test]
@@ -469,8 +516,7 @@ async fn test_terminal_session_wait_for_exit_no_process() {
     let session = create_test_terminal_session();
     // No exit status and no process
     let result = session.wait_for_exit().await;
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("No process"));
+    assert_err_contains(result, "No process");
 }
 
 // ============================================================================
@@ -506,9 +552,9 @@ fn test_terminal_create_params_serialization() {
 
 #[test]
 fn test_terminal_create_params_minimal() {
-    let json = serde_json::json!({(SESSION_ID_KEY): TEST_SESSION_ULID, "command": "bash"});
+    let json = serde_json::json!({(SESSION_ID_KEY): TEST_SESSION_ULID, "command": BASH_COMMAND});
     let params: TerminalCreateParams = serde_json::from_value(json).unwrap();
-    assert_eq!(params.command, "bash");
+    assert_eq!(params.command, BASH_COMMAND);
     assert!(params.args.is_none());
     assert!(params.env.is_none());
     assert!(params.cwd.is_none());
@@ -573,21 +619,21 @@ fn test_terminal_output_response_serialization() {
     };
     let json = serde_json::to_string(&response).unwrap();
     assert!(json.contains(HELLO_WORLD));
-    assert!(json.contains("exitStatus"));
+    assert!(json.contains(EXIT_STATUS_KEY));
     assert!(json.contains(EXIT_CODE_KEY));
 }
 
 #[test]
 fn test_terminal_output_response_no_exit_status() {
     let response = TerminalOutputResponse {
-        output: "running...".to_string(),
+        output: RUNNING_OUTPUT.to_string(),
         truncated: false,
         exit_status: None,
     };
     let json = serde_json::to_string(&response).unwrap();
-    assert!(json.contains("running..."));
+    assert!(json.contains(RUNNING_OUTPUT));
     // exit_status should be skipped when None
-    assert!(!json.contains("exitStatus"));
+    assert!(!json.contains(EXIT_STATUS_KEY));
 }
 
 #[test]

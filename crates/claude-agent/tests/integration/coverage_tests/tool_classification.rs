@@ -21,6 +21,21 @@ const SEARCH_CODE_OP: &str = "search code";
 /// Argument key that names the code context operation.
 const OP_KEY: &str = "op";
 
+/// Tool name for a text file write.
+const WRITE_TEXT_FILE_TOOL: &str = "fs_write_text_file";
+
+/// Tool name for a search.
+const SEARCH_TOOL: &str = "search";
+
+/// JSON key that carries a file path.
+const PATH_KEY: &str = "path";
+
+/// JSON key that carries a search query.
+const QUERY_KEY: &str = "query";
+
+/// Search query that the title tests use.
+const RETRY_LOGIC_QUERY: &str = "retry logic";
+
 // ============================================================================
 // Tool classification tests
 // ============================================================================
@@ -40,7 +55,7 @@ fn test_tool_kind_classify_read_operations() {
 fn test_tool_kind_classify_edit_operations() {
     let args = json!({});
     assert_eq!(
-        ToolKind::classify_tool("fs_write_text_file", &args),
+        ToolKind::classify_tool(WRITE_TEXT_FILE_TOOL, &args),
         ToolKind::Edit
     );
     assert_eq!(ToolKind::classify_tool("fs_write", &args), ToolKind::Edit);
@@ -73,7 +88,10 @@ fn test_tool_kind_classify_move() {
 #[test]
 fn test_tool_kind_classify_search() {
     let args = json!({});
-    assert_eq!(ToolKind::classify_tool("search", &args), ToolKind::Search);
+    assert_eq!(
+        ToolKind::classify_tool(SEARCH_TOOL, &args),
+        ToolKind::Search
+    );
     assert_eq!(ToolKind::classify_tool("grep", &args), ToolKind::Search);
     assert_eq!(ToolKind::classify_tool("find", &args), ToolKind::Search);
 }
@@ -167,8 +185,10 @@ fn test_tool_kind_classify_treesitter_by_op() {
 
 #[test]
 fn test_generate_title_fs_read() {
-    let title =
-        ToolCallReport::generate_title(READ_TEXT_FILE_TOOL, &json!({"path": "/home/user/test.rs"}));
+    let title = ToolCallReport::generate_title(
+        READ_TEXT_FILE_TOOL,
+        &json!({(PATH_KEY): "/home/user/test.rs"}),
+    );
     assert_eq!(title, "Reading test.rs");
 }
 
@@ -180,8 +200,10 @@ fn test_generate_title_fs_read_no_path() {
 
 #[test]
 fn test_generate_title_fs_write() {
-    let title =
-        ToolCallReport::generate_title("fs_write_text_file", &json!({"path": "/tmp/output.txt"}));
+    let title = ToolCallReport::generate_title(
+        WRITE_TEXT_FILE_TOOL,
+        &json!({(PATH_KEY): "/tmp/output.txt"}),
+    );
     assert_eq!(title, "Writing to output.txt");
 }
 
@@ -200,7 +222,7 @@ fn test_generate_title_terminal_create_no_command() {
 
 #[test]
 fn test_generate_title_search() {
-    let title = ToolCallReport::generate_title("search", &json!({"pattern": "TODO"}));
+    let title = ToolCallReport::generate_title(SEARCH_TOOL, &json!({"pattern": "TODO"}));
     assert_eq!(title, "Searching for 'TODO'");
 }
 
@@ -227,7 +249,7 @@ fn test_generate_title_empty_tool_name() {
 fn test_generate_title_treesitter_search_code_names_the_query() {
     let title = ToolCallReport::generate_title(
         CODE_TOOL,
-        &json!({(OP_KEY): SEARCH_CODE_OP, "query": "retry logic"}),
+        &json!({(OP_KEY): SEARCH_CODE_OP, (QUERY_KEY): RETRY_LOGIC_QUERY}),
     );
     assert_eq!(title, "Searching code for 'retry logic'");
 }
@@ -236,7 +258,7 @@ fn test_generate_title_treesitter_search_code_names_the_query() {
 fn test_generate_title_treesitter_search_code_is_not_the_generic_fallback() {
     let title = ToolCallReport::generate_title(
         CODE_TOOL,
-        &json!({(OP_KEY): SEARCH_CODE_OP, "query": "retry logic"}),
+        &json!({(OP_KEY): SEARCH_CODE_OP, (QUERY_KEY): RETRY_LOGIC_QUERY}),
     );
     assert_ne!(title, "Code operation");
 }

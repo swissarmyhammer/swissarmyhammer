@@ -9,6 +9,21 @@ use std::time::{Duration, SystemTime};
 /// Tool name that the file location tests pass.
 const GLOB_TOOL_NAME: &str = "glob";
 
+/// Tool name that the location tests use.
+const READ_TOOL_NAME: &str = "read";
+
+/// JSON key that carries a file path.
+const PATH_KEY: &str = "path";
+
+/// Glob pattern that the location tests use.
+const RUST_GLOB_PATTERN: &str = "*.rs";
+
+/// Text that the debug test uses.
+const HELLO_TEXT: &str = "hello";
+
+/// Session id that the request test uses.
+const TEST_SESSION_ID: &str = "test-session-id";
+
 // ============================================================================
 // File location extraction tests (additional coverage)
 // ============================================================================
@@ -25,29 +40,29 @@ fn test_extract_file_locations_glob_patterns() {
 #[test]
 fn test_extract_file_locations_string_argument() {
     let args = json!("/home/user/file.txt");
-    let locations = ToolCallReport::extract_file_locations("read", &args);
+    let locations = ToolCallReport::extract_file_locations(READ_TOOL_NAME, &args);
     assert_eq!(locations.len(), 1);
 }
 
 #[test]
 fn test_extract_file_locations_string_not_path() {
     let args = json!("just a string without path chars");
-    let locations = ToolCallReport::extract_file_locations("read", &args);
+    let locations = ToolCallReport::extract_file_locations(READ_TOOL_NAME, &args);
     assert!(locations.is_empty());
 }
 
 #[test]
 fn test_extract_file_locations_with_glob_wildcards() {
     // Test glob patterns are recognized as file paths via extract_file_locations
-    let args = json!({"path": "*.rs"});
+    let args = json!({(PATH_KEY): RUST_GLOB_PATTERN});
     let locations = ToolCallReport::extract_file_locations(GLOB_TOOL_NAME, &args);
     assert_eq!(locations.len(), 1);
-    assert!(locations[0].path.contains("*.rs"));
+    assert!(locations[0].path.contains(RUST_GLOB_PATTERN));
 }
 
 #[test]
 fn test_extract_file_locations_with_bracket_glob() {
-    let args = json!({"path": "test[0-9].txt"});
+    let args = json!({(PATH_KEY): "test[0-9].txt"});
     let locations = ToolCallReport::extract_file_locations(GLOB_TOOL_NAME, &args);
     assert_eq!(locations.len(), 1);
 }
@@ -102,12 +117,12 @@ async fn test_editor_state_update_buffers_with_unavailable() {
 #[test]
 fn test_collected_response_debug() {
     let resp = claude_agent::CollectedResponse {
-        content: "hello".to_string(),
+        content: HELLO_TEXT.to_string(),
         stop_reason: agent_client_protocol::schema::StopReason::EndTurn,
         cache_usage: None,
     };
     let debug = format!("{:?}", resp);
-    assert!(debug.contains("hello"));
+    assert!(debug.contains(HELLO_TEXT));
 }
 
 #[test]
@@ -129,14 +144,14 @@ fn test_create_agent_config_builder_default() {
 #[test]
 fn test_prompt_request_creation() {
     // Verify we can construct ACP PromptRequest objects
-    let session_id = agent_client_protocol::schema::SessionId::new("test-session-id");
+    let session_id = agent_client_protocol::schema::SessionId::new(TEST_SESSION_ID);
     let request = agent_client_protocol::schema::PromptRequest::new(
         session_id,
         vec![agent_client_protocol::schema::ContentBlock::Text(
             agent_client_protocol::schema::TextContent::new("test prompt".to_string()),
         )],
     );
-    assert_eq!(request.session_id.to_string(), "test-session-id");
+    assert_eq!(request.session_id.to_string(), TEST_SESSION_ID);
 }
 
 // ============================================================================

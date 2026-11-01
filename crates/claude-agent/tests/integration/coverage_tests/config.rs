@@ -24,6 +24,36 @@ const LOCALHOST_URL: &str = "http://localhost";
 /// Valid SSE URL that the SSE transport tests use.
 const LOCALHOST_EVENTS_URL: &str = "http://localhost/events";
 
+/// Name of the HTTP server in the config tests.
+const HTTP_SERVER_NAME: &str = "http_server";
+
+/// URL that the HTTP config tests use.
+const LOCALHOST_8080_URL: &str = "http://localhost:8080";
+
+/// Name of the SSE server in the config tests.
+const SSE_SERVER_NAME: &str = "sse_server";
+
+/// Header value that the config tests use.
+const HEADER_VALUE: &str = "val";
+
+/// URL with a scheme that validation rejects.
+const INVALID_FTP_URL: &str = "ftp://invalid";
+
+/// Environment variable name that the equality test uses.
+const ENV_VAR_NAME: &str = "KEY";
+
+/// Environment variable value that the equality test uses.
+const ENV_VAR_VALUE: &str = "VAL";
+
+/// Header name that the equality test uses.
+const AUTH_HEADER_NAME: &str = "Auth";
+
+/// Header value that the equality test uses.
+const BEARER_TOKEN_VALUE: &str = "Bearer xyz";
+
+/// Recording file path that the config tests use.
+const RECORDING_PATH: &str = "/tmp/recording.json";
+
 // ============================================================================
 // Config tests
 // ============================================================================
@@ -32,7 +62,7 @@ const LOCALHOST_EVENTS_URL: &str = "http://localhost/events";
 fn test_mcp_server_config_stdio_name() {
     let config = config::McpServerConfig::Stdio(config::StdioTransport {
         name: TEST_SERVER_NAME.to_string(),
-        command: "test".to_string(),
+        command: TEST_NAME.to_string(),
         args: vec![],
         env: vec![],
         cwd: None,
@@ -45,11 +75,11 @@ fn test_mcp_server_config_stdio_name() {
 fn test_mcp_server_config_http_name() {
     let config = config::McpServerConfig::Http(config::HttpTransport {
         transport_type: HTTP_TRANSPORT_TYPE.to_string(),
-        name: "http_server".to_string(),
-        url: "http://localhost:8080".to_string(),
+        name: HTTP_SERVER_NAME.to_string(),
+        url: LOCALHOST_8080_URL.to_string(),
         headers: vec![],
     });
-    assert_eq!(config.name(), "http_server");
+    assert_eq!(config.name(), HTTP_SERVER_NAME);
     assert_eq!(config.transport_type(), HTTP_TRANSPORT_TYPE);
 }
 
@@ -57,11 +87,11 @@ fn test_mcp_server_config_http_name() {
 fn test_mcp_server_config_sse_name() {
     let config = config::McpServerConfig::Sse(config::SseTransport {
         transport_type: SSE_TRANSPORT_TYPE.to_string(),
-        name: "sse_server".to_string(),
+        name: SSE_SERVER_NAME.to_string(),
         url: "http://localhost:9090/events".to_string(),
         headers: vec![],
     });
-    assert_eq!(config.name(), "sse_server");
+    assert_eq!(config.name(), SSE_SERVER_NAME);
     assert_eq!(config.transport_type(), SSE_TRANSPORT_TYPE);
 }
 
@@ -109,7 +139,7 @@ fn test_stdio_transport_validate_empty_env_name() {
         args: vec![],
         env: vec![config::EnvVariable {
             name: "".to_string(),
-            value: "val".to_string(),
+            value: HEADER_VALUE.to_string(),
         }],
         cwd: None,
     };
@@ -121,7 +151,7 @@ fn test_http_transport_validate_success() {
     let config = config::HttpTransport {
         transport_type: HTTP_TRANSPORT_TYPE.to_string(),
         name: TEST_NAME.to_string(),
-        url: "http://localhost:8080".to_string(),
+        url: LOCALHOST_8080_URL.to_string(),
         headers: vec![],
     };
     assert!(config.validate().is_ok());
@@ -165,7 +195,7 @@ fn test_http_transport_validate_bad_url() {
     let config = config::HttpTransport {
         transport_type: HTTP_TRANSPORT_TYPE.to_string(),
         name: TEST_NAME.to_string(),
-        url: "ftp://invalid".to_string(),
+        url: INVALID_FTP_URL.to_string(),
         headers: vec![],
     };
     assert!(config.validate().is_err());
@@ -179,7 +209,7 @@ fn test_http_transport_validate_empty_header_name() {
         url: LOCALHOST_URL.to_string(),
         headers: vec![config::HttpHeader {
             name: "".to_string(),
-            value: "val".to_string(),
+            value: HEADER_VALUE.to_string(),
         }],
     };
     assert!(config.validate().is_err());
@@ -234,7 +264,7 @@ fn test_sse_transport_validate_bad_url() {
     let config = config::SseTransport {
         transport_type: SSE_TRANSPORT_TYPE.to_string(),
         name: TEST_NAME.to_string(),
-        url: "ftp://invalid".to_string(),
+        url: INVALID_FTP_URL.to_string(),
         headers: vec![],
     };
     assert!(config.validate().is_err());
@@ -288,12 +318,12 @@ fn test_config_serialization_roundtrip() {
 #[test]
 fn test_env_variable_eq() {
     let a = claude_agent::config::EnvVariable {
-        name: "KEY".to_string(),
-        value: "VAL".to_string(),
+        name: ENV_VAR_NAME.to_string(),
+        value: ENV_VAR_VALUE.to_string(),
     };
     let b = claude_agent::config::EnvVariable {
-        name: "KEY".to_string(),
-        value: "VAL".to_string(),
+        name: ENV_VAR_NAME.to_string(),
+        value: ENV_VAR_VALUE.to_string(),
     };
     assert_eq!(a, b);
 }
@@ -301,12 +331,12 @@ fn test_env_variable_eq() {
 #[test]
 fn test_http_header_eq() {
     let a = config::HttpHeader {
-        name: "Auth".to_string(),
-        value: "Bearer xyz".to_string(),
+        name: AUTH_HEADER_NAME.to_string(),
+        value: BEARER_TOKEN_VALUE.to_string(),
     };
     let b = config::HttpHeader {
-        name: "Auth".to_string(),
-        value: "Bearer xyz".to_string(),
+        name: AUTH_HEADER_NAME.to_string(),
+        value: BEARER_TOKEN_VALUE.to_string(),
     };
     assert_eq!(a, b);
 }
@@ -320,7 +350,7 @@ fn test_claude_agent_mode_default() {
 #[test]
 fn test_claude_agent_mode_record() {
     let mode = config::ClaudeAgentMode::Record {
-        output_path: PathBuf::from("/tmp/recording.json"),
+        output_path: PathBuf::from(RECORDING_PATH),
     };
     assert!(matches!(mode, config::ClaudeAgentMode::Record { .. }));
 }
@@ -328,7 +358,7 @@ fn test_claude_agent_mode_record() {
 #[test]
 fn test_claude_agent_mode_playback() {
     let mode = config::ClaudeAgentMode::Playback {
-        input_path: PathBuf::from("/tmp/recording.json"),
+        input_path: PathBuf::from(RECORDING_PATH),
     };
     assert!(matches!(mode, config::ClaudeAgentMode::Playback { .. }));
 }

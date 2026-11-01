@@ -11,6 +11,24 @@ const NAMED_TASK_CONTENT: &str = "Test task";
 /// Content of the entries that the lookup tests build.
 const SHORT_TASK_CONTENT: &str = "Test";
 
+/// Entry content that the entry tests use.
+const DO_SOMETHING_CONTENT: &str = "Do something";
+
+/// Entry note that the notes test uses.
+const IMPORTANT_NOTE: &str = "Important note";
+
+/// Content of the first plan entry.
+const FIRST_STEP_CONTENT: &str = "Step 1";
+
+/// Content of the second plan entry.
+const SECOND_STEP_CONTENT: &str = "Step 2";
+
+/// Entry id that no plan holds.
+const MISSING_ENTRY_ID: &str = "nonexistent";
+
+/// Entry count that the plan tests expect.
+const EXPECTED_ENTRY_COUNT: usize = 2;
+
 // ============================================================================
 // Plan tests
 // ============================================================================
@@ -65,8 +83,8 @@ fn test_priority_ordering() {
 
 #[test]
 fn test_plan_entry_new() {
-    let entry = PlanEntry::new("Do something".to_string(), Priority::High);
-    assert_eq!(entry.content, "Do something");
+    let entry = PlanEntry::new(DO_SOMETHING_CONTENT.to_string(), Priority::High);
+    assert_eq!(entry.content, DO_SOMETHING_CONTENT);
     assert_eq!(entry.priority, Priority::High);
     assert_eq!(entry.status, PlanEntryStatus::Pending);
     assert!(entry.notes.is_none());
@@ -108,8 +126,8 @@ fn test_plan_entry_cancelled_is_complete() {
 #[test]
 fn test_plan_entry_set_notes() {
     let mut entry = PlanEntry::new(TASK_CONTENT.to_string(), Priority::Medium);
-    entry.set_notes("Important note".to_string());
-    assert_eq!(entry.notes, Some("Important note".to_string()));
+    entry.set_notes(IMPORTANT_NOTE.to_string());
+    assert_eq!(entry.notes, Some(IMPORTANT_NOTE.to_string()));
 }
 
 #[test]
@@ -150,9 +168,15 @@ fn test_agent_plan_new() {
 #[test]
 fn test_agent_plan_add_entry() {
     let mut plan = AgentPlan::new();
-    plan.add_entry(PlanEntry::new("Step 1".to_string(), Priority::High));
-    plan.add_entry(PlanEntry::new("Step 2".to_string(), Priority::Medium));
-    assert_eq!(plan.entries.len(), 2);
+    plan.add_entry(PlanEntry::new(
+        FIRST_STEP_CONTENT.to_string(),
+        Priority::High,
+    ));
+    plan.add_entry(PlanEntry::new(
+        SECOND_STEP_CONTENT.to_string(),
+        Priority::Medium,
+    ));
+    assert_eq!(plan.entries.len(), EXPECTED_ENTRY_COUNT);
 }
 
 #[test]
@@ -166,7 +190,7 @@ fn test_agent_plan_get_entry() {
     assert!(found.is_some());
     assert_eq!(found.unwrap().content, SHORT_TASK_CONTENT);
 
-    assert!(plan.get_entry("nonexistent").is_none());
+    assert!(plan.get_entry(MISSING_ENTRY_ID).is_none());
 }
 
 #[test]
@@ -183,7 +207,7 @@ fn test_agent_plan_update_entry_status() {
         PlanEntryStatus::Completed
     );
 
-    let not_found = plan.update_entry_status("nonexistent", PlanEntryStatus::Failed);
+    let not_found = plan.update_entry_status(MISSING_ENTRY_ID, PlanEntryStatus::Failed);
     assert!(!not_found);
 }
 
@@ -204,11 +228,17 @@ fn test_agent_plan_is_complete() {
 #[test]
 fn test_agent_plan_to_acp_plan() {
     let mut plan = AgentPlan::new();
-    plan.add_entry(PlanEntry::new("Step 1".to_string(), Priority::High));
-    plan.add_entry(PlanEntry::new("Step 2".to_string(), Priority::Low));
+    plan.add_entry(PlanEntry::new(
+        FIRST_STEP_CONTENT.to_string(),
+        Priority::High,
+    ));
+    plan.add_entry(PlanEntry::new(
+        SECOND_STEP_CONTENT.to_string(),
+        Priority::Low,
+    ));
 
     let acp_plan = plan.to_acp_plan();
-    assert_eq!(acp_plan.entries.len(), 2);
+    assert_eq!(acp_plan.entries.len(), EXPECTED_ENTRY_COUNT);
 }
 
 #[test]

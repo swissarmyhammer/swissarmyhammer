@@ -17,6 +17,45 @@ const HELLO_TEXT: &str = "hello";
 /// Tool call id that the tool call request test uses.
 const TEST_CALL_ID: &str = "call_123";
 
+/// Tool name that the tool call tests use.
+const FS_READ_TOOL_NAME: &str = "fs_read";
+
+/// Text of the agent response chunk.
+const RESPONSE_TEXT: &str = "response";
+
+/// Token estimate for the short text.
+const SHORT_ESTIMATE_TOKENS: u64 = 2;
+
+/// Character count of the long input text.
+const LONG_INPUT_CHARS: usize = 100;
+
+/// Token estimate for the long output text.
+const LONG_OUTPUT_TOKENS: u64 = 50;
+
+/// Request count after the second increment.
+const SECOND_TURN_REQUEST_COUNT: u64 = 2;
+
+/// Tokens that the first turn adds.
+const FIRST_TURN_TOKENS: u64 = 100;
+
+/// Tokens that the second turn adds.
+const SECOND_TURN_TOKENS: u64 = 50;
+
+/// Session count that the list test expects.
+const LISTED_SESSION_COUNT: usize = 2;
+
+/// Build a session with the given id in the temporary directory.
+fn new_test_session_with_id(
+    id: claude_agent::session::SessionId,
+) -> claude_agent::session::Session {
+    claude_agent::session::Session::new(id, PathBuf::from(TMP_DIR)).expect(ABSOLUTE_DIR_EXPECTATION)
+}
+
+/// Build a session with a fresh id in the temporary directory.
+fn new_test_session() -> claude_agent::session::Session {
+    new_test_session_with_id(claude_agent::session::SessionId::new())
+}
+
 // ============================================================================
 // Conversation manager type tests
 // ============================================================================
@@ -34,18 +73,18 @@ fn test_token_usage_estimate() {
     let usage =
         claude_agent::conversation_manager::TokenUsage::estimate_from_text("hello world", "hi");
     // 11 chars / 4 = 2, 2 chars / 4 = 0
-    assert_eq!(usage.input_tokens, 2);
+    assert_eq!(usage.input_tokens, SHORT_ESTIMATE_TOKENS);
     assert_eq!(usage.output_tokens, 0);
-    assert_eq!(usage.total(), 2);
+    assert_eq!(usage.total(), SHORT_ESTIMATE_TOKENS);
 }
 
 #[test]
 fn test_token_usage_estimate_longer() {
-    let input = "a".repeat(100);
+    let input = "a".repeat(LONG_INPUT_CHARS);
     let output = "b".repeat(200);
     let usage = claude_agent::conversation_manager::TokenUsage::estimate_from_text(&input, &output);
     assert_eq!(usage.input_tokens, 25);
-    assert_eq!(usage.output_tokens, 50);
+    assert_eq!(usage.output_tokens, LONG_OUTPUT_TOKENS);
     assert_eq!(usage.total(), 75);
 }
 
@@ -62,12 +101,12 @@ fn test_tool_call_request_serialization() {
     use claude_agent::conversation_manager::ToolCallRequest;
     let req = ToolCallRequest {
         id: TEST_CALL_ID.to_string(),
-        name: "fs_read".to_string(),
+        name: FS_READ_TOOL_NAME.to_string(),
         arguments: json!({"path": "/tmp/test.txt"}),
     };
     let json = serde_json::to_string(&req).unwrap();
     assert!(json.contains(TEST_CALL_ID));
-    assert!(json.contains("fs_read"));
+    assert!(json.contains(FS_READ_TOOL_NAME));
     let deserialized: ToolCallRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized.id, TEST_CALL_ID);
 }
@@ -181,8 +220,7 @@ fn test_session_id_from_ulid() {
 #[test]
 fn test_session_new() {
     let id = claude_agent::session::SessionId::new();
-    let session = claude_agent::session::Session::new(id, PathBuf::from(TMP_DIR))
-        .expect(ABSOLUTE_DIR_EXPECTATION);
+    let session = new_test_session_with_id(id);
     assert_eq!(session.id, id);
     assert_eq!(session.cwd, PathBuf::from(TMP_DIR));
     assert!(session.context.is_empty());
@@ -193,9 +231,7 @@ fn test_session_new() {
 
 #[test]
 fn test_session_add_message() {
-    let id = claude_agent::session::SessionId::new();
-    let mut session = claude_agent::session::Session::new(id, PathBuf::from(TMP_DIR))
-        .expect(ABSOLUTE_DIR_EXPECTATION);
+    let mut session = new_test_session();
     let msg = claude_agent::session::Message::new(
         claude_agent::session::MessageRole::User,
         HELLO_TEXT.to_string(),
@@ -206,9 +242,7 @@ fn test_session_add_message() {
 
 #[test]
 fn test_session_turn_counters() {
-    let id = claude_agent::session::SessionId::new();
-    let mut session = claude_agent::session::Session::new(id, PathBuf::from(TMP_DIR))
-        .expect(ABSOLUTE_DIR_EXPECTATION);
+    let mut session = new_test_session();
 
     assert_eq!(session.turn_request_count(), 0);
     assert_eq!(session.turn_token_count(), 0);
@@ -218,13 +252,13 @@ fn test_session_turn_counters() {
     assert_eq!(session.turn_request_count(), 1);
 
     let count = session.increment_turn_requests();
-    assert_eq!(count, 2);
+    assert_eq!(count, SECOND_TURN_REQUEST_COUNT);
 
-    let tokens = session.add_turn_tokens(100);
-    assert_eq!(tokens, 100);
-    assert_eq!(session.turn_token_count(), 100);
+    let tokens = session.add_turn_tokens(FIRST_TURN_TOKENS);
+    assert_eq!(tokens, FIRST_TURN_TOKENS);
+    assert_eq!(session.turn_token_count(), FIRST_TURN_TOKENS);
 
-    let tokens = session.add_turn_tokens(50);
+    let tokens = session.add_turn_tokens(SECOND_TURN_TOKENS);
     assert_eq!(tokens, 150);
 
     session.reset_turn_counters();
@@ -234,9 +268,7 @@ fn test_session_turn_counters() {
 
 #[test]
 fn test_session_available_commands() {
-    let id = claude_agent::session::SessionId::new();
-    let mut session = claude_agent::session::Session::new(id, PathBuf::from(TMP_DIR))
-        .expect(ABSOLUTE_DIR_EXPECTATION);
+    let mut session = new_test_session();
 
     let cmd1 = agent_client_protocol::schema::AvailableCommand::new("test", "A test command");
 
@@ -272,9 +304,9 @@ fn test_message_new_assistant() {
     let before = SystemTime::now();
     let msg = claude_agent::session::Message::new(
         claude_agent::session::MessageRole::Assistant,
-        "response".to_string(),
+        RESPONSE_TEXT.to_string(),
     );
-    let expected = SessionUpdate::AgentMessageChunk(text_chunk("response"));
+    let expected = SessionUpdate::AgentMessageChunk(text_chunk(RESPONSE_TEXT));
     assert_recorded(&msg, &expected, before);
 }
 
@@ -315,7 +347,7 @@ fn test_session_manager_list_sessions() {
     mgr.create_session(PathBuf::from(TMP_DIR), None).unwrap();
     mgr.create_session(PathBuf::from(TMP_DIR), None).unwrap();
     let sessions = mgr.list_sessions().unwrap();
-    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions.len(), LISTED_SESSION_COUNT);
 }
 
 #[test]

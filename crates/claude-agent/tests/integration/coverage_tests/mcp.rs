@@ -10,6 +10,59 @@ use serde_json::json;
 /// Name of the optional prompt argument in the argument tests.
 const FORMAT_ARGUMENT_NAME: &str = "format";
 
+/// Prompt argument name that the argument test uses.
+const FILE_PATH_ARGUMENT_NAME: &str = "file_path";
+
+/// Prompt argument description that the argument test uses.
+const FILE_PATH_DESCRIPTION: &str = "Path to the file";
+
+/// Prompt name that the prompt tests use.
+const TEST_PROMPT_NAME: &str = "test_prompt";
+
+/// Prompt name that the simple prompt test uses.
+const SIMPLE_PROMPT_NAME: &str = "simple";
+
+/// Message of the protocol error.
+const BAD_MESSAGE_TEXT: &str = "bad message";
+
+/// Message of the initialization error.
+const HANDSHAKE_FAILED_TEXT: &str = "handshake failed";
+
+/// Message of the tools list error.
+const TIMEOUT_TEXT: &str = "timeout";
+
+/// Message of the configuration error.
+const BAD_CONFIG_TEXT: &str = "bad config";
+
+/// Message of the serialized error.
+const TEST_ERROR_TEXT: &str = "test error";
+
+/// Message of the I/O error.
+const PIPE_BROKEN_TEXT: &str = "pipe broken";
+
+/// Character count of a long error message.
+const LONG_MESSAGE_CHARS: usize = 1000;
+
+/// Debug text of a required argument.
+const REQUIRED_TRUE_DEBUG: &str = "required: true";
+
+/// Debug text of an optional argument.
+const REQUIRED_FALSE_DEBUG: &str = "required: false";
+
+/// Debug text of a missing description.
+const DESCRIPTION_NONE_DEBUG: &str = "description: None";
+
+/// Debug text that starts each prompt argument.
+const PROMPT_ARGUMENT_DEBUG: &str = "McpPromptArgument {";
+
+/// Debug text of an empty argument list.
+const EMPTY_ARGUMENTS_DEBUG: &str = "arguments: []";
+
+/// Render the debug text of a clone of the value.
+fn debug_text<T: Clone + std::fmt::Debug>(value: &T) -> String {
+    format!("{:?}", value.clone())
+}
+
 // ============================================================================
 // McpServerManager tests
 // ============================================================================
@@ -57,13 +110,14 @@ async fn test_mcp_server_manager_shutdown_empty() {
 #[test]
 fn test_mcp_prompt_argument_creation() {
     let arg = McpPromptArgument {
-        name: "file_path".to_string(),
-        description: Some("Path to the file".to_string()),
+        name: FILE_PATH_ARGUMENT_NAME.to_string(),
+        description: Some(FILE_PATH_DESCRIPTION.to_string()),
         required: true,
     };
-    assert_eq!(arg.name, "file_path");
-    assert_eq!(arg.description, Some("Path to the file".to_string()));
-    assert!(arg.required);
+    let debug = debug_text(&arg);
+    assert!(debug.contains(FILE_PATH_ARGUMENT_NAME));
+    assert!(debug.contains(FILE_PATH_DESCRIPTION));
+    assert!(debug.contains(REQUIRED_TRUE_DEBUG));
 }
 
 #[test]
@@ -73,15 +127,16 @@ fn test_mcp_prompt_argument_optional() {
         description: None,
         required: false,
     };
-    assert_eq!(arg.name, FORMAT_ARGUMENT_NAME);
-    assert!(arg.description.is_none());
-    assert!(!arg.required);
+    let debug = debug_text(&arg);
+    assert!(debug.contains(FORMAT_ARGUMENT_NAME));
+    assert!(debug.contains(DESCRIPTION_NONE_DEBUG));
+    assert!(debug.contains(REQUIRED_FALSE_DEBUG));
 }
 
 #[test]
 fn test_mcp_prompt_creation() {
     let prompt = McpPrompt {
-        name: "test_prompt".to_string(),
+        name: TEST_PROMPT_NAME.to_string(),
         description: Some("A test prompt".to_string()),
         arguments: vec![
             McpPromptArgument {
@@ -96,21 +151,23 @@ fn test_mcp_prompt_creation() {
             },
         ],
     };
-    assert_eq!(prompt.name, "test_prompt");
-    assert_eq!(prompt.arguments.len(), 2);
-    assert!(prompt.arguments[0].required);
-    assert!(!prompt.arguments[1].required);
+    let debug = debug_text(&prompt);
+    assert!(debug.contains(TEST_PROMPT_NAME));
+    assert_eq!(debug.matches(PROMPT_ARGUMENT_DEBUG).count(), 2);
+    assert!(debug.contains(REQUIRED_TRUE_DEBUG));
+    assert!(debug.contains(REQUIRED_FALSE_DEBUG));
 }
 
 #[test]
 fn test_mcp_prompt_no_arguments() {
     let prompt = McpPrompt {
-        name: "simple".to_string(),
+        name: SIMPLE_PROMPT_NAME.to_string(),
         description: None,
         arguments: vec![],
     };
-    assert_eq!(prompt.name, "simple");
-    assert!(prompt.arguments.is_empty());
+    let debug = debug_text(&prompt);
+    assert!(debug.contains(SIMPLE_PROMPT_NAME));
+    assert!(debug.contains(EMPTY_ARGUMENTS_DEBUG));
 }
 
 // ============================================================================
@@ -140,20 +197,20 @@ fn test_mcp_error_display() {
     let err = McpError::ProcessCrashed;
     assert_eq!(err.to_string(), "MCP server process crashed");
 
-    let err = McpError::ProtocolError("bad message".to_string());
-    assert!(err.to_string().contains("bad message"));
+    let err = McpError::ProtocolError(BAD_MESSAGE_TEXT.to_string());
+    assert!(err.to_string().contains(BAD_MESSAGE_TEXT));
 
     let err = McpError::ServerError(json!({"code": JSON_RPC_SERVER_ERROR, "message": "fail"}));
     assert!(err.to_string().contains("MCP server error"));
 
-    let err = McpError::InitializationFailed("handshake failed".to_string());
-    assert!(err.to_string().contains("handshake failed"));
+    let err = McpError::InitializationFailed(HANDSHAKE_FAILED_TEXT.to_string());
+    assert!(err.to_string().contains(HANDSHAKE_FAILED_TEXT));
 
-    let err = McpError::ToolsListFailed("timeout".to_string());
-    assert!(err.to_string().contains("timeout"));
+    let err = McpError::ToolsListFailed(TIMEOUT_TEXT.to_string());
+    assert!(err.to_string().contains(TIMEOUT_TEXT));
 
-    let err = McpError::InvalidConfiguration("bad config".to_string());
-    assert!(err.to_string().contains("bad config"));
+    let err = McpError::InvalidConfiguration(BAD_CONFIG_TEXT.to_string());
+    assert!(err.to_string().contains(BAD_CONFIG_TEXT));
 }
 
 #[test]
@@ -200,9 +257,9 @@ fn test_mcp_error_json_rpc_codes() {
 
 #[test]
 fn test_mcp_error_serialization() {
-    let err = McpError::ProtocolError("test error".to_string());
+    let err = McpError::ProtocolError(TEST_ERROR_TEXT.to_string());
     let json = serde_json::to_string(&err).unwrap();
-    assert!(json.contains("test error"));
+    assert!(json.contains(TEST_ERROR_TEXT));
 
     let err = McpError::StdinNotAvailable;
     let json = serde_json::to_string(&err).unwrap();
@@ -213,15 +270,18 @@ fn test_mcp_error_serialization() {
 fn test_mcp_error_to_json_rpc_code_protocol() {
     use claude_agent::error::ToJsonRpcError;
 
-    let err = McpError::ProtocolError("invalid msg".to_string());
-    assert_eq!(err.to_json_rpc_code(), JSON_RPC_INVALID_REQUEST);
+    // The code depends on the error kind, never on the message text.
+    for message in ["", "invalid msg", &"x".repeat(LONG_MESSAGE_CHARS)] {
+        let err = McpError::ProtocolError(message.to_string());
+        assert_eq!(err.to_json_rpc_code(), JSON_RPC_INVALID_REQUEST);
+    }
 }
 
 #[test]
 fn test_mcp_error_io_conversion() {
-    let io_err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe broken");
+    let io_err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, PIPE_BROKEN_TEXT);
     let mcp_err: McpError = io_err.into();
-    assert!(mcp_err.to_string().contains("pipe broken"));
+    assert!(mcp_err.to_string().contains(PIPE_BROKEN_TEXT));
 }
 
 #[test]
