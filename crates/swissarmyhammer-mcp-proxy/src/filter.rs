@@ -78,11 +78,10 @@ mod tests {
 
     #[test]
     fn test_allow_precedence_over_deny() {
-        let filter =
-            ToolFilter::new(vec!["^files$".to_string()], vec!["^files$".to_string()]).unwrap();
+        let filter = ToolFilter::new(vec!["^git$".to_string()], vec!["^git$".to_string()]).unwrap();
 
-        // files matches both allow and deny, but allow wins
-        assert!(filter.is_allowed("files"));
+        // git matches both allow and deny, but allow wins
+        assert!(filter.is_allowed("git"));
     }
 
     #[test]
@@ -93,7 +92,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(filter.is_allowed("files"));
+        assert!(filter.is_allowed("git"));
         assert!(filter.is_allowed("web"));
         assert!(!filter.is_allowed("shell")); // Denied
     }
@@ -101,12 +100,12 @@ mod tests {
     #[test]
     fn test_specific_patterns() {
         let filter = ToolFilter::new(
-            vec!["^files$".to_string(), "^treesitter_search$".to_string()],
+            vec!["^git$".to_string(), "^treesitter_search$".to_string()],
             vec![],
         )
         .unwrap();
 
-        assert!(filter.is_allowed("files"));
+        assert!(filter.is_allowed("git"));
         assert!(filter.is_allowed("treesitter_search"));
         assert!(!filter.is_allowed("kanban"));
         assert!(!filter.is_allowed("web"));
@@ -122,12 +121,12 @@ mod tests {
     #[test]
     fn test_complex_patterns() {
         let filter = ToolFilter::new(
-            vec!["^(files|web)$".to_string()], // Allow files and web
-            vec!["^shell".to_string()],        // Deny shell tools
+            vec!["^(git|web)$".to_string()], // Allow git and web
+            vec!["^shell".to_string()],      // Deny shell tools
         )
         .unwrap();
 
-        assert!(filter.is_allowed("files"));
+        assert!(filter.is_allowed("git"));
         assert!(filter.is_allowed("web"));
         // Allow wins over deny, so these are allowed
         assert!(!filter.is_allowed("kanban")); // Not in allow list
@@ -138,7 +137,7 @@ mod tests {
     fn test_no_patterns_allows_all() {
         let filter = ToolFilter::new(vec![], vec![]).unwrap();
 
-        assert!(filter.is_allowed("files"));
+        assert!(filter.is_allowed("git"));
         assert!(filter.is_allowed("shell"));
         assert!(filter.is_allowed("anything"));
     }
@@ -146,12 +145,12 @@ mod tests {
     #[test]
     fn test_whitelist_mode() {
         let filter = ToolFilter::new(
-            vec!["^files$".to_string()],
+            vec!["^git$".to_string()],
             vec![], // No deny patterns
         )
         .unwrap();
 
-        assert!(filter.is_allowed("files")); // In allow list
+        assert!(filter.is_allowed("git")); // In allow list
         assert!(!filter.is_allowed("kanban")); // Not in allow list = denied
         assert!(!filter.is_allowed("shell")); // Not in allow list = denied
     }

@@ -1,24 +1,14 @@
 # Tools
 
-Tools are the capabilities that agents use to interact with the outside world. They're exposed as MCP (Model Context Protocol) endpoints — the agent calls them like functions to read files, run commands, search code, manage tasks, and more.
+Tools are the capabilities that agents use to interact with the outside world. They're exposed as MCP (Model Context Protocol) endpoints — the agent calls them like functions to run commands, search code, manage tasks, and more. Reading and editing files uses the host agent's own Read, Edit, Write, Glob and Grep tools.
 
 ## What a Tool Is
 
-A tool is an MCP endpoint with a defined schema (name, description, parameters) and an implementation. When the agent decides it needs to read a file or update a kanban task, it invokes the appropriate tool. SwissArmyHammer's MCP server (`sah serve`) exposes all built-in tools to the connected agent.
+A tool is an MCP endpoint with a defined schema (name, description, parameters) and an implementation. When the agent decides it needs to find a symbol or update a kanban task, it invokes the appropriate tool. SwissArmyHammer's MCP server (`sah serve`) exposes all built-in tools to the connected agent.
 
 Tools are the lowest layer of the system. Skills and agents don't hard-code which tools to use — they make decisions based on the task and invoke tools as needed.
 
 ## Built-in Tools
-
-### File Operations
-
-| Tool | Purpose |
-|------|---------|
-| **read** | Read file contents |
-| **write** | Create or overwrite files |
-| **edit** | Surgical string replacement in files |
-| **glob** | Find files by pattern |
-| **grep** | Search file contents with regex |
 
 ### Code Intelligence
 
@@ -65,7 +55,7 @@ Tools sit beneath skills and agents in the stack. Here's the relationship:
 
 - A **skill** (e.g., `/test`) defines the workflow.
 - An **agent mode** (e.g., tester) shapes how the AI approaches the task.
-- **Tools** (e.g., files, kanban) are what the agent actually calls to do the work.
+- **Tools** (e.g., code_context, kanban) are what the agent actually calls to do the work.
 - **Validators** (e.g., code-security) check the changed files when the review pipeline runs.
 
 The agent has access to all tools and chooses which to use based on context. The skill and agent mode influence these choices through their instructions, but tools themselves are general-purpose.

@@ -52,13 +52,10 @@ impl ToolKind {
                 ToolKind::Think
             }
 
-            // Operation-based tools - classify by op argument
-            "files" => Self::classify_by_op(arguments),
-
             // MCP tools - classify by prefix pattern or op argument
             tool if tool.contains("mcp__") => {
-                // Check for operation-based tools (e.g., mcp__sah__files)
-                if tool.ends_with("__files") || tool.ends_with("__treesitter") {
+                // Check for operation-based tools (e.g., mcp__sah__treesitter)
+                if tool.ends_with("__treesitter") {
                     return Self::classify_by_op(arguments);
                 }
 
@@ -101,10 +98,7 @@ impl ToolKind {
         let op = arguments.get("op").and_then(|v| v.as_str()).unwrap_or("");
 
         match op {
-            "read file" => ToolKind::Read,
-            "write file" | "edit file" => ToolKind::Edit,
-            "glob files" => ToolKind::Read,
-            "grep files" | "search code" => ToolKind::Search,
+            "search code" => ToolKind::Search,
             "query ast" => ToolKind::Read,
             _ => ToolKind::Other,
         }
@@ -169,13 +163,10 @@ impl ToolCallReport {
                     "Searching files".to_string()
                 }
             }
-            // Operation-based tools - generate title from op and arguments
-            "files" => Self::generate_op_title(arguments),
-
             // MCP tools - generate titles based on tool name and parameters
             tool if tool.starts_with("mcp__") => {
-                // Check for operation-based tools (e.g., mcp__sah__files)
-                if tool.ends_with("__files") || tool.ends_with("__treesitter") {
+                // Check for operation-based tools (e.g., mcp__sah__treesitter)
+                if tool.ends_with("__treesitter") {
                     return Self::generate_op_title(arguments);
                 }
 
@@ -215,37 +206,11 @@ impl ToolCallReport {
         });
 
         match op {
-            "read file" => match filename {
-                Some(f) => format!("Reading {}", f),
-                None => "Reading file".to_string(),
-            },
-            "write file" => match filename {
-                Some(f) => format!("Writing to {}", f),
-                None => "Writing file".to_string(),
-            },
-            "edit file" => match filename {
-                Some(f) => format!("Editing {}", f),
-                None => "Editing file".to_string(),
-            },
-            "glob files" => {
-                if let Some(pattern) = arguments.get("pattern").and_then(|v| v.as_str()) {
-                    format!("Globbing '{}'", pattern)
-                } else {
-                    "Globbing files".to_string()
-                }
-            }
-            "grep files" => {
-                if let Some(pattern) = arguments.get("pattern").and_then(|v| v.as_str()) {
-                    format!("Searching for '{}'", pattern)
-                } else {
-                    "Searching files".to_string()
-                }
-            }
             "query ast" => match filename {
                 Some(f) => format!("Querying AST of {}", f),
                 None => "Querying AST".to_string(),
             },
-            _ => "Files operation".to_string(),
+            _ => "Code operation".to_string(),
         }
     }
 }

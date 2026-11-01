@@ -50,7 +50,7 @@ impl McpTool for MyTool {
 
 **`cli_category()` and `cli_name()`**: Always set these explicitly. The trait has defaults that extract from the tool name, but explicit values are clearer and prevent surprises when names change. If your tool name IS the category (e.g., "kanban", "git", "ralph"), both return the same value.
 
-**`is_agent_tool()`**: Set to `true` ONLY if your tool replicates capabilities the host agent already has natively (e.g., `files` duplicates Claude Code's Read/Write/Glob/Grep). Most tools should be `false` — they provide new capabilities the agent doesn't have.
+**`is_agent_tool()`**: Set to `true` ONLY if your tool replicates capabilities the host agent already has natively (e.g., a tool that duplicates Claude Code's Read/Write/Glob/Grep). Most tools should be `false` — they provide new capabilities the agent doesn't have.
 
 ### Doctorable
 
@@ -372,7 +372,7 @@ fn description(&self) -> &'static str { include_str!("description.md") }
 **Pattern B — registry lookup** (use only when the description key differs from the tool name):
 ```rust
 fn description(&self) -> &'static str {
-    get_tool_description("files", "read")
+    get_tool_description("issues", "create")
         .expect("Tool description should be available")
 }
 ```

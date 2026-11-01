@@ -34,8 +34,8 @@ async fn test_proxy_filters_tool_discovery() {
 
     println!("Using shared upstream server at {}", upstream_url);
 
-    // Create restrictive filter: only allow the unified files tool
-    let filter = ToolFilter::new(vec!["^files$".to_string()], vec![]).unwrap();
+    // Create restrictive filter: only allow the git tool
+    let filter = ToolFilter::new(vec!["^git$".to_string()], vec![]).unwrap();
 
     // Create proxy pointing to upstream URL
     let proxy = Arc::new(FilteringMcpProxy::new(upstream_url, filter));

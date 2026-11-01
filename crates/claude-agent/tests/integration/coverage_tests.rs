@@ -2116,50 +2116,18 @@ fn test_tool_kind_classify_mcp_tools() {
 }
 
 #[test]
-fn test_tool_kind_classify_by_op() {
+fn test_tool_kind_classify_treesitter_by_op() {
     assert_eq!(
-        ToolKind::classify_tool("files", &json!({"op": "read file"})),
-        ToolKind::Read
-    );
-    assert_eq!(
-        ToolKind::classify_tool("files", &json!({"op": "write file"})),
-        ToolKind::Edit
-    );
-    assert_eq!(
-        ToolKind::classify_tool("files", &json!({"op": "edit file"})),
-        ToolKind::Edit
-    );
-    assert_eq!(
-        ToolKind::classify_tool("files", &json!({"op": "glob files"})),
-        ToolKind::Read
-    );
-    assert_eq!(
-        ToolKind::classify_tool("files", &json!({"op": "grep files"})),
+        ToolKind::classify_tool("mcp__sah__treesitter", &json!({"op": "search code"})),
         ToolKind::Search
-    );
-    assert_eq!(
-        ToolKind::classify_tool("files", &json!({"op": "search code"})),
-        ToolKind::Search
-    );
-    assert_eq!(
-        ToolKind::classify_tool("files", &json!({"op": "query ast"})),
-        ToolKind::Read
-    );
-    assert_eq!(
-        ToolKind::classify_tool("files", &json!({"op": "unknown op"})),
-        ToolKind::Other
-    );
-}
-
-#[test]
-fn test_tool_kind_classify_mcp_files_by_op() {
-    assert_eq!(
-        ToolKind::classify_tool("mcp__sah__files", &json!({"op": "read file"})),
-        ToolKind::Read
     );
     assert_eq!(
         ToolKind::classify_tool("mcp__sah__treesitter", &json!({"op": "query ast"})),
         ToolKind::Read
+    );
+    assert_eq!(
+        ToolKind::classify_tool("mcp__sah__treesitter", &json!({"op": "unknown op"})),
+        ToolKind::Other
     );
 }
 

@@ -8,7 +8,7 @@ SwissArmyHammer into an AI-accessible development platform.
 
 The serve command starts an MCP server that exposes SwissArmyHammer's complete
 toolset to AI applications. This enables Claude Code and other MCP-compatible
-AI tools to directly access file operations, todo management,
+AI tools to directly access code search, todo management,
 workflows, and more.
 
 ```bash
@@ -18,7 +18,6 @@ sah serve
 ## What MCP Server Provides
 
 Complete Tool Ecosystem:
-• File Operations - Read, write, edit, glob pattern matching
 • Todo Management - Track, create, update development tasks
 • Web Capabilities - Fetch content and search the web
 • Workflow Execution - Run automated development workflows
@@ -39,7 +38,7 @@ Direct AI Access:
 • Seamless integration between AI reasoning and tool execution
 
 Enhanced AI Capabilities:
-• AI can read and write files without user intervention
+• AI can search code and track tasks without user intervention
 • Todo tracking integrates with AI planning and execution
 • Workflows enable complex multi-step AI operations
 • Web access for documentation and reference lookup
@@ -102,9 +101,6 @@ Use logs to:
 
 The MCP server exposes these tool categories:
 
-File System:
-• files - Unified file operations (read, write, edit, glob, grep) selected via op parameter
-
 Development Workflow:
 • todo_create, todo_show, todo_list - Todo tracking
 • todo_mark_complete - Todo completion
@@ -151,7 +147,7 @@ Automated todo execution:
 # Claude Code uses MCP to:
 # 1. List todos with todo_list
 # 2. Read todo details with todo_show
-# 3. Edit code with files (op: edit)
+# 3. Find code with code_context (op: search symbol)
 # 4. Mark complete with todo_mark_complete
 ```
 
@@ -178,7 +174,7 @@ Tools not working:
 ## Security Considerations
 
 The MCP server provides AI with direct access to:
-• File system (within project directory)
+• Code index (within project directory)
 • Git operations
 • Web access
 

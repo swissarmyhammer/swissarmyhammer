@@ -245,11 +245,6 @@ impl ToolCallReport {
 
         // Tool-specific location extraction
         match tool_name {
-            // MCP file operations
-            tool if tool.starts_with("mcp__files_") => {
-                // These tools typically use standardized parameter names
-                // Already handled by the generic extraction above
-            }
             // Built-in file operations
             "Read" | "Write" | "Edit" | "Glob" | "Grep" => {
                 // Already handled by the generic extraction above
@@ -759,7 +754,7 @@ mod tests {
             "file_path": "/workspace/src/main.rs"
         });
 
-        let locations = ToolCallReport::extract_file_locations("mcp__files", &args);
+        let locations = ToolCallReport::extract_file_locations("mcp__sah__code_context", &args);
         assert_eq!(locations.len(), 1);
         assert!(locations[0].path.ends_with("main.rs"));
     }
