@@ -58,6 +58,18 @@ pub fn sah_profile() -> Profile {
 mod tests {
     use super::*;
 
+    use mirdan::install::init_profile;
+    use mirdan::test_support::{
+        assert_no_init_error, write_single_agent_config, MirdanConfigGuard,
+    };
+    use serial_test::serial;
+    use swissarmyhammer_common::lifecycle::InitScope;
+    use swissarmyhammer_common::reporter::NullReporter;
+    use swissarmyhammer_common::test_utils::{CurrentDirGuard, IsolatedTestEnvironment};
+
+    /// A builtin skill the real sah profile still deploys.
+    const CURRENT_SKILL: &str = "commit";
+
     /// sah's profile declares the full set: the `sah serve` MCP server, all
     /// builtin skills, all builtin agents, and statusline.
     #[test]
@@ -80,5 +92,51 @@ mod tests {
             vec![LEGACY_SHELLTOOL_MCP_SERVER.to_string()]
         );
         assert_eq!(profile.legacy_skills, vec!["shell".to_string()]);
+    }
+
+    /// `init_profile` on the real sah profile removes every retired skill from
+    /// the store and from the agent skill folder, and still deploys the
+    /// current skills. Temporary directories only.
+    #[test]
+    #[serial(cwd)]
+    fn test_sah_init_removes_retired_skills_and_keeps_current() {
+        let env = IsolatedTestEnvironment::new().unwrap();
+        let home = env.home_path();
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path().canonicalize().unwrap();
+        let _cwd = CurrentDirGuard::new(&root).unwrap();
+        let _config = MirdanConfigGuard::set(write_single_agent_config(&root, &home));
+
+        let agent_skills = home.join(".fake/skills");
+        std::fs::create_dir_all(&agent_skills).unwrap();
+        let profile = sah_profile();
+        for name in &profile.legacy_skills {
+            let store = home.join(".skills").join(name);
+            std::fs::create_dir_all(&store).unwrap();
+            std::fs::write(
+                store.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: seeded\n---\nbody\n"),
+            )
+            .unwrap();
+            std::os::unix::fs::symlink(&store, agent_skills.join(name)).unwrap();
+        }
+
+        let results = init_profile(&profile, InitScope::User, None, &NullReporter);
+        assert_no_init_error("sah init", &results);
+
+        let present = |path: std::path::PathBuf| std::fs::symlink_metadata(path).is_ok();
+        let retired_left: Vec<&String> = profile
+            .legacy_skills
+            .iter()
+            .filter(|name| {
+                present(home.join(".skills").join(name)) || present(agent_skills.join(name))
+            })
+            .collect();
+        assert!(
+            retired_left.is_empty(),
+            "retired skills left: {retired_left:?}"
+        );
+        assert!(present(home.join(".skills").join(CURRENT_SKILL)));
+        assert!(present(agent_skills.join(CURRENT_SKILL)));
     }
 }

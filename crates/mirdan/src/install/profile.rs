@@ -116,6 +116,9 @@ pub(crate) const PROFILE_LEGACY_DENY_CLEANUP_COMPONENT: &str = "profile-legacy-d
 /// The reporter label for one builtin skill.
 const SKILL_ITEM_LABEL: &str = "skill";
 
+/// The reporter label for one retired builtin skill.
+const LEGACY_SKILL_ITEM_LABEL: &str = "legacy skill";
+
 /// The reporter label for one builtin agent.
 const AGENT_ITEM_LABEL: &str = "agent";
 
@@ -1276,7 +1279,7 @@ pub fn deinit_profile(
             ComponentName::new(PROFILE_SKILLS_COMPONENT),
             ItemKind::new(SKILL_ITEM_LABEL),
             store::skill_store_dir,
-            |name| uninstall_skill_at(name, None, global, root),
+            |name| uninstall_skill_at(name, None, global, root).map(|()| true),
             global,
             root,
             reporter,
@@ -1290,7 +1293,7 @@ pub fn deinit_profile(
             ComponentName::new(PROFILE_AGENTS_COMPONENT),
             ItemKind::new(AGENT_ITEM_LABEL),
             store::agent_store_dir,
-            |name| uninstall_agent_at(name, None, global, root).map(|_| ()),
+            |name| uninstall_agent_at(name, None, global, root).map(|_| true),
             global,
             root,
             reporter,
@@ -1392,7 +1395,8 @@ fn remove_legacy_mcp_servers(
 /// Runs on install and on removal. Each name goes through
 /// [`uninstall_skill_at`], the same path that removes a current skill, so a
 /// symlink and a real directory both go. A name the profile still deploys is
-/// skipped, and a name that is not installed is left alone.
+/// skipped, and a name that is not installed is left alone and not counted.
+/// The loop, the warning, and the result come from [`deinit_profile_items`].
 fn remove_legacy_skills(
     profile: &Profile,
     scope: InitScope,
@@ -1405,30 +1409,25 @@ fn remove_legacy_skills(
         .as_ref()
         .map(resolved_skill_names)
         .unwrap_or_default();
-    let retired: Vec<&String> = profile
+    let retired: Vec<String> = profile
         .legacy_skills
         .iter()
         .filter(|name| !deployed.contains(name))
+        .cloned()
         .collect();
-    let mut removed = 0;
-    for name in &retired {
-        match uninstall_skill_at(name, None, global, root) {
-            Ok(()) => removed += 1,
-            Err(RegistryError::NotFound(_)) => {}
-            Err(e) => reporter.emit(&InitEvent::Warning {
-                message: format!("Failed to remove legacy {name} {SKILL_ITEM_LABEL}: {e}"),
-            }),
-        }
-    }
-    (removed > 0)
-        .then(|| {
-            InitResult::ok(
-                PROFILE_SKILLS_COMPONENT,
-                format!("{VERB_REMOVED} {removed} legacy {SKILL_ITEM_LABEL}(s)"),
-            )
-        })
-        .into_iter()
-        .collect()
+    deinit_profile_items(
+        &retired,
+        ComponentName::new(PROFILE_SKILLS_COMPONENT),
+        ItemKind::new(LEGACY_SKILL_ITEM_LABEL),
+        |name| match uninstall_skill_at(name, None, global, root) {
+            Ok(()) => Ok(true),
+            Err(RegistryError::NotFound(_)) => Ok(false),
+            Err(e) => Err(e),
+        },
+        reporter,
+    )
+    .into_iter()
+    .collect()
 }
 
 /// Run one profile item installer and record its outcome on `results`.
@@ -1492,7 +1491,7 @@ fn run_deinit_step(
     component: ComponentName,
     kind: ItemKind,
     store_dir: fn(bool) -> PathBuf,
-    uninstall_one: impl Fn(&str) -> Result<(), RegistryError>,
+    uninstall_one: impl Fn(&str) -> Result<bool, RegistryError>,
     global: bool,
     root: Option<&Path>,
     reporter: &dyn InitReporter,
@@ -1508,30 +1507,38 @@ fn run_deinit_step(
     prune_store_readme_at(store_dir, global, root, reporter);
 }
 
-/// Uninstall every named builtin item with `uninstall_one`, emitting a Warning
-/// per failure, and return one ok result naming `component` when the selector
-/// resolved any names.
+/// Uninstall every named item with `uninstall_one`, emitting a Warning per
+/// failure, and return one ok result naming `component` when any name counted.
 ///
-/// The single removal loop behind the skill and agent arms of
-/// [`deinit_profile`]: the two differ only in the uninstall call and labels.
+/// The single removal loop behind the skill, agent, and legacy skill arms of
+/// [`deinit_profile`] and [`init_profile`]: they differ only in the uninstall
+/// call and labels. `uninstall_one` returns `Ok(true)` for an item it removed
+/// and `Ok(false)` for an item that was absent, which stays silent and is not
+/// counted. A failed uninstall warns and still counts.
 fn deinit_profile_items(
     names: &[String],
     component: ComponentName,
     kind: ItemKind,
-    uninstall_one: impl Fn(&str) -> Result<(), RegistryError>,
+    uninstall_one: impl Fn(&str) -> Result<bool, RegistryError>,
     reporter: &dyn InitReporter,
 ) -> Option<InitResult> {
+    let mut counted = 0;
     for name in names {
-        if let Err(e) = uninstall_one(name) {
-            reporter.emit(&InitEvent::Warning {
-                message: format!("Failed to uninstall {name} {kind}: {e}"),
-            });
+        match uninstall_one(name) {
+            Ok(false) => {}
+            Ok(true) => counted += 1,
+            Err(e) => {
+                counted += 1;
+                reporter.emit(&InitEvent::Warning {
+                    message: format!("Failed to uninstall {name} {kind}: {e}"),
+                });
+            }
         }
     }
-    (!names.is_empty()).then(|| {
+    (counted > 0).then(|| {
         InitResult::ok(
             component.as_str(),
-            format!("{VERB_REMOVED} {} {kind}(s)", names.len()),
+            format!("{VERB_REMOVED} {counted} {kind}(s)"),
         )
     })
 }
