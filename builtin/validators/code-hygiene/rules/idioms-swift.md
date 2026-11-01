@@ -124,8 +124,8 @@ and it is the allowlist the output filter reads.
 | `AlwaysUseLiteralForEmptyCollectionInit` | the empty `Array` and `Dictionary` literal (`[Int]()` becomes `: [Int] = []`, `[String: Int]()` becomes `: [String: Int] = [:]`), and nothing for `Set`. It is OFF in the default configuration, so the written configuration is what turns it ON |
 | `DontRepeatTypeInStaticProperties` | the repeated type name in a static member, for one shape of many |
 | `NoVoidReturnOnFunctionSignature` | the `Void` return clause, BOTH halves: `-> Void` and `-> ()` on a function signature |
-| `ReplaceForEachWithForLoop` | the `forEach` walk, for a closure that holds an `if` and for a `filter` chain that feeds it |
-| `UseLetInEveryBoundCaseVariable` | one `let` on the pattern, not a `let` on each bound case variable |
+| `ReplaceForEachWithForLoop` | the `forEach` walk: every `.forEach { ... }` call with a closure, whether the closure holds an `if` or a `filter` chain feeds it. `forEach(print)` with a function reference is silent |
+| `UseLetInEveryBoundCaseVariable` | a `let` on each bound case variable (`case .p(let m, let n)`), not one `let` on the pattern: `case let .p(m, n)` is reported and `case .p(let m, let n)` is silent |
 | `UseShorthandTypeNames` | the shorthand type sugar: `[Int]`, `[K: V]` and `Int?` in place of `Array<Int>`, `Dictionary<K, V>` and `Optional<Int>` |
 | `UseSynthesizedInitializer` | the redundant memberwise initializer, the INTERNAL half alone |
 
