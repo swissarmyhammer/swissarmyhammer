@@ -178,7 +178,7 @@ impl Default for BatchConfig {
 /// Generic batch processor for any [`TextEmbedder`] backend.
 ///
 /// `BatchProcessor` borrows the embedder as `&T` (not `&mut T`) because backends
-/// like `llama-embedding` use interior mutability (`Mutex<Inner>`) to manage state.
+/// like `ane-embedding` use interior mutability (`Mutex<Inner>`) to manage state.
 /// This means a `BatchProcessor` can coexist with other shared references to the
 /// same embedder, but concurrent embedding calls will serialize on the backend's
 /// internal lock.

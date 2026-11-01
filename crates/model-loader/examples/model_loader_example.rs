@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Note: This is a compilation example only, not a functional example
-    // since we would need a real llama-cpp-2 backend initialized
+    // since we would need a real model file and an embedding backend
 
     println!("ModelResolver API Example");
 

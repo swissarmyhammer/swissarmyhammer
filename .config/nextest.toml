@@ -22,9 +22,8 @@ slow-timeout = { period = "5s", terminate-after = 60 }
 # loads models, so we can't go nuts on concurrency
 max-threads = 4
 
-# llama-embedding uses a global backend that only allows one initialization per process
-# Tests must run serially to avoid "BackendAlreadyInitialized" errors
-[test-groups.llama-embedding-serial]
+# Real-model embedding tests load large models, so they must run serially
+[test-groups.embedding-serial]
 max-threads = 1
 
 # The swissarmyhammer-entity watcher tests that start a real `EntityWatcher`
@@ -135,13 +134,6 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 filter = "package(swissarmyhammer-diagnostics) and test(diagnose_reports_target_and_broken_dependent_not_clean)"
 retries = 2
 
-# Apply serial execution to llama-embedding tests
-[[profile.default.overrides]]
-filter = "package(llama-embedding)"
-test-group = "llama-embedding-serial"
-# Warn every 30s, kill after 10 periods (5 minutes)
-slow-timeout = { period = "30s", terminate-after = 10 }
-
 # Serialise the swissarmyhammer-entity tests that start a live FSEvents watcher
 # (see the `fsevents-watcher` group above for the why). Only these four tests
 # open a real `EntityWatcher`; the rest of the watcher module exercises the
@@ -158,5 +150,5 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 
 [[profile.embedding-models.overrides]]
 filter = "package(swissarmyhammer-embedding)"
-test-group = "llama-embedding-serial"
+test-group = "embedding-serial"
 slow-timeout = { period = "120s", terminate-after = 3 }

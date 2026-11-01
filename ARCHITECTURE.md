@@ -490,12 +490,11 @@ The agent MCP tool (`swissarmyhammer-agents`) does NOT run LLM inference. It pro
 
 ### Embedding Architecture
 
-Text embeddings power semantic search across code context and entities. Two backends implement the sealed `TextEmbedder` trait:
+Text embeddings power semantic search across code context and entities. One backend implements the sealed `TextEmbedder` trait:
 
-- **llama-embedding** — CPU/GPU embedding via llama.cpp with GGUF models
 - **ane-embedding** — Apple Neural Engine embedding via CoreML (macOS only)
 
-The `swissarmyhammer-embedding` facade selects the best backend for the current platform automatically. It handles long-text chunking with overlap and mean-pooling transparently. Model resolution goes through `model-loader`, which handles HuggingFace repo downloads and local path resolution with caching.
+The `swissarmyhammer-embedding` facade drives that backend. It handles long-text chunking with overlap and mean-pooling transparently. Model resolution goes through `model-loader`, which handles HuggingFace repo downloads and local path resolution with caching.
 
 ### Ralph: Persistent Agent Loop
 

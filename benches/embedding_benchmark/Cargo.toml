@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Benchmarks comparing ANE (CoreML) vs CPU (llama.cpp) embedding backends"
+description = "Benchmarks comparing ANE (CoreML) embedding backend"
 
 [[bench]]
 name = "embed_bench"
@@ -21,9 +21,7 @@ harness = false
 
 [dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
-llama-embedding = { workspace = true }
 model-embedding = { workspace = true }
-model-loader = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

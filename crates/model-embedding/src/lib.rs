@@ -1,8 +1,7 @@
 //! Shared embedding trait and types for text embedding backends.
 //!
 //! This crate defines the [`TextEmbedder`] trait that all embedding backends
-//! implement (e.g., `llama-embedding` for llama.cpp, future `ane-embedding`
-//! for ONNX Runtime + CoreML).
+//! implement (e.g., `ane-embedding` for CoreML on the Apple Neural Engine).
 //!
 //! # Implementing `TextEmbedder`
 //!
@@ -59,8 +58,8 @@ use async_trait::async_trait;
 /// Core trait for text embedding backends.
 ///
 /// Implementors provide a way to load a model and embed text into dense vectors.
-/// Both llama-embedding (CPU/GPU via llama.cpp) and ane-embedding (Apple Neural
-/// Engine via ONNX Runtime + CoreML) implement this trait.
+/// The ane-embedding backend (Apple Neural Engine via CoreML) implements this
+/// trait.
 ///
 /// This trait is sealed — it can only be implemented by types that also
 /// implement [`private::Sealed`].

@@ -123,8 +123,8 @@ async fn test_retry_config() {
     assert_eq!(custom_config.initial_delay_ms, 500);
 }
 
-// Note: Integration tests with actual LlamaBackend and model loading would require:
+// Note: Integration tests with actual model loading would require:
 // 1. A real model file
-// 2. Proper llama-cpp-2 backend initialization
+// 2. Proper embedding backend initialization
 // 3. These are better suited for end-to-end integration tests in a separate test suite
 // that can handle larger test files and longer running tests

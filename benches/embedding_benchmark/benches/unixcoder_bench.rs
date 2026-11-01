@@ -2,7 +2,6 @@
 //!
 //! 126M encoder-only code embedding model (RoBERTa, 768-dim):
 //! - ANE: Palettize4 .mlpackage (seq256) for Apple Neural Engine
-//! - No GGUF available for llama.cpp comparison
 //!
 //! Run: cargo bench -p embedding-benchmark --bench unixcoder_bench
 

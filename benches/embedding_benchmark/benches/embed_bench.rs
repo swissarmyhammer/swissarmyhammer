@@ -1,8 +1,6 @@
-//! Timing harness: Qwen3-Embedding-0.6B on ANE (CoreML) vs CPU (llama.cpp).
+//! Timing harness: Qwen3-Embedding-0.6B on ANE (CoreML).
 //!
-//! Same model, quantized:
 //! - ANE: Static-shape FP16 .mlpackage (seq256) for Apple Neural Engine
-//! - CPU: GGUF Q8_0 from Qwen/Qwen3-Embedding-0.6B-GGUF (auto-downloaded)
 //!
 //! Reports: load time, first-embed latency, then min/mean/max/p50/p95 over N embeds.
 //!
@@ -48,19 +46,6 @@ fn ane_config() -> ane_embedding::AneEmbeddingConfig {
     ane_embedding::AneEmbeddingConfig {
         model_dir: dir,
         ..ane_embedding::AneEmbeddingConfig::default()
-    }
-}
-
-fn llama_config() -> llama_embedding::EmbeddingConfig {
-    llama_embedding::EmbeddingConfig {
-        model_source: model_loader::ModelSource::HuggingFace {
-            repo: "Qwen/Qwen3-Embedding-0.6B-GGUF".to_string(),
-            filename: Some("Qwen3-Embedding-0.6B-Q8_0.gguf".to_string()),
-            folder: None,
-        },
-        normalize_embeddings: true,
-        max_sequence_length: None,
-        debug: false,
     }
 }
 
@@ -127,7 +112,7 @@ fn bench_embedder(rt: &tokio::runtime::Runtime, model: &dyn TextEmbedder) -> Sta
 fn main() {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
-    println!("Qwen3-Embedding-0.6B: ANE (FP16 CoreML) vs CPU (Q8_0 llama.cpp)");
+    println!("Qwen3-Embedding-0.6B: ANE (FP16 CoreML)");
     println!("ANE uses static-shape seq256 — inputs padded/truncated to 256 tokens");
     println!("N={N} embeds per config, cycling {} texts\n", TEXTS.len());
 
@@ -149,27 +134,6 @@ fn main() {
             "  ANE CoreML: skipped (no .mlpackage at {})",
             mlpackage_path().display()
         );
-    }
-
-    println!();
-
-    // llama.cpp CPU
-    let t0 = Instant::now();
-    match rt.block_on(async {
-        let config = llama_config();
-        let model = llama_embedding::EmbeddingModel::new(config)
-            .await
-            .map_err(|e| model_embedding::EmbeddingError::Backend(e.into()))?;
-        model.load().await.map(|()| model)
-    }) {
-        Ok(model) => {
-            let load_time = t0.elapsed();
-            let stats = bench_embedder(&rt, &model);
-            print_stats("llama.cpp CPU (Q8_0)", load_time, &stats);
-        }
-        Err(e) => {
-            println!("  llama.cpp CPU: skipped ({e})");
-        }
     }
 
     println!();
