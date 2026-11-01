@@ -75,6 +75,7 @@ pub(super) fn sah_profile(_scope: InitScope) -> Profile {
         validators: Some(Selector::All),
         statusline: true,
         legacy_mcp_servers: vec![LEGACY_SHELLTOOL_MCP_SERVER.to_string()],
+        legacy_skills: vec!["shell".to_string()],
     }
 }
 

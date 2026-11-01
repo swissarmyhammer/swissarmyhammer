@@ -54,6 +54,7 @@ fn sample_profile() -> Profile {
         validators: None,
         statusline: false,
         legacy_mcp_servers: Vec::new(),
+        legacy_skills: Vec::new(),
     }
 }
 

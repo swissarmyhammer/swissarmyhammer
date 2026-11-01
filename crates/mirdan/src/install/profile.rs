@@ -239,6 +239,13 @@ pub struct Profile {
     /// points at a binary that is gone. A name that is not registered is
     /// left alone.
     pub legacy_mcp_servers: Vec<String>,
+    /// Skill names that older installs deployed and this profile no longer
+    /// does. [`init_profile`] and [`deinit_profile`] both remove each name from
+    /// the skill store and from every detected agent's skill folder, symlinks
+    /// included, through the same path that removes a current skill. A name the
+    /// profile still deploys through [`Profile::skills`] is never removed by
+    /// this list, and a skill with any other name is left alone.
+    pub legacy_skills: Vec<String>,
 }
 
 impl Profile {
@@ -1151,7 +1158,8 @@ fn apply_mcp_operation_at(
 /// 4. apply the statusline when the profile sets that flag,
 /// 5. remove every [`LEGACY_NATIVE_DENY_TOOLS`] entry from the settings file of
 ///    `scope` (the cleanup never writes a deny),
-/// 6. remove each legacy MCP server the profile lists.
+/// 6. remove each legacy MCP server the profile lists,
+/// 7. remove each legacy skill the profile lists.
 ///
 /// `root` makes the whole operation CWD-free: project-scope skill/agent stores,
 /// agent directories, and MCP configs are resolved against `root` instead of the
@@ -1229,7 +1237,8 @@ pub fn init_profile(
 /// Unregisters the MCP server, removes the selected skills/agents from detected
 /// agents, and strips the statusline block when the profile declared it. It
 /// also removes every [`LEGACY_NATIVE_DENY_TOOLS`] entry from the settings file
-/// of `scope`, for every profile, and each legacy MCP server the profile lists.
+/// of `scope`, for every profile, and each legacy MCP server and legacy skill
+/// the profile lists.
 /// `root` roots project-scope paths so deinit is CWD-free.
 ///
 /// # Version coupling
@@ -1308,8 +1317,8 @@ pub fn deinit_profile(
 }
 
 /// Run the closing steps that [`init_profile`] and [`deinit_profile`] share, in
-/// order: the statusline step, the legacy deny cleanup, and the legacy MCP
-/// server removal.
+/// order: the statusline step, the legacy deny cleanup, the legacy MCP server
+/// removal, and the legacy skill removal.
 ///
 /// `install` selects the statusline direction. The deny cleanup and the legacy
 /// MCP removal run the same way in both directions.
@@ -1323,6 +1332,7 @@ fn profile_settings_tail_results(
     let mut results = profile_statusline_results(profile, install, scope, root, reporter);
     results.extend(legacy_deny_cleanup_results(scope, root, reporter));
     results.extend(remove_legacy_mcp_servers(profile, scope, root, reporter));
+    results.extend(remove_legacy_skills(profile, scope, root, reporter));
     results
 }
 
@@ -1373,6 +1383,51 @@ fn remove_legacy_mcp_servers(
         .legacy_mcp_servers
         .iter()
         .flat_map(|name| unregister_named_mcp_server(name, scope, root, reporter))
+        .collect()
+}
+
+/// Remove each skill the profile lists in [`Profile::legacy_skills`] from the
+/// skill store and from every detected agent's skill folder.
+///
+/// Runs on install and on removal. Each name goes through
+/// [`uninstall_skill_at`], the same path that removes a current skill, so a
+/// symlink and a real directory both go. A name the profile still deploys is
+/// skipped, and a name that is not installed is left alone.
+fn remove_legacy_skills(
+    profile: &Profile,
+    scope: InitScope,
+    root: Option<&Path>,
+    reporter: &dyn InitReporter,
+) -> Vec<InitResult> {
+    let global = scope_is_global(scope);
+    let deployed = profile
+        .skills
+        .as_ref()
+        .map(resolved_skill_names)
+        .unwrap_or_default();
+    let retired: Vec<&String> = profile
+        .legacy_skills
+        .iter()
+        .filter(|name| !deployed.contains(name))
+        .collect();
+    let mut removed = 0;
+    for name in &retired {
+        match uninstall_skill_at(name, None, global, root) {
+            Ok(()) => removed += 1,
+            Err(RegistryError::NotFound(_)) => {}
+            Err(e) => reporter.emit(&InitEvent::Warning {
+                message: format!("Failed to remove legacy {name} {SKILL_ITEM_LABEL}: {e}"),
+            }),
+        }
+    }
+    (removed > 0)
+        .then(|| {
+            InitResult::ok(
+                PROFILE_SKILLS_COMPONENT,
+                format!("{VERB_REMOVED} {removed} legacy {SKILL_ITEM_LABEL}(s)"),
+            )
+        })
+        .into_iter()
         .collect()
 }
 

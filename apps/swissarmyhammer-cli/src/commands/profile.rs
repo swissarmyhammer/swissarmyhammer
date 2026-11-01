@@ -15,6 +15,13 @@
 
 use mirdan::install::{Profile, ProfileMcpServer, Selector, LEGACY_SHELLTOOL_MCP_SERVER};
 
+/// Skill names that older sah versions deployed and no longer ship.
+///
+/// `sah init` and `sah deinit` remove each name from the skill store and from
+/// every detected agent. Retiring a skill means adding its name here and
+/// nowhere else.
+const LEGACY_SKILLS: &[&str] = &["shell"];
+
 /// Build sah's install profile.
 ///
 /// Declares:
@@ -24,6 +31,7 @@ use mirdan::install::{Profile, ProfileMcpServer, Selector, LEGACY_SHELLTOOL_MCP_
 /// - `statusline`: install the `sah statusline` block.
 /// - `legacy_mcp_servers`: remove the `shelltool` MCP entry that an older
 ///   install wrote.
+/// - `legacy_skills`: remove every retired skill listed in [`LEGACY_SKILLS`].
 ///
 /// The profile declares no native tool deny. Init and deinit remove the legacy
 /// deny entries of an older sah for every profile (see
@@ -42,6 +50,7 @@ pub fn sah_profile() -> Profile {
         validators: Some(Selector::All),
         statusline: true,
         legacy_mcp_servers: vec![LEGACY_SHELLTOOL_MCP_SERVER.to_string()],
+        legacy_skills: LEGACY_SKILLS.iter().map(|name| name.to_string()).collect(),
     }
 }
 
@@ -70,5 +79,6 @@ mod tests {
             profile.legacy_mcp_servers,
             vec![LEGACY_SHELLTOOL_MCP_SERVER.to_string()]
         );
+        assert_eq!(profile.legacy_skills, vec!["shell".to_string()]);
     }
 }

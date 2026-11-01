@@ -27,6 +27,8 @@ pub use uninstall::*;
 #[cfg(test)]
 mod legacy_deny_tests;
 #[cfg(test)]
+mod legacy_skill_tests;
+#[cfg(test)]
 mod profile_consistency_tests;
 #[cfg(test)]
 mod profile_tests;
