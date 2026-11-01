@@ -24,8 +24,31 @@ comments:
     - evidence: one local commit, 13 files: dist-workspace.toml, .github/workflows/release.yml, Cargo.toml (profile.dist comment only), 3 CLI READMEs, build-setup.sh (deleted), 6 kanban files (this task and the two follow-up cards). The sha is in the final step record.
     - next: review. Follow-up cards: "Run every release job on the self-hosted runner", "Remove Intel macOS and Linux variants from the Platform enum".
   timestamp: 2026-11-01T17:55:27.179110+00:00
-position_column: doing
-position_ordinal: '80'
+- actor: claude-code
+  id: 01m6c41d4ndrjkhbhp3bx97q8x
+  text: |-
+    ### commit — changed
+    - evidence: 1f43d2af3 chore(release): remove Linux targets and llama.cpp leftovers (13 files, 106 insertions, 54 deletions). Local only, not pushed.
+    - next: review
+  timestamp: 2026-11-01T17:55:39.797858+00:00
+- actor: claude-code
+  id: 01m6c43jsgsdq2exq0vqy55dnq
+  text: |-
+    ### review — clean
+    - evidence: review sha 1f43d2af3~1..1f43d2af3. Counts: 0 findings, 0 confirmed, 0 refuted, 0 failed. The engine reviewed 3 files. No validator matched dist-workspace.toml or the 3 CLI READMEs.
+    - next: task moved to done. The plan, host, publish-homebrew-formula and announce jobs stay on ubuntu-22.04 by design. The follow-up card owns that.
+  timestamp: 2026-11-01T17:56:51.120661+00:00
+- actor: claude-code
+  id: 01m6c4414tzztwya438a79ebdx
+  text: |-
+    ### finish iteration 1 — clean
+    - implement: changed — release config, 3 READMEs, build-setup.sh deleted
+    - test: green — cargo nextest workspace, 13242 passed
+    - commit: 1f43d2af3
+    - review: clean — 0 findings, task moved to done
+  timestamp: 2026-11-01T17:57:05.818365+00:00
+position_column: done
+position_ordinal: ffffffffffffffffffffffffffffffffffffffffffe280
 title: Drop Linux release targets and llama.cpp leftovers from release config
 ---
 Goal: the release config builds macOS Apple Silicon only.

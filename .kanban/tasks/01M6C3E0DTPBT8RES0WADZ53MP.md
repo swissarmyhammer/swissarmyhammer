@@ -1,8 +1,32 @@
 ---
 assignees:
 - claude-code
-position_column: todo
-position_ordinal: ffff9380
+comments:
+- actor: claude-code
+  id: 01m6c44xtcgpf8jdzxrx4vv8dq
+  text: |-
+    ### implement — changed
+    - evidence: 1 file, .github/workflows/release.yml. Five jobs (plan, build-global-artifacts, host, publish-homebrew-formula, announce) now use `runs-on: self-hosted`. Linuxbrew PATH line replaced by /opt/homebrew/bin. Added an "Ensure jq is available" step (brew, same check as ci.yml) to plan, build-global-artifacts, host, publish-homebrew-formula. Added a step that puts $HOME/.cargo/bin on GITHUB_PATH in build-global-artifacts and host (cached dist lives there). The dist installer URL is unchanged: cargo-dist-installer.sh picks the build by uname, so it fetches the macOS arm64 build. No apt installs or Linux paths remained. docs.yml and ci.yml already use self-hosted; no ubuntu/macos/windows runner remains. `grep runs-on` shows only self-hosted and ${{ matrix.runner }}. No job removed, no publish gate changed. dist-workspace.toml needs no change.
+    - actionlint before/after: same 7 messages (6 shellcheck notes plus the docs.yml configure-pages@v3 note, which existed before); only line numbers moved.
+    - real check, after push: run the Release workflow by hand with tag input `dry-run`.
+    - next: /review
+  timestamp: 2026-11-01T17:57:35.180124+00:00
+- actor: claude-code
+  id: 01m6c45xm4h0rcjrpemjgxas75
+  text: |
+    ### test — green
+    - evidence: `git diff --stat 1f43d2af3 -- '*.rs' '*.toml' Cargo.lock` printed nothing, and `git status --short` for the same globs printed nothing. No Rust or Cargo file changed, so the nextest run was skipped (rerun of unchanged code). `actionlint .github/workflows/*.yml`: 7 notes only (6 shellcheck notes in release.yml, 1 configure-pages@v3 note in docs.yml), 0 new errors. YAML parse with `ruby -ryaml`: ci.yml, docs.yml, release.yml all ok. `cargo fmt --all --check`: exit 0, no output. `grep -rn runs-on .github/workflows`: 12 hits, all `self-hosted` or `${{ matrix.runner }}`.
+    - next: review
+  timestamp: 2026-11-01T17:58:07.748241+00:00
+- actor: claude-code
+  id: 01m6c46sfthdxgy5ayrxq3qaac
+  text: |-
+    ### commit — changed
+    - evidence: one local commit, subject "ci(release): run every release job on the self-hosted runner". It holds .github/workflows/release.yml, the 2 kanban files of this task, and the 2 kanban files of task 01M6C36YC1HHGMDA7GFVXQDPJ9. Find the sha with `git log -1 --format=%h --grep='run every release job'`, because a commit cannot hold its own sha. Not pushed.
+    - next: review
+  timestamp: 2026-11-01T17:58:36.282493+00:00
+position_column: doing
+position_ordinal: '80'
 title: Run every release job on the self-hosted runner
 ---
 Goal: no job in this repo runs on a GitHub-hosted runner. This matches the other Foundation packages and the shared `swissarmyhammer/workflows` workflows, which use `self-hosted`.

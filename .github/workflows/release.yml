@@ -54,7 +54,7 @@ on:
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
   plan:
-    runs-on: "ubuntu-22.04"
+    runs-on: self-hosted
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
       # A release publishes when triggered by a tag push (github.ref_type ==
@@ -72,6 +72,12 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      - name: Ensure jq is available
+        # The runner is a Mac. Same check as ci.yml.
+        run: |
+          if ! command -v jq &>/dev/null; then
+            brew install jq
+          fi
       - name: Install dist
         # we specify bash to get pipefail; it guards against the `curl` command
         # failing. otherwise `sh` won't catch that `curl` returned non-0
@@ -179,7 +185,7 @@ jobs:
     needs:
       - plan
       - build-local-artifacts
-    runs-on: "ubuntu-22.04"
+    runs-on: self-hosted
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/global-dist-manifest.json
@@ -194,6 +200,9 @@ jobs:
           name: cargo-dist-cache
           path: ~/.cargo/bin/
       - run: chmod +x ~/.cargo/bin/dist
+      - name: Put the cargo bin directory on PATH
+        # The cached `dist` lands in ~/.cargo/bin; a Mac runner may not have it on PATH.
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       # Get all the local artifacts for the global tasks to use (for e.g. checksums)
       - name: Fetch local artifacts
         uses: actions/download-artifact@v7
@@ -201,6 +210,12 @@ jobs:
           pattern: artifacts-*
           path: target/distrib/
           merge-multiple: true
+      - name: Ensure jq is available
+        # The runner is a Mac. Same check as ci.yml.
+        run: |
+          if ! command -v jq &>/dev/null; then
+            brew install jq
+          fi
       - id: cargo-dist
         shell: bash
         run: |
@@ -230,7 +245,7 @@ jobs:
     if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    runs-on: "ubuntu-22.04"
+    runs-on: self-hosted
     outputs:
       val: ${{ steps.host.outputs.manifest }}
     steps:
@@ -244,6 +259,9 @@ jobs:
           name: cargo-dist-cache
           path: ~/.cargo/bin/
       - run: chmod +x ~/.cargo/bin/dist
+      - name: Put the cargo bin directory on PATH
+        # The cached `dist` lands in ~/.cargo/bin; a Mac runner may not have it on PATH.
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       # Fetch artifacts from scratch-storage
       - name: Fetch artifacts
         uses: actions/download-artifact@v7
@@ -251,6 +269,12 @@ jobs:
           pattern: artifacts-*
           path: target/distrib/
           merge-multiple: true
+      - name: Ensure jq is available
+        # The runner is a Mac. Same check as ci.yml.
+        run: |
+          if ! command -v jq &>/dev/null; then
+            brew install jq
+          fi
       - id: host
         shell: bash
         run: |
@@ -291,7 +315,7 @@ jobs:
     needs:
       - plan
       - host
-    runs-on: "ubuntu-22.04"
+    runs-on: self-hosted
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PLAN: ${{ needs.plan.outputs.val }}
@@ -311,6 +335,12 @@ jobs:
           pattern: artifacts-*
           path: Formula/
           merge-multiple: true
+      - name: Ensure jq is available
+        # The runner is a Mac. Same check as ci.yml.
+        run: |
+          if ! command -v jq &>/dev/null; then
+            brew install jq
+          fi
       # This is extra complex because you can make your Formula name not match your app name
       # so we need to find releases with a *.rb file, and publish with that filename.
       - name: Commit formula files
@@ -323,7 +353,7 @@ jobs:
             name=$(echo "$filename" | sed "s/\.rb$//")
             version=$(echo "$release" | jq .app_version --raw-output)
 
-            export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+            export PATH="/opt/homebrew/bin:$PATH"
             brew update
             # We avoid reformatting user-provided data such as the app description and homepage.
             brew style --except-cops FormulaAudit/Homepage,FormulaAudit/Desc,FormulaAuditStrict --fix "Formula/${filename}" || true
@@ -342,7 +372,7 @@ jobs:
     # still allowing individual publish jobs to skip themselves (for prereleases).
     # "host" however must run to completion, no skipping allowed!
     if: ${{ always() && needs.host.result == 'success' && (needs.publish-homebrew-formula.result == 'skipped' || needs.publish-homebrew-formula.result == 'success') }}
-    runs-on: "ubuntu-22.04"
+    runs-on: self-hosted
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
