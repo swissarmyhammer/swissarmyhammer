@@ -404,6 +404,40 @@ mod tests {
         );
     }
 
+    /// Attaching a file from outside the board tree through the real
+    /// `AddAttachment` op succeeds and leaves an audit record naming the
+    /// source path and the byte count.
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_add_attachment_audits_a_source_outside_the_board() {
+        let (_board, ctx) = setup().await;
+        let task_result = AddTask::new("Audited attach")
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+        let task_id = task_result["id"].as_str().unwrap();
+
+        let outside = TempDir::new().unwrap();
+        let body = b"root:x:0:0";
+        let source = create_temp_file(outside.path(), "credentials.txt", body);
+
+        AddAttachment::new(task_id, "leak", &source)
+            .execute(&ctx)
+            .await
+            .into_result()
+            .unwrap();
+
+        assert!(
+            logs_contain(&source),
+            "the audit record must name the source path"
+        );
+        assert!(
+            logs_contain(&format!("bytes={}", body.len())),
+            "the audit record must name the byte count"
+        );
+    }
+
     #[test]
     fn test_detect_mime_type() {
         assert_eq!(detect_mime_type("file.png"), Some("image/png".to_string()));
