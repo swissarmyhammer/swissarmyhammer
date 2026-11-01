@@ -65,6 +65,36 @@ fn assert_swift_guidelines_state(rendered: &str, requirements: &[(&str, &str)]) 
     }
 }
 
+/// The needles among `needles` the rendered Swift guidelines name.
+///
+/// Tool names in prose are not case sensitive, so the match is made on the
+/// rendered text with the case ignored, and every needle must be lower case.
+fn named_in_swift_guidelines<'a>(rendered: &str, needles: &[&'a str]) -> Vec<&'a str> {
+    let rendered = rendered.to_lowercase();
+    needles
+        .iter()
+        .copied()
+        .filter(|needle| rendered.contains(needle))
+        .collect()
+}
+
+/// Acceptance: a capitalised mention of a forbidden needle is caught, so the
+/// negative checks cannot be slipped past with a different case.
+#[test]
+fn swift_partial_negative_checks_ignore_case() {
+    assert_eq!(
+        named_in_swift_guidelines(
+            "Run `SwiftLint --fix` and SwiftFormat:Disable",
+            &[
+                "swiftlint --fix",
+                "swiftformat:disable",
+                "swiftlint autocorrect",
+            ]
+        ),
+        ["swiftlint --fix", "swiftformat:disable"]
+    );
+}
+
 /// Acceptance: the guidelines name ONE formatter, the toolchain's own
 /// `swift format`, with the command that writes, the command that checks, and
 /// the configuration rules.
@@ -148,12 +178,14 @@ fn swift_partial_names_the_review_gate_tools_and_no_formatter_use() {
             ("`periphery`", "name the tool the dead-code gate needs"),
         ],
     );
-    for formatter_use in ["swiftlint --fix", "swiftlint autocorrect", ".swiftlint.yml"] {
-        assert!(
-            !rendered.contains(formatter_use),
-            "the swift guidelines must not offer swiftlint as a formatter ({formatter_use:?})"
-        );
-    }
+    let formatter_uses = named_in_swift_guidelines(
+        &rendered,
+        &["swiftlint --fix", "swiftlint autocorrect", ".swiftlint.yml"],
+    );
+    assert!(
+        formatter_uses.is_empty(),
+        "the swift guidelines must not offer swiftlint as a formatter ({formatter_uses:?})"
+    );
 }
 
 /// What the `idioms-swift` rule body writes before the exemption directive an
@@ -245,7 +277,7 @@ fn swift_partial_agrees_with_the_idioms_swift_gate() {
         ],
     );
     assert!(
-        !rendered.contains("swiftformat:disable"),
+        named_in_swift_guidelines(&rendered, &["swiftformat:disable"]).is_empty(),
         "the swift guidelines must not name the directive of a different formatter"
     );
 }
