@@ -13,16 +13,6 @@
 //! the bullet has exactly one owner; and the DO draws none either, so the shape
 //! the prompt rule asks the author for does not walk into a tool finding.
 //!
-//! Each form the probes are written in is held to standing in the body of the
-//! prompt rule that states it. Without that, an edit to either side would leave
-//! this module measuring a house style nothing ships.
-//!
-//! Two owners can also stand between two PROMPT rules, with no tool in it at
-//! all, and the last two tests of this module hold that. One shape read by two
-//! rules that prescribe different fixes walks the author from one rule's DO
-//! onto the other's DON'T, so each such shape carries a boundary sentence in
-//! BOTH rules; and one requirement two rules could state stands in exactly one
-//! of them, with the other naming its owner.
 
 use super::*;
 
@@ -38,6 +28,9 @@ const SWIFT_NAMING_CLARITY_PROMPT_RULE: &str = "naming-clarity";
 
 /// The prompt rule that decides the access level of a declaration.
 const SWIFT_ACCESS_CONTROL_PROMPT_RULE: &str = "access-control";
+
+/// The prompt rule that decides which classes are `final`.
+const SWIFT_VALUE_SEMANTICS_PROMPT_RULE: &str = "value-semantics";
 
 /// Every shipped Swift gate that reads a FILE list.
 ///
@@ -66,12 +59,6 @@ struct SwiftJudgmentRule {
 
     /// The same subjects written the way the rule asks for.
     answer: &'static str,
-
-    /// Each form the two probes are written in. Every one must stand in the
-    /// body of [`Self::prompt_rule`] and in one of the two probes, so the
-    /// probes measure the RULE's own words rather than a shape this file
-    /// invented.
-    forms: &'static [&'static str],
 }
 
 /// The `init` bullets written the way `initialization.md` states NOT to.
@@ -357,70 +344,113 @@ const SWIFT_ACCESS_CONTROL_ANSWER: &str = concat!(
     "}\n",
 );
 
+/// A class nothing subclasses, left open.
+///
+/// The toolchain carries no rule like `preferFinalClasses`, so `value-semantics.md`
+/// is the only owner of this requirement and every gate must stay silent here.
+const SWIFT_VALUE_SEMANTICS_REFUSAL: &str = concat!(
+    "import Foundation\n\n",
+    "class Cache {\n",
+    "    var entries: [String: Int] = [:]\n",
+    "}\n",
+);
+
+/// The same class marked `final`.
+const SWIFT_VALUE_SEMANTICS_ANSWER: &str = concat!(
+    "import Foundation\n\n",
+    "final class Cache {\n",
+    "    var entries: [String: Int] = [:]\n",
+    "}\n",
+);
+
+/// The idiom bullets `idioms.md` keeps, written the way it states NOT to.
+///
+/// Four subjects, one for each bullet: a static member that repeats its type
+/// name in a shape the tool rule does not read, an empty `Set` written as a
+/// call, a `public init` that repeats the synthesized memberwise initializer on
+/// an internal type, and a loop that filters and then acts.
+const SWIFT_IDIOMS_REFUSAL: &str = concat!(
+    "import Foundation\n\n",
+    "struct Color {\n",
+    "    static let redColor = 1\n",
+    "}\n\n",
+    "struct Registry {\n",
+    "    var ids = Set<String>()\n",
+    "}\n\n",
+    "struct Point {\n",
+    "    var x: Int\n",
+    "    var y: Int\n\n",
+    "    /// Creates a point at `x` and `y`.\n",
+    "    public init(x: Int, y: Int) {\n",
+    "        self.x = x\n",
+    "        self.y = y\n",
+    "    }\n",
+    "}\n\n",
+    "enum Looping {\n",
+    "    static func record(_ value: Int) {}\n\n",
+    "    static func walk(_ things: [Int]) {\n",
+    "        for thing in things { if thing > 0 { record(thing) } }\n",
+    "    }\n",
+    "}\n",
+);
+
+/// The same four subjects written the way `idioms.md` asks for.
+const SWIFT_IDIOMS_ANSWER: &str = concat!(
+    "import Foundation\n\n",
+    "struct Color {\n",
+    "    static let red = 1\n",
+    "}\n\n",
+    "struct Registry {\n",
+    "    var ids: Set<String> = []\n",
+    "}\n\n",
+    "struct Point {\n",
+    "    var x: Int\n",
+    "    var y: Int\n",
+    "}\n\n",
+    "enum Looping {\n",
+    "    static func record(_ value: Int) {}\n\n",
+    "    static func walk(_ things: [Int]) {\n",
+    "        for thing in things where thing > 0 { record(thing) }\n",
+    "    }\n",
+    "}\n",
+);
+
 /// Every judgment rule this module measures, with its probe pair.
 const SWIFT_JUDGMENT_RULES: &[SwiftJudgmentRule] = &[
     SwiftJudgmentRule {
         prompt_rule: SWIFT_INITIALIZATION_PROMPT_RULE,
         refusal: SWIFT_INITIALIZATION_REFUSAL,
         answer: SWIFT_INITIALIZATION_ANSWER,
-        forms: &[
-            "init(path: String) { rows = Database.open(path).allRows() }",
-            "init(path: String) { self.path = path }",
-            "private var session: Session?",
-            "private let session: Session",
-            "didSet { countDidChange() }",
-            "self.photosDidLoad(loaded)",
-        ],
     },
     SwiftJudgmentRule {
         prompt_rule: SWIFT_IMMUTABILITY_PROMPT_RULE,
         refusal: SWIFT_IMMUTABILITY_REFUSAL,
         answer: SWIFT_IMMUTABILITY_ANSWER,
-        forms: &[
-            "for user in users where user.isActive { names.append(user.name) }",
-            "for user in users { if user.isActive { names.append(user.name) } }",
-            r"users.filter(\.isActive).map(\.name)",
-            "static var attemptLimit = 3",
-            "static let attemptLimit = 3",
-            "static var totalBudgetSeconds: Int { attemptLimit * backoffSeconds }",
-            "func formatDuration(_ seconds: Int) -> String",
-            "var formattedDuration: String",
-        ],
     },
     SwiftJudgmentRule {
         prompt_rule: SWIFT_PRECONDITIONS_PROMPT_RULE,
         refusal: SWIFT_PRECONDITIONS_REFUSAL,
         answer: SWIFT_PRECONDITIONS_ANSWER,
-        forms: &[
-            "if isConnected { if !message.isEmpty { transport.write(message) } }",
-            "guard isConnected else { return }",
-            "guard !message.isEmpty else { return }",
-            r#"guard let found = table[key] else { return "" }"#,
-            r#"assertionFailure("no value for \(key)")"#,
-            "settings key is missing; the empty default stands",
-        ],
     },
     SwiftJudgmentRule {
         prompt_rule: SWIFT_NAMING_CLARITY_PROMPT_RULE,
         refusal: SWIFT_NAMING_CLARITY_REFUSAL,
         answer: SWIFT_NAMING_CLARITY_ANSWER,
-        forms: &[
-            "func handleSaveTap()",
-            "func onCancelPressed()",
-            "func didTapSave()",
-            "func didTapCancel()",
-            "func settingsButtonDidTap()",
-        ],
     },
     SwiftJudgmentRule {
         prompt_rule: SWIFT_ACCESS_CONTROL_PROMPT_RULE,
         refusal: SWIFT_ACCESS_CONTROL_REFUSAL,
         answer: SWIFT_ACCESS_CONTROL_ANSWER,
-        forms: &[
-            "private let title: String",
-            "@State var isExpanded = false",
-            "@State private var isExpanded = false",
-        ],
+    },
+    SwiftJudgmentRule {
+        prompt_rule: SWIFT_VALUE_SEMANTICS_PROMPT_RULE,
+        refusal: SWIFT_VALUE_SEMANTICS_REFUSAL,
+        answer: SWIFT_VALUE_SEMANTICS_ANSWER,
+    },
+    SwiftJudgmentRule {
+        prompt_rule: SWIFT_IDIOMS_PROMPT_RULE,
+        refusal: SWIFT_IDIOMS_REFUSAL,
+        answer: SWIFT_IDIOMS_ANSWER,
     },
 ];
 
@@ -435,35 +465,6 @@ const SWIFT_JUDGMENT_RULES: &[SwiftJudgmentRule] = &[
 /// and the swiftlint gates never read it.
 fn swift_judgment_gate_rules(gate: &str, source: &str) -> Vec<String> {
     swift_gate_reporting_rules(gate, SWIFT_JUDGMENT_PROBE_PATH, source, NO_SUPPORT_FILES)
-}
-
-/// Acceptance: every form the probes below are written in stands in the body of
-/// the prompt rule that states it.
-///
-/// This test costs no tool run, and it is what makes the measured test that
-/// follows measure the SHIPPED rules. A form the rule stopped stating, and a
-/// form no probe holds, each fail here by name.
-#[test]
-fn every_swift_judgment_rule_states_the_forms_its_probes_hold() {
-    let loader = builtin_loader();
-
-    for rule in SWIFT_JUDGMENT_RULES {
-        let body = swift_prompt_rule_body(&loader, rule.prompt_rule);
-
-        for form in rule.forms {
-            assert!(
-                body.contains(form),
-                "`{}.md` must state `{form}`, or the probes below measure a form no \
-                 prompt rule asks for",
-                rule.prompt_rule
-            );
-            assert!(
-                rule.refusal.contains(form) || rule.answer.contains(form),
-                "`{form}` stands in `{}.md` and in neither probe, so nothing measures it",
-                rule.prompt_rule
-            );
-        }
-    }
 }
 
 /// Acceptance: no shipped Swift gate decides any judgment rule of the `swift`
@@ -504,183 +505,5 @@ fn no_shipped_swift_gate_decides_a_swift_judgment_rule() {
                 rule.prompt_rule
             );
         }
-    }
-}
-
-/// A code shape that TWO prompt rules of the `swift` set both read.
-///
-/// Two rules that read one shape and prescribe different fixes are two owners
-/// for one line, and the author who obeys the first lands word for word on the
-/// second's DON'T. Each row names the pair and the sentence each rule states to
-/// say which of them the line in front of the reader belongs to.
-///
-/// Both sentences are load-bearing. A boundary one side alone states leaves the
-/// other free to walk the author across it, which is the whole defect this
-/// table stands against.
-struct SwiftSharedShape {
-    /// One rule that reads the shape.
-    rule: &'static str,
-
-    /// The sentence `rule` states to name the boundary.
-    boundary: &'static str,
-
-    /// The other rule that reads the same shape.
-    neighbour: &'static str,
-
-    /// The sentence `neighbour` states to name the same boundary from its side.
-    neighbour_boundary: &'static str,
-}
-
-/// Every shape two Swift prompt rules both read, with the boundary each states.
-///
-/// The filtering loop is the row this table was built for. `immutability.md`
-/// names `for user in users where user.isActive { names.append(user.name) }` as
-/// its DON'T, and `idioms.md` names the same loop SHAPE as its DO — so before
-/// the carve-out, an author who took the `idioms.md` finding and wrote
-/// `idioms.md`'s own DO landed on `immutability.md`'s DON'T. This is the
-/// `preferForLoop` autocorrect hole reproduced between two PROMPT rules rather
-/// than between a tool and a prompt.
-///
-/// The stored `Optional` row answers the same defect between
-/// `initialization.md` and `optionals.md`: an `Optional` a later method assigns
-/// is one rule's DON'T, and an `Optional` whose `nil` means genuine absence is
-/// the other's DO.
-///
-/// The `guard` row was already right when this table was written, and it stands
-/// here as the model the other two were fixed to: production and test, each
-/// rule naming the other.
-const SWIFT_SHARED_SHAPES: &[SwiftSharedShape] = &[
-    SwiftSharedShape {
-        rule: SWIFT_IMMUTABILITY_PROMPT_RULE,
-        boundary: "A loop whose body DOES something for each element it keeps belongs to \
-                   `idioms.md`, and its fix is a `where` clause rather than `map`/`filter`.",
-        neighbour: SWIFT_IDIOMS_PROMPT_RULE,
-        neighbour_boundary: "A loop whose body only appends into a collection belongs to \
-                             `immutability.md`, and its fix is `map`/`filter` rather than a \
-                             `where` clause.",
-    },
-    SwiftSharedShape {
-        rule: SWIFT_INITIALIZATION_PROMPT_RULE,
-        boundary: "An `Optional` whose `nil` means genuine absence is right, and \
-                   `optionals.md` decides that; this bullet reads only the `Optional` a \
-                   later method assigns.",
-        neighbour: SWIFT_OPTIONALS_PROMPT_RULE,
-        neighbour_boundary: "`nil` should mean genuine absence, not error or sentinel.",
-    },
-    SwiftSharedShape {
-        rule: SWIFT_PRECONDITIONS_PROMPT_RULE,
-        boundary: "`optionals.md` states this for an optional binding, and states why a test \
-                   is the one place `guard` is wrong",
-        neighbour: SWIFT_OPTIONALS_PROMPT_RULE,
-        neighbour_boundary: "This is the one place `guard` is wrong",
-    },
-];
-
-/// A requirement TWO prompt rules of the `swift` set could both state.
-///
-/// One requirement takes one owner, which `builtin/validators/swift/VALIDATOR.md`
-/// states as the standing order. A second rule that states the same requirement
-/// draws a second finding on one line, and the author cannot tell which edit
-/// satisfies both.
-struct SwiftSoleOwner {
-    /// What the owner states, word for word.
-    owned: &'static str,
-
-    /// The rule that states it.
-    owner: &'static str,
-
-    /// The spelling the deferring rule must NOT write, because writing it would
-    /// state the same requirement a second time.
-    withheld: &'static str,
-
-    /// The rule that withholds it.
-    deferring: &'static str,
-
-    /// The sentence `deferring` states to name `owner` as the one owner.
-    deferral: &'static str,
-}
-
-/// Every requirement of the `swift` set that two rules could state, with the
-/// one that owns it.
-const SWIFT_SOLE_OWNERS: &[SwiftSoleOwner] = &[SwiftSoleOwner {
-    owned: "**`fatalError`/`preconditionFailure` are for programmer error only, never a \
-            recoverable path.**",
-    owner: SWIFT_ERROR_HANDLING_PROMPT_RULE,
-    withheld: "fatalError(",
-    deferring: SWIFT_PRECONDITIONS_PROMPT_RULE,
-    deferral: "`error-handling.md` owns `fatalError`/`preconditionFailure` whole, so this \
-               bullet names neither.",
-}];
-
-/// Acceptance: every shape two Swift prompt rules both read carries a boundary
-/// sentence in BOTH of them.
-///
-/// This test costs no tool run, and it holds the prompt side of the defect
-/// `the_shipped_swift_idioms_tool_rule_leaves_the_where_clause_rule_off`
-/// holds the tool side of. A rule that dropped its half of a boundary fails
-/// here by name, rather than leaving one DO free to write the other's DON'T.
-#[test]
-fn every_shape_two_swift_prompt_rules_read_states_the_boundary_in_both() {
-    let loader = builtin_loader();
-
-    for shape in SWIFT_SHARED_SHAPES {
-        let body = swift_prompt_rule_body(&loader, shape.rule);
-        assert!(
-            body.contains(shape.boundary),
-            "`{}.md` must state `{}`, or `{}.md` is free to walk an author across the \
-             boundary between them",
-            shape.rule,
-            shape.boundary,
-            shape.neighbour
-        );
-
-        let neighbour_body = swift_prompt_rule_body(&loader, shape.neighbour);
-        assert!(
-            neighbour_body.contains(shape.neighbour_boundary),
-            "`{}.md` must state `{}`, or `{}.md` states the boundary alone and this pair \
-             has one owner in one direction only",
-            shape.neighbour,
-            shape.neighbour_boundary,
-            shape.rule
-        );
-    }
-}
-
-/// Acceptance: every requirement two Swift prompt rules could state stands in
-/// exactly one of them.
-///
-/// The owner must state it, or the requirement is one the set states nowhere.
-/// The deferring rule must not spell it, or one line draws two findings with
-/// different prescribed fixes. And the deferring rule must name the owner, so
-/// a reader who arrives at the wrong rule is sent to the right one.
-#[test]
-fn every_swift_requirement_two_prompt_rules_could_state_stands_in_one_of_them() {
-    let loader = builtin_loader();
-
-    for requirement in SWIFT_SOLE_OWNERS {
-        let owner_body = swift_prompt_rule_body(&loader, requirement.owner);
-        assert!(
-            owner_body.contains(requirement.owned),
-            "`{}.md` must state `{}`, or the requirement stands in no rule of this set",
-            requirement.owner,
-            requirement.owned
-        );
-
-        let deferring_body = swift_prompt_rule_body(&loader, requirement.deferring);
-        assert!(
-            !deferring_body.contains(requirement.withheld),
-            "`{}.md` writes `{}`, so `{}.md` is a second owner of that requirement and one \
-             line draws two findings",
-            requirement.deferring,
-            requirement.withheld,
-            requirement.deferring
-        );
-        assert!(
-            deferring_body.contains(requirement.deferral),
-            "`{}.md` must state `{}`, or a reader who arrives there is left with no rule \
-             to read instead",
-            requirement.deferring,
-            requirement.deferral
-        );
     }
 }

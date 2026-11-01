@@ -113,13 +113,16 @@ const DART_MISSING_DOCS_RULE: &str = missing_docs_rule!(dart);
 /// revive reads, and one holds the run to breaking on a file it cannot parse.
 const GO_MISSING_DOCS_RULE: &str = missing_docs_rule!(go);
 
-/// The shipped missing-docs tool rule for Swift. swiftlint reads the
-/// project's own `.swiftlint.yml` as the parent of the rule's own config, so
-/// five more acceptance tests drive it end to end: one names every line its
-/// fail fixture leaves undocumented, one holds the project's `excluded:` list,
-/// one holds a run whose every file that list excludes, one holds the rule's
-/// own options against a project that states other ones, and one holds the run
-/// to breaking on a file it cannot read.
+/// The shipped missing-docs tool rule for Swift. It runs the toolchain's own
+/// `swift format lint`, with the rule `AllPublicDeclarationsHaveDocumentation`
+/// ON, and keeps only the findings that rule writes. Fourteen acceptance tests
+/// drive it end to end: one names every line its fail fixture leaves
+/// undocumented, one holds its pass fixture to zero findings through the tag
+/// filter, one holds the layout tags out of the report, one holds the rule to
+/// naming only its own rule, one holds a project `.swift-format` out of the
+/// run, one holds the carve-outs `missing-docs.md` states, one holds the
+/// exemption directives, and the rest hold each path the run cannot judge to
+/// one marked line that costs the other files nothing.
 const SWIFT_MISSING_DOCS_RULE: &str = missing_docs_rule!(swift);
 
 /// The shipped missing-docs tool rule for TypeScript and JavaScript. A

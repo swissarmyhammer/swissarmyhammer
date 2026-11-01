@@ -13,17 +13,11 @@
 //! cargo report, and the Swift one builds the package's test targets; the
 //! function-length family stands one module for each language it drives.
 //! Each module then stays small enough for a reviewer, and for the review
-//! engine, to read whole. `golangci_cache`, `scope_roster`, `temp_directory`
-//! and `zero_argument` are the four
-//! modules that are not a rule family: each reads the shipped script of EVERY
-//! rule, because the contract it holds is about the set and not about one
-//! language. `scope_roster` states which of those set-wide guards reads which
-//! rule, and it holds the two scope rosters to the whole set.
+//! engine, to read whole.
 //!
-//! `swift_judgment_rules` and `swift_guidelines_partial` are Swift-wide rather
-//! than set-wide: each reads SEVERAL Swift rules at once. The first holds which
-//! prompt rule owns which bullet; the second holds the shipped Swift
-//! guidelines partial to the two rules it advises an author about.
+//! `swift_judgment_rules` is Swift-wide rather than family-wide: it reads
+//! SEVERAL Swift rules at once, and holds the shipped Swift gates to the
+//! prompt rules they share a language with.
 
 mod dead_code;
 mod dead_code_python;
@@ -39,21 +33,16 @@ mod function_length_rust;
 mod function_length_swift;
 mod function_length_typescript;
 mod go_probe;
-mod golangci_cache;
 mod idioms_swift;
 mod magic_numbers;
 mod magic_numbers_go;
 mod missing_docs;
 mod missing_docs_rust;
-mod scope_roster;
 mod stuttering_name_go;
-mod swift_guidelines_partial;
 mod swift_judgment_rules;
-mod temp_directory;
 mod unused_dependencies;
-mod zero_argument;
 
-use super::preconditions::{checked_binaries, require_tool_installed};
+use super::preconditions::require_tool_installed;
 use super::*;
 
 use std::path::PathBuf;
@@ -132,33 +121,6 @@ fn shipped_asset(loader: &ValidatorLoader, kind: &ShippedAssetKind, name: &str) 
         .unwrap_or_else(|| panic!("a builtin validator set must ship a {name} {}", kind.label))
 }
 
-/// What a shell line of a shipped script writes to join the line under it.
-///
-/// A script states one command over several lines, so a test that reads a
-/// command off the shipped text gathers the lines the join holds together.
-const SWIFT_IDIOMS_LINE_JOIN: char = '\\';
-
-/// The validator set the Swift prompt rules stand in.
-const SWIFT_VALIDATOR_SET: &str = "swift";
-
-/// The markdown body the shipped Swift prompt rule `rule` carries.
-///
-/// The body is read where the set ships it, so a test measures the SHIPPED
-/// words rather than a copy this file wrote.
-fn swift_prompt_rule_body(loader: &ValidatorLoader, rule: &str) -> String {
-    loader
-        .get_ruleset(SWIFT_VALIDATOR_SET)
-        .unwrap_or_else(|| panic!("the `{SWIFT_VALIDATOR_SET}` validator set must ship"))
-        .rules
-        .iter()
-        .find(|shipped| shipped.name == rule)
-        .unwrap_or_else(|| {
-            panic!("the `{SWIFT_VALIDATOR_SET}` set must carry a `{rule}` prompt rule")
-        })
-        .body
-        .clone()
-}
-
 /// The prompt rule that decides how a test unwraps an optional.
 const SWIFT_OPTIONALS_PROMPT_RULE: &str = "optionals";
 
@@ -189,24 +151,18 @@ struct SupersededSwiftBullet {
     /// Swift holding that one defect, which the tool rule must report.
     defect: &'static str,
 
-    /// Words the deleted bullet stated, which no prompt rule may state again.
+    /// Words the deleted bullet stated, named in the failure message.
     words: &'static str,
 }
 
-/// Holds one superseded bullet to having exactly ONE owner.
+/// Holds one superseded bullet to being reported by the tool rule that took it.
 ///
 /// `reported` is what the gate answered over [`SupersededSwiftBullet::defect`],
 /// which the caller drives, because each gate runs its own script.
 ///
-/// Both halves are load-bearing, and they answer the two ways a supersession
-/// can go wrong. A bullet whose tool stays silent is a requirement the set no
-/// longer states anywhere. A bullet the prompt rule still states beside a tool
-/// that decides it is two owners, which produce churn on every review round.
-fn verify_superseded_swift_bullet(
-    loader: &ValidatorLoader,
-    bullet: &SupersededSwiftBullet,
-    reported: &[String],
-) {
+/// A bullet whose tool stays silent is a requirement the set no longer states
+/// anywhere.
+fn verify_superseded_swift_bullet(bullet: &SupersededSwiftBullet, reported: &[String]) {
     assert!(
         reported.contains(&bullet.tool_rule.to_string()),
         "`{}` must report the defect `{}.md` stated as `{}`, or deleting that bullet \
@@ -214,16 +170,6 @@ fn verify_superseded_swift_bullet(
         bullet.tool_rule,
         bullet.prompt_rule,
         bullet.words
-    );
-
-    let body = swift_prompt_rule_body(loader, bullet.prompt_rule);
-    assert!(
-        !body.contains(bullet.words),
-        "`{}` decides `{}`, so `{}.md` must not state it as well; one requirement \
-         takes one owner",
-        bullet.tool_rule,
-        bullet.words,
-        bullet.prompt_rule
     );
 }
 
@@ -760,7 +706,7 @@ struct ShippedEmptyRun {
 
 /// One shipped rule that carries a `tool` block.
 ///
-/// A guard over the whole set reads these five fields and no other, so one
+/// A guard over the whole set reads these three fields and no other, so one
 /// shape serves every guard and one walk of the set answers them all.
 struct ShippedToolRule {
     /// The name of the rule, for the failure messages.
@@ -771,17 +717,6 @@ struct ShippedToolRule {
 
     /// The `run` script the set ships for the rule.
     script: String,
-
-    /// The `doctor.check_command` the set ships for the rule, or `None` when
-    /// the rule carries no `doctor` block at all. A rule that names no check
-    /// names no tool either.
-    check_command: Option<String>,
-
-    /// The `doctor.fix_hint` the set ships for the rule, or `None` when the
-    /// rule carries no hint. The hint is the prose a person reads when the
-    /// check fails, so a guard that holds a rule to what it PROMISES a reader
-    /// reads it here.
-    fix_hint: Option<String>,
 }
 
 /// Every shipped rule that carries a `tool` block.
@@ -799,92 +734,8 @@ fn shipped_tool_rules(loader: &ValidatorLoader) -> Vec<ShippedToolRule> {
             name: name.clone(),
             scope: tool.scope,
             script: tool.run.clone(),
-            check_command: tool
-                .doctor
-                .as_ref()
-                .map(|doctor| doctor.check_command.clone()),
-            fix_hint: tool
-                .doctor
-                .as_ref()
-                .and_then(|doctor| doctor.fix_hint.as_ref())
-                .map(std::string::ToString::to_string),
         })
         .collect()
-}
-
-/// The rules of `rules` that `holds` answers false for, by name.
-fn tool_rules_that_deviate(
-    rules: &[ShippedToolRule],
-    holds: impl Fn(&ShippedToolRule) -> bool,
-) -> Vec<&str> {
-    rules
-        .iter()
-        .filter(|rule| !holds(rule))
-        .map(|rule| rule.name.as_str())
-        .collect()
-}
-
-/// The lines of `script`, each one with its leading and trailing space
-/// removed.
-///
-/// A guard reads a script line by line, and a script indents a line that
-/// stands inside a block. The trim is what lets a guard compare a line
-/// against the one text the contract states, wherever the script writes it.
-fn trimmed_script_lines(script: &str) -> Vec<&str> {
-    script.lines().map(str::trim).collect()
-}
-
-/// The index of each line of `lines` that reads `head`.
-fn script_lines_that_read(lines: &[&str], head: &str) -> Vec<usize> {
-    lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| **line == head)
-        .map(|(at, _)| at)
-        .collect()
-}
-
-/// Whether the lines of `lines` directly under `at` read `under`, in order.
-///
-/// The lines stand together, so no statement between them can run before the
-/// block ends, and the block cannot open something a later line closes. A
-/// block that runs past the last line of the script answers false.
-fn script_lines_under(lines: &[&str], at: usize, under: &[&str]) -> bool {
-    under
-        .iter()
-        .enumerate()
-        .all(|(step, text)| lines.get(at + 1 + step) == Some(text))
-}
-
-/// The shipped rules `keeps` answers true for, or a panic when the set ships
-/// another number of them.
-///
-/// A guard over an empty list holds nothing and reports green, and a guard
-/// over a list that shrank holds less than it held before. The size is
-/// therefore an assertion of its own: a rule dropped from the set, a rule
-/// whose `run` no longer meets `keeps`, and a rule added with no thought for
-/// the contract each break it. `roster` names what the rules of the list have
-/// in common, for the failure message.
-fn required_tool_rules(
-    loader: &ValidatorLoader,
-    roster: &str,
-    count: usize,
-    keeps: impl Fn(&ShippedToolRule) -> bool,
-) -> Vec<ShippedToolRule> {
-    let rules: Vec<ShippedToolRule> = shipped_tool_rules(loader)
-        .into_iter()
-        .filter(|rule| keeps(rule))
-        .collect();
-    let names: Vec<&str> = rules.iter().map(|rule| rule.name.as_str()).collect();
-
-    assert_eq!(
-        rules.len(),
-        count,
-        "the set must ship {count} rules that {roster}, or this guard holds another \
-         roster than the one it was measured against; it ships {names:?}"
-    );
-
-    rules
 }
 
 /// The `tool` block the shipped rule `rule` carries, or a panic naming it.

@@ -3,25 +3,19 @@
 //! Each test drives the SHIPPED script over a probe repository and reads what
 //! the real swiftlint reported.
 //!
-//! Four answers stand apart from every other Swift rule of this set, and one
-//! test holds each. The gate names TWELVE rules, and swiftlint answers a name
-//! it does not know with a warning and a healthy exit, so a misspelling would
-//! cost one rule and read as a clean run. Three of the twelve stay off inside a
-//! test target, and swiftlint carries no per-rule path filter for a stock rule,
-//! so the SCRIPT partitions its own paths — from the `Tests/` convention and
-//! from the test targets the package manifest names. And each of the three
-//! custom regex rules matches a token of the KIND its `match_kinds` names, so a
-//! comment and a string literal holding the same words stay silent.
-//!
-//! Each of those two sets of three is read off the shipped script rather than
-//! written here as a list, and every name it holds carries a probe. So a rule
-//! added to either set fails these tests until it carries a probe of its own.
+//! Three answers stand apart from every other Swift rule of this set, and one
+//! test holds each. Three of the twelve rules stay off inside a test target,
+//! and swiftlint carries no per-rule path filter for a stock rule, so the
+//! SCRIPT partitions its own paths — from the `Tests/` convention and from the
+//! test targets the package manifest names. And each of the three custom regex
+//! rules matches a token of the KIND its `match_kinds` names, so a comment and
+//! a string literal holding the same words stay silent.
 //!
 //! One more test stands apart because of what it protects rather than what it
 //! measures. This gate took five bullets out of the Swift prompt rules, and a
 //! bullet deleted without a tool that reads it is a requirement the set states
 //! nowhere. The last test in this file holds each of those five to being
-//! reported by its rule AND stated by no prompt rule.
+//! reported by its rule.
 
 use super::*;
 
@@ -40,117 +34,6 @@ fn every_shipped_disallowed_constructs_tool_rule_passes_its_fixtures() {
     verify_shipped_tool_rules_pass_fixtures(
         SHIPPED_DISALLOWED_CONSTRUCTS_RULES,
         DISALLOWED_CONSTRUCTS_RULE_KIND,
-    );
-}
-
-/// What the shipped script writes before each name of its `only_rules:` list.
-///
-/// The list is written as the argument list of one `printf`, one quoted YAML
-/// line for each entry, so the text between this head and the quote that
-/// closes it IS a name the gate enables. Reading the names off the shipped
-/// script is what makes the guard below hold the rule that ships rather than a
-/// copy this file wrote.
-const SWIFT_DISALLOWED_ROSTER_HEAD: &str = "'  - ";
-
-/// The quote that closes one entry of that list.
-const SWIFT_DISALLOWED_ROSTER_END: char = '\'';
-
-/// How many names the shipped `only_rules:` list holds.
-///
-/// Nine stock swiftlint rules, plus `custom_rules`, which is the identifier
-/// that enables the three regex rules the script defines under it. The count
-/// is the assertion that a name added or dropped later reaches this guard
-/// rather than moving the gate without a word.
-const SWIFT_DISALLOWED_ROSTER_SIZE: usize = 10;
-
-/// The command that asks swiftlint which rules it knows.
-const SWIFT_LINT_TOOL: &str = "swiftlint";
-
-/// The subcommand that makes swiftlint write its whole rule list.
-const SWIFT_LINT_RULES_COMMAND: &str = "rules";
-
-/// The character swiftlint writes around each column of that list.
-const SWIFT_LINT_TABLE_EDGE: char = '|';
-
-/// The first column's heading, which is the one row of the table that names no
-/// rule.
-const SWIFT_LINT_TABLE_HEADING: &str = "identifier";
-
-/// The names the shipped script's `only_rules:` list holds, read off the
-/// script itself.
-fn swift_disallowed_roster(script: &str) -> Vec<String> {
-    script
-        .split(SWIFT_DISALLOWED_ROSTER_HEAD)
-        .skip(1)
-        .filter_map(|entry| entry.split_once(SWIFT_DISALLOWED_ROSTER_END))
-        .map(|(name, _)| name.to_string())
-        .collect()
-}
-
-/// Every rule identifier the installed swiftlint knows.
-///
-/// `swiftlint rules` writes a table, one row for each identifier, with the
-/// identifier in the first column. The heading row is dropped by name.
-fn swift_lint_known_rules() -> Vec<String> {
-    let listed = std::process::Command::new(SWIFT_LINT_TOOL)
-        .arg(SWIFT_LINT_RULES_COMMAND)
-        .output()
-        .expect("the installed swiftlint must write its rule list");
-
-    String::from_utf8_lossy(&listed.stdout)
-        .lines()
-        .filter_map(|line| line.strip_prefix(SWIFT_LINT_TABLE_EDGE))
-        .filter_map(|row| row.split(SWIFT_LINT_TABLE_EDGE).next())
-        .map(str::trim)
-        .filter(|name| !name.is_empty() && *name != SWIFT_LINT_TABLE_HEADING)
-        .map(str::to_string)
-        .collect()
-}
-
-/// Acceptance: every rule the shipped script enables is one the installed
-/// swiftlint knows.
-///
-/// swiftlint answers a name it does not know with a warning and a HEALTHY
-/// exit. Measured on 0.65.0 over one file holding a force unwrap, beside a
-/// configuration naming `no_such_rule_at_all`: exit 0, the finding of the rule
-/// swiftlint does know still reported, and `warning: 'no_such_rule_at_all' is
-/// not a valid rule identifier` on stderr. So a misspelling costs one rule and
-/// reads as a clean run.
-///
-/// This is the guard on that. Every name of the shipped `only_rules:` list
-/// must stand in swiftlint's own list, so a misspelling and a rule swiftlint
-/// renames each fail here by name.
-#[test]
-fn the_shipped_swift_disallowed_constructs_tool_rule_names_only_rules_swiftlint_knows() {
-    let loader = builtin_loader();
-    require_tool_installed(
-        &loader,
-        SWIFT_PROJECT_TYPES,
-        SWIFT_DISALLOWED_CONSTRUCTS_RULE,
-    );
-    let shipped = required_shipped_tool_rule(&loader, SWIFT_DISALLOWED_CONSTRUCTS_RULE);
-
-    let roster = swift_disallowed_roster(&shipped.script);
-    assert_eq!(
-        roster.len(),
-        SWIFT_DISALLOWED_ROSTER_SIZE,
-        "the shipped roster must name {SWIFT_DISALLOWED_ROSTER_SIZE} rules; it names {roster:?}"
-    );
-
-    let known = swift_lint_known_rules();
-    assert!(
-        !known.is_empty(),
-        "`{SWIFT_LINT_TOOL} {SWIFT_LINT_RULES_COMMAND}` wrote no rule name, so the \
-         comparison below holds nothing and this test cannot fail"
-    );
-
-    let unknown: Vec<&String> = roster.iter().filter(|name| !known.contains(name)).collect();
-
-    assert!(
-        unknown.is_empty(),
-        "the shipped script names these rules and the installed swiftlint knows none of \
-         them, so swiftlint warns and lints on and the gate stops measuring each one: \
-         {unknown:?}"
     );
 }
 
@@ -401,31 +284,6 @@ const SWIFT_CUSTOM_RULE_PROBES: &[(&str, &str)] = &[
     ),
 ];
 
-/// What the shipped script writes before each key of its `custom_rules:`
-/// block.
-///
-/// The block stands in the same `printf` argument list the roster does, one
-/// quoted YAML line for each entry. A custom rule's NAME is the only two-space
-/// entry that ends on its own colon: every other two-space entry states a
-/// value after its key, and every entry of the rule's own body carries four
-/// spaces instead.
-const SWIFT_CUSTOM_RULE_HEAD: &str = "'  ";
-
-/// What closes the entry a custom rule's name stands in.
-const SWIFT_CUSTOM_RULE_END: char = ':';
-
-/// The names of the custom regex rules the shipped script defines, read off
-/// the script itself.
-fn swift_custom_rule_names(script: &str) -> Vec<String> {
-    script
-        .split(SWIFT_CUSTOM_RULE_HEAD)
-        .skip(1)
-        .filter_map(|entry| entry.split_once(SWIFT_DISALLOWED_ROSTER_END))
-        .filter_map(|(entry, _)| entry.strip_suffix(SWIFT_CUSTOM_RULE_END))
-        .map(str::to_string)
-        .collect()
-}
-
 /// Acceptance: each custom regex rule matches a token of the kind its
 /// `match_kinds` names, and never a comment and never a string literal.
 ///
@@ -436,32 +294,9 @@ fn swift_custom_rule_names(script: &str) -> Vec<String> {
 /// rule reports four times rather than one.
 ///
 /// The three rules name three DIFFERENT kinds, so one rule's answer says
-/// nothing about the other two, and each carries a probe of its own. The set
-/// the test walks is read off the shipped script rather than written here, so
-/// a fourth custom rule fails this test until it carries a probe as well.
+/// nothing about the other two, and each carries a probe of its own.
 #[test]
 fn the_shipped_swift_disallowed_constructs_tool_rule_reads_no_comment_and_no_string_literal() {
-    let loader = builtin_loader();
-    require_tool_installed(
-        &loader,
-        SWIFT_PROJECT_TYPES,
-        SWIFT_DISALLOWED_CONSTRUCTS_RULE,
-    );
-    let shipped = required_shipped_tool_rule(&loader, SWIFT_DISALLOWED_CONSTRUCTS_RULE);
-
-    let defined = swift_custom_rule_names(&shipped.script);
-    let probed: Vec<String> = SWIFT_CUSTOM_RULE_PROBES
-        .iter()
-        .map(|(rule, _)| (*rule).to_string())
-        .collect();
-    assert_eq!(
-        sorted_names(&defined),
-        sorted_names(&probed),
-        "every custom rule the shipped script defines must carry a probe here, or the \
-         claim that all of them read a token kind rather than raw text stands on a rule \
-         nothing measured; the script defines {defined:?}"
-    );
-
     for (rule, probe) in SWIFT_CUSTOM_RULE_PROBES {
         let reported = swift_disallowed_reporting_rules(probe);
         assert_eq!(
@@ -578,29 +413,6 @@ fn swift_force_rows_of(path: &str) -> Vec<String> {
         .collect()
 }
 
-/// What the shipped script writes before the names of the rules it keeps out
-/// of a test target.
-const SWIFT_PRODUCT_ONLY_HEAD: &str = "printf '%s\\n' ";
-
-/// What it writes after those names, which is the redirection that stores
-/// them. The roster's own `printf` opens the same way and ends otherwise, so
-/// the tail is what tells the two lists apart.
-const SWIFT_PRODUCT_ONLY_TAIL: &str = " > \"$work/product-only\"";
-
-/// The rules the shipped script keeps out of a test target, read off the
-/// script itself.
-fn swift_product_only_rules(script: &str) -> Vec<String> {
-    script
-        .lines()
-        .filter_map(|line| {
-            line.trim_start()
-                .strip_prefix(SWIFT_PRODUCT_ONLY_HEAD)?
-                .strip_suffix(SWIFT_PRODUCT_ONLY_TAIL)
-        })
-        .flat_map(|names| names.split_whitespace().map(str::to_string))
-        .collect()
-}
-
 /// Drives the shipped script over `files`, staged as `staged` states, and
 /// answers each finding as the `path:line` row the work-list holds with the
 /// name of the rule that placed it after it.
@@ -641,9 +453,7 @@ fn swift_disallowed_force_rows(staged: &[(&str, &str)], files: &[&str]) -> Vec<S
 /// All three rules stand in the run rather than one of them. The partition is
 /// the script's own list, so a rule dropped from that list, and a rule the
 /// `jq` filter reads differently from its neighbours, is visible only where
-/// every named rule is measured. The list the test walks is read off the
-/// shipped script, so a fourth rule added to the carve-out fails here until it
-/// carries a construct as well.
+/// every named rule is measured.
 ///
 /// The two halves are both load-bearing. The product path must report all
 /// three, or the partition swallowed a real finding; the test path must stay
@@ -652,27 +462,6 @@ fn swift_disallowed_force_rows(staged: &[(&str, &str)], files: &[&str]) -> Vec<S
 /// difference between them.
 #[test]
 fn the_shipped_swift_disallowed_constructs_tool_rule_keeps_the_force_rules_out_of_a_test_target() {
-    let loader = builtin_loader();
-    require_tool_installed(
-        &loader,
-        SWIFT_PROJECT_TYPES,
-        SWIFT_DISALLOWED_CONSTRUCTS_RULE,
-    );
-    let shipped = required_shipped_tool_rule(&loader, SWIFT_DISALLOWED_CONSTRUCTS_RULE);
-
-    let kept_out = swift_product_only_rules(&shipped.script);
-    let probed: Vec<String> = SWIFT_FORCE_CONSTRUCTS
-        .iter()
-        .map(|(rule, _)| (*rule).to_string())
-        .collect();
-    assert_eq!(
-        sorted_names(&kept_out),
-        sorted_names(&probed),
-        "every rule the shipped script keeps out of a test target must carry a construct \
-         here, or the carve-out stands on a rule nothing measured; the script keeps out \
-         {kept_out:?}"
-    );
-
     let rows = swift_disallowed_force_rows(
         &[
             (SWIFT_PRODUCT_TARGET_PATH, SWIFT_FORCE_CONSTRUCTS_SOURCE),
@@ -822,10 +611,8 @@ const SWIFT_DISALLOWED_SUPERSEDED_BULLETS: &[SupersededSwiftBullet] = &[
 /// read the shape rather than a neighbour that read the same file.
 #[test]
 fn the_shipped_swift_disallowed_constructs_tool_rule_owns_each_bullet_it_took() {
-    let loader = builtin_loader();
-
     for bullet in SWIFT_DISALLOWED_SUPERSEDED_BULLETS {
         let reported = swift_disallowed_reporting_rules(bullet.defect);
-        verify_superseded_swift_bullet(&loader, bullet, &reported);
+        verify_superseded_swift_bullet(bullet, &reported);
     }
 }

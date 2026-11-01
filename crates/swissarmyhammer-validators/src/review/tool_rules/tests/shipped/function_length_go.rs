@@ -21,7 +21,6 @@ use super::go_probe::{
     GO_PACKAGE_CLAUSE, GO_TOOL_BINARY_NAME, GO_UNPARSABLE_PATH, GO_UNPARSABLE_SOURCE,
     GO_UNREADABLE_PATH, GO_UNREADABLE_SOURCE,
 };
-use super::golangci_cache::GOLANGCI_CACHE_DIRECTORY;
 
 /// The statement gate the shipped rule states.
 ///
@@ -870,6 +869,10 @@ fn unique_cache_name(role: &str) -> Result<String, SystemTimeError> {
         stamp.as_nanos()
     ))
 }
+
+/// The one directory of `TMPDIR` every golangci-lint cache of this set stands
+/// under.
+const GOLANGCI_CACHE_DIRECTORY: &str = "sah-golangci-lint";
 
 /// Makes a cache directory named `name` under the one cache parent, aged so
 /// that nothing has touched it for `age_days`, and answers its path.

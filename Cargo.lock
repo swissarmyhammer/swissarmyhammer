@@ -6953,7 +6953,6 @@ dependencies = [
  "swissarmyhammer-build",
  "swissarmyhammer-code-context",
  "swissarmyhammer-common",
- "swissarmyhammer-config",
  "swissarmyhammer-directory",
  "swissarmyhammer-doctor",
  "swissarmyhammer-git",

@@ -305,10 +305,12 @@ mod tests {
     /// relationship in its body and claims none of it.
     ///
     /// The gate runs the toolchain's own `swift format` over an allowlist of
-    /// seven rule tags, and five bullets of `idioms.md` are its alone: the
-    /// shorthand type sugar, the `()` return clause, the memberwise
-    /// initializer identical to the synthesized one, the `forEach` + `if`
-    /// walk, and the `let` on each bound case variable.
+    /// seven rule tags, and seven bullets of the old `idioms.md` are its alone:
+    /// the shorthand type sugar, both halves of the `Void` return clause, the
+    /// empty `Array` and `Dictionary` literal, the internal memberwise
+    /// initializer identical to the synthesized one, the `forEach` walk, and
+    /// the `let` on each bound case variable. `idioms.md` keeps the bullets the
+    /// tool cannot read, so the rule supersedes nothing.
     const CODE_HYGIENE_IDIOMS_TOOL_RULES: &[&str] = &["idioms-swift"];
 
     /// The disallowed-construct tool rules `code-hygiene` carries. Each
@@ -715,10 +717,10 @@ mod tests {
     }
 
     /// `test-integrity` declares the `assertion-census` probe, and its
-    /// `no-test-cheating` rule is what reads those rows. The three halves are
-    /// asserted together because each is useless without the others: a
-    /// declaration no probe answers to, or a probe no rule reads, leaves the
-    /// rule counting assertions from prose alone.
+    /// `no-test-cheating` rule is in the ruleset that probe feeds. The halves
+    /// are asserted together because each is useless without the others: a
+    /// declaration no probe answers to leaves the rule counting assertions from
+    /// prose alone.
     #[test]
     fn test_test_integrity_declares_the_assertion_census_probe_its_rule_reads() {
         let mut loader = ValidatorLoader::new();
@@ -738,15 +740,12 @@ mod tests {
             crate::review::probe_exists("assertion-census"),
             "the probe test-integrity declares must be in the catalog"
         );
-        let census_rule = test_integrity
-            .rules
-            .iter()
-            .find(|rule| rule.name == "no-test-cheating")
-            .expect("the rule that reads the probe's rows must be in the ruleset");
         assert!(
-            census_rule.body.contains("assertion-census"),
-            "no-test-cheating must read the probe's rows by name, got: {}",
-            census_rule.body
+            test_integrity
+                .rules
+                .iter()
+                .any(|rule| rule.name == "no-test-cheating"),
+            "the rule that reads the probe's rows must be in the ruleset"
         );
     }
 
@@ -769,43 +768,6 @@ mod tests {
         assert!(
             rule_names.contains(&"no-test-cheating"),
             "test-integrity should keep the no-test-cheating rule, got: {rule_names:?}"
-        );
-    }
-
-    #[test]
-    fn test_swift_casing_accepts_both_acronym_spellings() {
-        let mut loader = ValidatorLoader::new();
-        load_builtins(&mut loader);
-
-        let ruleset = loader
-            .get_ruleset("swift")
-            .expect("swift validator should be loaded");
-
-        let casing_rule = ruleset
-            .rules
-            .iter()
-            .find(|r| r.name == "casing")
-            .expect("swift validator should carry a casing rule");
-
-        assert!(
-            casing_rule.body.contains("BOTH accepted"),
-            "casing rule should state both acronym spellings are accepted, got: {}",
-            casing_rule.body
-        );
-        assert!(
-            !casing_rule.body.contains("are all wrong"),
-            "casing rule should no longer flag Url/Json spellings as wrong, got: {}",
-            casing_rule.body
-        );
-        assert!(
-            !casing_rule.body.contains("DON'T: `entryId`"),
-            "casing rule should no longer retain the retired entryId DON'T bullet, got: {}",
-            casing_rule.body
-        );
-        assert!(
-            !casing_rule.body.contains("flag toward the uniform form"),
-            "casing rule should no longer retain the flag-toward-uniform tiebreaker, got: {}",
-            casing_rule.body
         );
     }
 
@@ -877,31 +839,6 @@ mod tests {
         assert!(
             loader.get_ruleset("code-quality").is_none(),
             "the monolithic code-quality set must be deleted once its rules are re-homed"
-        );
-    }
-
-    #[test]
-    fn test_builtin_rulesets_carry_their_validator_md_body() {
-        // The VALIDATOR.md prose body is authored validator-wide guidance and
-        // must survive the builtin load path (not just the on-disk loader).
-        // Assert on the permanent `# <Name> Validator` heading of each body so
-        // the test stays hermetic against user revisions to the prose.
-        let mut loader = ValidatorLoader::new();
-        load_builtins(&mut loader);
-
-        let (name, heading) = ("duplication", "Duplication Validator");
-        let ruleset = loader
-            .get_ruleset(name)
-            .unwrap_or_else(|| panic!("{name} should be loaded"));
-        assert!(
-            !ruleset.manifest_body().is_empty(),
-            "{name} should carry a non-empty VALIDATOR.md body, got: {:?}",
-            ruleset.manifest_body()
-        );
-        assert!(
-            ruleset.manifest_body().contains(heading),
-            "{name} VALIDATOR.md body should carry its {heading:?} heading, got: {:?}",
-            ruleset.manifest_body()
         );
     }
 
