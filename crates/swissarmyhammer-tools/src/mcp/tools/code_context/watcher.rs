@@ -477,20 +477,15 @@ mod tests {
         .unwrap();
     }
 
-    /// Query the ts_indexed flag for a file.
-    fn get_ts_indexed(conn: &Connection, path: &str) -> Option<i64> {
-        conn.query_row(
-            "SELECT ts_indexed FROM indexed_files WHERE file_path = ?1",
-            [path],
-            |r| r.get(0),
-        )
-        .ok()
-    }
+    /// Column holding the tree-sitter indexed flag in `indexed_files`.
+    const TS_INDEXED: &str = "ts_indexed";
+    /// Column holding the LSP indexed flag in `indexed_files`.
+    const LSP_INDEXED: &str = "lsp_indexed";
 
-    /// Query the lsp_indexed flag for a file.
-    fn get_lsp_indexed(conn: &Connection, path: &str) -> Option<i64> {
+    /// Query one indexed flag column (`ts_indexed` or `lsp_indexed`) for a file.
+    fn get_indexed_flag(conn: &Connection, path: &str, column: &str) -> Option<i64> {
         conn.query_row(
-            "SELECT lsp_indexed FROM indexed_files WHERE file_path = ?1",
+            &format!("SELECT {column} FROM indexed_files WHERE file_path = ?1"),
             [path],
             |r| r.get(0),
         )
@@ -650,7 +645,10 @@ mod tests {
         assert_eq!(result.dirty_count, 1);
         assert_eq!(count_rows(&conn, "indexed_files"), 1);
         assert!(!file_exists(&conn, ".build/checkouts/X/Sources/a.swift"));
-        assert_eq!(get_ts_indexed(&conn, "Sources/a.swift"), Some(0));
+        assert_eq!(
+            get_indexed_flag(&conn, "Sources/a.swift", TS_INDEXED),
+            Some(0)
+        );
     }
 
     /// An event for a path that `.gitignore` lists adds no row. A directory
@@ -721,7 +719,7 @@ mod tests {
         let conn = test_db();
         process_file_events(&conn, &FanoutWatcher::new(), &events);
         assert_eq!(count_rows(&conn, "indexed_files"), 1);
-        assert_eq!(get_ts_indexed(&conn, "src/a.rs"), Some(0));
+        assert_eq!(get_indexed_flag(&conn, "src/a.rs", TS_INDEXED), Some(0));
     }
 
     /// An event for a path outside the root and outside the canonical root
@@ -772,8 +770,8 @@ mod tests {
         insert_indexed_file(&conn, "src/main.rs");
 
         // File starts fully indexed
-        assert_eq!(get_ts_indexed(&conn, "src/main.rs"), Some(1));
-        assert_eq!(get_lsp_indexed(&conn, "src/main.rs"), Some(1));
+        assert_eq!(get_indexed_flag(&conn, "src/main.rs", TS_INDEXED), Some(1));
+        assert_eq!(get_indexed_flag(&conn, "src/main.rs", LSP_INDEXED), Some(1));
 
         let watcher = FanoutWatcher::new();
         let events = vec![FileEvent::Modified(PathBuf::from("src/main.rs"))];
@@ -784,8 +782,8 @@ mod tests {
         assert_eq!(result.error_count, 0);
 
         // Both indexed flags should now be 0
-        assert_eq!(get_ts_indexed(&conn, "src/main.rs"), Some(0));
-        assert_eq!(get_lsp_indexed(&conn, "src/main.rs"), Some(0));
+        assert_eq!(get_indexed_flag(&conn, "src/main.rs", TS_INDEXED), Some(0));
+        assert_eq!(get_indexed_flag(&conn, "src/main.rs", LSP_INDEXED), Some(0));
     }
 
     #[test]
@@ -827,8 +825,14 @@ mod tests {
 
         // The row exists and is marked dirty.
         assert!(file_exists(&conn, "src/new_file.rs"));
-        assert_eq!(get_ts_indexed(&conn, "src/new_file.rs"), Some(0));
-        assert_eq!(get_lsp_indexed(&conn, "src/new_file.rs"), Some(0));
+        assert_eq!(
+            get_indexed_flag(&conn, "src/new_file.rs", TS_INDEXED),
+            Some(0)
+        );
+        assert_eq!(
+            get_indexed_flag(&conn, "src/new_file.rs", LSP_INDEXED),
+            Some(0)
+        );
     }
 
     #[test]
@@ -851,8 +855,8 @@ mod tests {
         assert_eq!(result.error_count, 0);
 
         // a.rs and b.rs should be dirty
-        assert_eq!(get_ts_indexed(&conn, "src/a.rs"), Some(0));
-        assert_eq!(get_ts_indexed(&conn, "src/b.rs"), Some(0));
+        assert_eq!(get_indexed_flag(&conn, "src/a.rs", TS_INDEXED), Some(0));
+        assert_eq!(get_indexed_flag(&conn, "src/b.rs", TS_INDEXED), Some(0));
 
         // c.rs should be gone entirely
         assert!(!file_exists(&conn, "src/c.rs"));
@@ -869,13 +873,13 @@ mod tests {
         let events = vec![FileEvent::Modified(PathBuf::from("src/main.rs"))];
         let r1 = process_file_events(&conn, &watcher, &events);
         assert_eq!(r1.dirty_count, 1);
-        assert_eq!(get_ts_indexed(&conn, "src/main.rs"), Some(0));
+        assert_eq!(get_indexed_flag(&conn, "src/main.rs", TS_INDEXED), Some(0));
 
         // Second modify — file is already dirty, UPDATE still runs but changes 0→0
         let r2 = process_file_events(&conn, &watcher, &events);
         assert_eq!(r2.dirty_count, 1); // UPDATE matched 1 row
         assert_eq!(r2.error_count, 0);
-        assert_eq!(get_ts_indexed(&conn, "src/main.rs"), Some(0));
+        assert_eq!(get_indexed_flag(&conn, "src/main.rs", TS_INDEXED), Some(0));
     }
 
     #[test]
@@ -890,7 +894,7 @@ mod tests {
 
         // keep.rs should be untouched
         assert!(file_exists(&conn, "src/keep.rs"));
-        assert_eq!(get_ts_indexed(&conn, "src/keep.rs"), Some(1));
+        assert_eq!(get_indexed_flag(&conn, "src/keep.rs", TS_INDEXED), Some(1));
 
         // remove.rs should be gone
         assert!(!file_exists(&conn, "src/remove.rs"));
@@ -909,7 +913,7 @@ mod tests {
         assert_eq!(result.error_count, 0);
 
         // Nothing should have changed
-        assert_eq!(get_ts_indexed(&conn, "src/main.rs"), Some(1));
+        assert_eq!(get_indexed_flag(&conn, "src/main.rs", TS_INDEXED), Some(1));
     }
 
     #[test]
@@ -1017,7 +1021,7 @@ mod tests {
             "new file created after startup must be inserted into indexed_files"
         );
         assert_eq!(
-            get_ts_indexed(&conn, "src/created_after_start.rs"),
+            get_indexed_flag(&conn, "src/created_after_start.rs", TS_INDEXED),
             Some(1),
             "new file must be tree-sitter indexed"
         );
@@ -1077,7 +1081,7 @@ mod tests {
         {
             let conn = db.lock().unwrap();
             assert_eq!(
-                get_ts_indexed(&conn, "src/existing.rs"),
+                get_indexed_flag(&conn, "src/existing.rs", TS_INDEXED),
                 Some(1),
                 "existing file should be indexed after the initial reconcile"
             );
@@ -1117,7 +1121,7 @@ mod tests {
             "new file with no watcher event must be reconciled into indexed_files"
         );
         assert_eq!(
-            get_ts_indexed(&conn, "src/never_announced.rs"),
+            get_indexed_flag(&conn, "src/never_announced.rs", TS_INDEXED),
             Some(1),
             "new file must be tree-sitter indexed by the periodic reconcile"
         );
@@ -1131,7 +1135,7 @@ mod tests {
         assert!(new_chunks > 0, "new file must produce ts_chunks");
 
         assert_eq!(
-            get_ts_indexed(&conn, "src/existing.rs"),
+            get_indexed_flag(&conn, "src/existing.rs", TS_INDEXED),
             Some(1),
             "recreated file must be re-indexed by the periodic reconcile"
         );
@@ -1164,8 +1168,14 @@ mod tests {
         let events = vec![FileEvent::Modified(PathBuf::from("src/partial.rs"))];
         process_file_events(&conn, &watcher, &events);
 
-        assert_eq!(get_ts_indexed(&conn, "src/partial.rs"), Some(0));
-        assert_eq!(get_lsp_indexed(&conn, "src/partial.rs"), Some(0));
+        assert_eq!(
+            get_indexed_flag(&conn, "src/partial.rs", TS_INDEXED),
+            Some(0)
+        );
+        assert_eq!(
+            get_indexed_flag(&conn, "src/partial.rs", LSP_INDEXED),
+            Some(0)
+        );
     }
 
     /// Driving `reconcile_workspace_with_embedder` with the shutdown flag
@@ -1219,7 +1229,7 @@ mod tests {
         // ...but the indexer's step-down break must have left it un-indexed:
         // ts_indexed still 0 and no chunks written.
         assert_eq!(
-            get_ts_indexed(&conn, "src/never_announced.rs"),
+            get_indexed_flag(&conn, "src/never_announced.rs", TS_INDEXED),
             Some(0),
             "with the shutdown flag set, the indexer must break before flipping \
              ts_indexed, leaving the file dirty"

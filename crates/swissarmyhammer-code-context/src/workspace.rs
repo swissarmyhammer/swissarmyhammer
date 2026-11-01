@@ -114,6 +114,19 @@ impl CodeContextWorkspace {
     /// - Opens the database in WAL mode
     /// - Creates the schema if leader
     pub fn open(workspace_root: &Path) -> Result<Self, CodeContextError> {
+        Self::open_with_contention(workspace_root, may_contend_for_leadership())
+    }
+
+    /// Open the workspace with the leadership policy given by the caller.
+    ///
+    /// `may_contend` is the subagent-gating decision. `false` elects this
+    /// process as a follower only. [`Self::open`] reads the decision from the
+    /// environment; tests pass it here so they never change the process
+    /// environment that parallel tests read.
+    fn open_with_contention(
+        workspace_root: &Path,
+        may_contend: bool,
+    ) -> Result<Self, CodeContextError> {
         let context_dir = workspace_root.join(CONTEXT_DIR);
 
         // Ensure directory exists
@@ -142,7 +155,7 @@ impl CodeContextWorkspace {
         // it is elected follower-only — it never wins the flock even on an empty
         // workspace. Default policy permits contention (see
         // `may_contend_for_leadership`).
-        let outcome = if may_contend_for_leadership() {
+        let outcome = if may_contend {
             election.elect()
         } else {
             tracing::info!(
@@ -1271,25 +1284,17 @@ mod tests {
     }
 
     /// A process forbidden from contending (SAH_SUBAGENT=1) must NOT become the
-    /// leader even on an empty workspace where it would otherwise win. The env
-    /// var is set, the workspace opened, asserted, and the var removed all
-    /// inline so this does not leak global env state to parallel tests.
+    /// leader even on an empty workspace where it would otherwise win. The
+    /// policy is passed in directly, so the test never mutates the process
+    /// environment and cannot turn a parallel test's `open` into a follower.
     #[test]
     fn test_subagent_opens_as_follower_only() {
         let dir = tempfile::tempdir().unwrap();
         // A normal (allowed) process is the real leader and creates the DB.
         let _leader = CodeContextWorkspace::open(dir.path()).unwrap();
 
-        let prior = std::env::var("SAH_SUBAGENT").ok();
-        std::env::set_var("SAH_SUBAGENT", "1");
-        let ws = CodeContextWorkspace::open(dir.path());
-        // Restore env before asserting so a panic does not leak it.
-        match prior {
-            Some(v) => std::env::set_var("SAH_SUBAGENT", v),
-            None => std::env::remove_var("SAH_SUBAGENT"),
-        }
-
-        let ws = ws.expect("follower-only open should still succeed");
+        let ws = CodeContextWorkspace::open_with_contention(dir.path(), false)
+            .expect("follower-only open should still succeed");
         assert!(
             !ws.is_leader(),
             "a SAH_SUBAGENT=1 process must never win leadership"
