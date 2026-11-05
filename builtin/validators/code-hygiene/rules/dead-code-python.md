@@ -250,7 +250,14 @@ tool:
         sys.stderr.write(f"dead-code-python: no reached name read: {failure}\n")
     REACHED_NAMES
     printf '[tool.vulture]\n' > "$work/vulture.toml"
-    python3 "$work/reached.py" > "$work/whitelist.py"
+    # Read the manifest with the interpreter vulture runs on. A uv tool carries
+    # its own Python 3.11 or newer, which has `tomllib`. The system `python3` of
+    # a runner can be older and then reads no manifest.
+    interpreter="$(sed -n '1s/^#!//p' "$(command -v vulture)")"
+    if [ ! -x "$interpreter" ]; then
+      interpreter=python3
+    fi
+    "$interpreter" "$work/reached.py" > "$work/whitelist.py"
     vulture \
       --config "$work/vulture.toml" \
       --min-confidence 60 \
