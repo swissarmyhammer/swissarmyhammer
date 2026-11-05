@@ -22,30 +22,6 @@ fn extract_id(output: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The ack half of a task-mutation response, with the `_plan` attachment
-/// removed.
-///
-/// A task mutation answers with a thin ack — `ok`, `id`, `short_id` — beside
-/// an ACP `_plan` sibling. The plan lists EVERY card on the board, each by
-/// title, so an assertion about what the ack echoes has to read the ack
-/// alone: run against the whole response it answers for the plan instead.
-fn ack_without_plan(stdout: &str) -> String {
-    let mut response: serde_yaml_ng::Value =
-        serde_yaml_ng::from_str(stdout).expect("the kanban CLI answers in YAML");
-
-    let plan_key = serde_yaml_ng::Value::String("_plan".to_string());
-    let removed = response
-        .as_mapping_mut()
-        .expect("a mutation response is a YAML mapping")
-        .remove(&plan_key);
-    assert!(
-        removed.is_some(),
-        "a task mutation attaches a `_plan`; got: {stdout}"
-    );
-
-    serde_yaml_ng::to_string(&response).expect("a parsed response re-serializes")
-}
-
 // ============================================
 // BOARD OPERATIONS (3 tests)
 // ============================================
@@ -413,7 +389,7 @@ async fn test_kanban_task_update() {
         result.stderr
     );
     // Mutations return a thin ack ({ok, id, short_id}) — no field echo.
-    let ack = ack_without_plan(&result.stdout);
+    let ack = &result.stdout;
     assert!(
         ack.contains(&task_id),
         "Ack should carry the task id, got: {ack}"
@@ -421,15 +397,6 @@ async fn test_kanban_task_update() {
     assert!(
         !ack.contains("Updated Title"),
         "Ack must not echo the updated title, got: {ack}"
-    );
-    // The title the ack withholds reaches the caller through the `_plan`
-    // attachment instead, which names every card on the board. Asserting it
-    // here keeps the split above honest: were the plan to stop carrying the
-    // card, the assertion above would pass for the wrong reason.
-    assert!(
-        result.stdout.contains("Updated Title"),
-        "The `_plan` attachment must name the updated card, got: {}",
-        result.stdout
     );
 
     // The stored state carries the change — verify via get.

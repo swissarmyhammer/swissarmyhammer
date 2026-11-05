@@ -3,18 +3,13 @@
 //! This module provides a single MCP tool for kanban board operations.
 //! The tool exposes its operations via the Operation trait for CLI generation.
 //!
-//! # Plan Notifications
+//! # Response Scope
 //!
-//! When tasks are modified (add, update, delete, move, complete), the tool emits
-//! plan notifications through the `plan_sender` channel in `ToolContext`. These
-//! notifications contain the complete task list in a format compatible with ACP
-//! (Agent Client Protocol) plan updates.
-//!
-//! Per ACP spec: "Complete plan lists must be resent with each update; clients
-//! will replace prior plans entirely."
+//! A write operation (add, update, delete, move, complete, ...) answers with
+//! its own result and nothing more. No call returns the whole board unless the
+//! caller asked for it with a read such as `get board` or `list tasks`.
 
 use crate::mcp::lifecycle_utils::applier_error;
-use crate::mcp::plan_notifications::{PlanEntry, PlanEntryPriority, PlanEntryStatus};
 use crate::mcp::tool_registry::{BaseToolImpl, McpTool, ToolContext, ToolRegistry};
 use async_trait::async_trait;
 use mirdan::mcp_config::McpServerEntry;
@@ -24,11 +19,7 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use swissarmyhammer_common::lifecycle::{InitResult, InitScope};
 use swissarmyhammer_common::reporter::{InitEvent, InitReporter};
-use swissarmyhammer_kanban::{
-    parse::parse_input,
-    task::{ListTasks, MAX_PAGE_SIZE},
-    Execute, KanbanContext, KanbanOperation, Noun, Verb,
-};
+use swissarmyhammer_kanban::{parse::parse_input, KanbanContext, KanbanOperation};
 
 // Operations and schema are provided by the kanban crate's single source of truth:
 // `swissarmyhammer_kanban::schema::kanban_operations()`
@@ -90,226 +81,6 @@ impl KanbanTool {
 
         Ok(KanbanContext::new(kanban_dir))
     }
-}
-
-/// Convert a kanban task JSON value to a PlanEntry
-///
-/// Maps kanban task structure to ACP-compatible plan entry format:
-/// - task.title → PlanEntry.content
-/// - task.position.column → PlanEntry.status (done → Completed, doing → InProgress, else → Pending)
-/// - All entries get Medium priority (kanban doesn't track priority)
-fn task_to_plan_entry(task: &Value) -> PlanEntry {
-    let column = task["position"]["column"].as_str().unwrap_or("todo");
-
-    let status = match column {
-        "done" => PlanEntryStatus::Completed,
-        "doing" => PlanEntryStatus::InProgress,
-        _ => PlanEntryStatus::Pending,
-    };
-
-    let id = task["id"].as_str().unwrap_or("").to_string();
-    let title = task["title"].as_str().unwrap_or("").to_string();
-
-    let mut entry = PlanEntry::new(id, title, status, PlanEntryPriority::Medium);
-
-    if let Some(desc) = task["description"].as_str() {
-        entry = entry.with_notes(desc);
-    }
-
-    entry.with_column(column)
-}
-
-/// Key under which `ListTasks::execute` returns one page of cards.
-///
-/// The operation answers with an OBJECT — `tasks`, `count`, `total`, `page`,
-/// `page_size`, `total_pages` — so the card array lives one level in. Reading
-/// the object itself as an array is the defect
-/// [`read_task_page`] exists to make impossible.
-const LIST_TASKS_ARRAY_KEY: &str = "tasks";
-
-/// Key under which `ListTasks::execute` reports how many pages its listing
-/// spans.
-const LIST_TASKS_TOTAL_PAGES_KEY: &str = "total_pages";
-
-/// Read one `list tasks` page: its cards, and how many pages the listing has.
-///
-/// Returns `None` when the page does not carry both in the expected shape.
-/// A shape this cannot read is never degraded into "no cards" — an empty plan
-/// tells an ACP client the board is empty, which is a silent lie. The caller
-/// drops the plan instead, the same way it drops one it could not list.
-fn read_task_page(listing: &Value) -> Option<(&[Value], u64)> {
-    let tasks = listing.get(LIST_TASKS_ARRAY_KEY)?.as_array()?.as_slice();
-    let total_pages = listing.get(LIST_TASKS_TOTAL_PAGES_KEY)?.as_u64()?;
-    Some((tasks, total_pages))
-}
-
-/// Collect every card on the board, across as many `list tasks` pages as it
-/// takes.
-///
-/// Two `ListTasks` defaults stand between a plain call and a complete list,
-/// and the plan needs both overridden:
-///
-/// - It serves ten cards a page and at most [`MAX_PAGE_SIZE`] per call, so a
-///   board wider than one page needs several. This asks for the widest page
-///   `ListTasks` will serve, then follows `total_pages` to the end.
-/// - An unscoped listing hides the terminal column, which would drop finished
-///   cards from the plan and leave `complete task` naming a card its own plan
-///   does not carry.
-///
-/// The per-card payload stays at the default `slim` detail: pulling every
-/// card's description into every mutation response is the prompt-token
-/// blowup pagination was added to prevent. Plan entries therefore carry no
-/// notes.
-///
-/// Returns `None` when any page fails to list or cannot be read, so the
-/// caller reports the failure by attaching no plan at all.
-async fn list_all_tasks_for_plan(ctx: &KanbanContext) -> Option<Vec<Value>> {
-    let mut cards = Vec::new();
-    let mut page = 1;
-
-    loop {
-        let listing = ListTasks::new()
-            .with_exclude_done(false)
-            .with_page(page)
-            .with_page_size(MAX_PAGE_SIZE)
-            .execute(ctx)
-            .await
-            .into_result();
-
-        let listing = match listing {
-            Ok(listing) => listing,
-            Err(e) => {
-                tracing::warn!("failed to list tasks for plan: {}", e);
-                return None;
-            }
-        };
-
-        let Some((tasks, total_pages)) = read_task_page(&listing) else {
-            tracing::warn!(
-                page,
-                "`list tasks` page is not shaped as a plan can read; \
-                 attaching no plan rather than an empty one: {}",
-                listing
-            );
-            return None;
-        };
-
-        cards.extend(tasks.iter().cloned());
-
-        if page as u64 >= total_pages {
-            return Some(cards);
-        }
-        page += 1;
-    }
-}
-
-/// Build plan data from current kanban tasks
-///
-/// Returns a JSON object containing the complete plan in a format that can be
-/// converted to ACP Plan by the agent. The plan is embedded in tool responses
-/// under the `_plan` key.
-///
-/// Per ACP spec: "Complete plan lists must be resent with each update"
-async fn build_plan_data(
-    ctx: &KanbanContext,
-    trigger: &str,
-    affected_task_id: Option<&str>,
-) -> Option<Value> {
-    let tasks = list_all_tasks_for_plan(ctx).await?;
-
-    // Convert tasks to plan entries
-    let entries: Vec<Value> = tasks
-        .iter()
-        .map(|task| {
-            let entry = task_to_plan_entry(task);
-            json!({
-                "content": entry.content,
-                "status": match entry.status {
-                    PlanEntryStatus::Pending => "pending",
-                    PlanEntryStatus::InProgress => "in_progress",
-                    PlanEntryStatus::Completed => "completed",
-                },
-                "priority": match entry.priority {
-                    PlanEntryPriority::High => "high",
-                    PlanEntryPriority::Medium => "medium",
-                    PlanEntryPriority::Low => "low",
-                },
-                "_meta": {
-                    "id": entry.id,
-                    "column": entry.column,
-                    "notes": entry.notes,
-                }
-            })
-        })
-        .collect();
-
-    let mut plan = json!({
-        "entries": entries,
-        "_meta": {
-            "source": "swissarmyhammer_kanban",
-            "trigger": trigger,
-        }
-    });
-
-    if let Some(id) = affected_task_id {
-        plan["_meta"]["affected_task_id"] = json!(id);
-    }
-
-    Some(plan)
-}
-
-/// Attach ACP plan data to a kanban tool response.
-///
-/// An object response — every single-operation response — takes the plan as a
-/// `_plan` key beside its own fields. Anything else has nowhere to hold a key,
-/// so it is nested under `result` and the plan sits next to it:
-/// `{"result": [...], "_plan": {...}}`. Callers read `_plan` from the top level
-/// in both shapes.
-///
-/// The nesting branch is unreached through [`McpTool::execute`] today, on two
-/// preconditions. First, MCP hands the tool an arguments OBJECT and
-/// `parse_input` resolves an object to exactly one operation, so no batch array
-/// is ever built. Second, all twelve entries in [`TASK_MODIFYING_OPERATIONS`]
-/// return a JSON object, so the one response that can carry a plan is always an
-/// object. Neither is enforced: `parse_input` accepts a top-level array from
-/// other callers, and a future modifying op returning `null` or an array — as
-/// `next task` already returns `null` — would take the nesting branch. The
-/// branch stays because dropping the plan instead would be a silent loss.
-fn attach_plan(response: Value, plan: Value) -> Value {
-    match response {
-        Value::Object(mut map) => {
-            map.insert("_plan".to_string(), plan);
-            Value::Object(map)
-        }
-        batch => json!({
-            "result": batch,
-            "_plan": plan,
-        }),
-    }
-}
-
-/// The `(verb, noun)` pairs whose execution changes the task list.
-///
-/// Comment mutations belong here too: a comment ack's top-level `id` is the
-/// owning TASK id, which is what feeds `affected_task_id`.
-const TASK_MODIFYING_OPERATIONS: &[(Verb, Noun)] = &[
-    (Verb::Add, Noun::Task),
-    (Verb::Update, Noun::Task),
-    (Verb::Delete, Noun::Task),
-    (Verb::Move, Noun::Task),
-    (Verb::Complete, Noun::Task),
-    (Verb::Assign, Noun::Task),
-    (Verb::Unassign, Noun::Task),
-    (Verb::Tag, Noun::Task),
-    (Verb::Untag, Noun::Task),
-    (Verb::Add, Noun::Comment),
-    (Verb::Update, Noun::Comment),
-    (Verb::Delete, Noun::Comment),
-];
-
-/// Check if an operation modifies tasks (and should trigger plan notification)
-fn is_task_modifying_operation(verb: Verb, noun: Noun) -> bool {
-    TASK_MODIFYING_OPERATIONS.contains(&(verb, noun))
 }
 
 // No special health checks; inherits the default OK check.
@@ -581,9 +352,9 @@ impl McpTool for KanbanTool {
     /// Fills in the session actor when the caller omitted one, parses the
     /// input, executes each operation in order, and serializes the result — a
     /// single operation's own result verbatim — which may be `null`, as
-    /// `next task` returns on an empty board — or an array for a batch. When
-    /// any operation modified a task the current plan is attached; see
-    /// `attach_plan` for the two response shapes that produces.
+    /// `next task` returns on an empty board — or an array for a batch.
+    /// Nothing beyond the operations' own results is attached, so a write
+    /// never echoes the rest of the board.
     async fn execute(
         &self,
         mut arguments: serde_json::Map<String, serde_json::Value>,
@@ -614,47 +385,15 @@ impl McpTool for KanbanTool {
 
         // Execute each operation and collect results
         let mut results = Vec::new();
-        let mut should_include_plan = false;
-        let mut last_affected_task_id: Option<String> = None;
-        let mut last_trigger = String::new();
-
         for op in &operations {
-            let result = execute_operation(&ctx, op).await?;
-
-            // Track if we need to include plan in response
-            if is_task_modifying_operation(op.verb, op.noun) {
-                should_include_plan = true;
-                last_trigger = op.op_string();
-
-                // Extract the affected task ID from the result if available
-                if let Some(id) = result["id"].as_str() {
-                    last_affected_task_id = Some(id.to_string());
-                }
-            }
-
-            results.push(result);
+            results.push(execute_operation(&ctx, op).await?);
         }
 
-        // Build response with plan data if any task-modifying operations were executed
-        let mut response = if results.len() == 1 {
+        let response = if results.len() == 1 {
             results.into_iter().next().unwrap()
         } else {
             json!(results)
         };
-
-        // Attach plan data for task-modifying operations so ACP agents can
-        // emit Plan notifications.
-        if should_include_plan {
-            if let Some(plan) =
-                build_plan_data(&ctx, &last_trigger, last_affected_task_id.as_deref()).await
-            {
-                response = attach_plan(response, plan);
-                tracing::debug!(
-                    "included plan data in kanban response: trigger={}",
-                    last_trigger
-                );
-            }
-        }
 
         Ok(BaseToolImpl::create_success_response(
             serde_json::to_string_pretty(&response).unwrap_or_else(|_| response.to_string()),
@@ -719,7 +458,7 @@ mod tests {
     ///
     /// `args` is the MCP arguments object, `op` key included. Going through
     /// `KanbanTool::execute` keeps the assertion on what the tool itself
-    /// returns, including whatever `execute` attaches — `_plan` above all.
+    /// returns, including anything `execute` might attach beside the result.
     /// The served wire response folds in inline diagnostics one layer further
     /// out, in `McpServer`; kanban emits none, so nothing is lost here.
     async fn run_op(tool: &KanbanTool, context: &ToolContext, args: Value) -> Value {
@@ -1203,500 +942,102 @@ mod tests {
     }
 
     // =========================================================================
-    // `_plan` attachment — one read-back test per TASK_MODIFYING_OPERATIONS entry
+    // Write responses stay scoped to the card they touched
     // =========================================================================
 
-    /// Seed a fresh board carrying one task, ready for a `_plan` probe.
+    /// How many bystander cards the scoping probes seed — wider than one
+    /// default `list tasks` page, so a reply that listed the board would have
+    /// to page through it.
+    const BYSTANDER_CARD_COUNT: usize = 31;
+
+    /// One card on a probe board that the operation under test never names.
+    struct Bystander {
+        /// The card's id, as `add task` echoed it.
+        id: String,
+        /// The card's title.
+        title: String,
+    }
+
+    /// Seed a fresh board with [`BYSTANDER_CARD_COUNT`] cards.
     ///
-    /// Returns the tool, its context and the whole `add task` response. Whole,
-    /// because `add task` is itself one of the operations under test here.
-    async fn plan_probe_board(temp: &TempDir, title: &str) -> (KanbanTool, ToolContext, Value) {
+    /// Returns the tool, its context and every seeded card.
+    async fn bystander_board(temp: &TempDir) -> (KanbanTool, ToolContext, Vec<Bystander>) {
         let context = create_test_context()
             .await
             .with_working_dir(temp.path().to_path_buf());
         let tool = KanbanTool::new();
         init_test_board(&tool, &context).await;
-        let added = run_op(&tool, &context, json!({"op": "add task", "title": title})).await;
-        (tool, context, added)
+
+        let mut bystanders = Vec::with_capacity(BYSTANDER_CARD_COUNT);
+        for n in 0..BYSTANDER_CARD_COUNT {
+            let title = format!("Bystander card #{n}#");
+            let added = run_op(&tool, &context, json!({"op": "add task", "title": title})).await;
+            let id = added["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("`add task` echoes the new card id, got: {added}"))
+                .to_string();
+            bystanders.push(Bystander { id, title });
+        }
+        (tool, context, bystanders)
     }
 
-    /// Assert `data` carries a `_plan` attachment naming `task_id` as affected.
+    /// The bystander cards whose id or title `response` mentions.
     ///
-    /// This is the read-back half of the plan round trip. `execute` copies the
-    /// mutation ack's top-level `id` into `_plan._meta.affected_task_id`, and
-    /// an ACP agent reads it back from there to learn which card moved. Every
-    /// entry in [`TASK_MODIFYING_OPERATIONS`] owes this assertion: attaching a
-    /// `_plan` that names the wrong card, or no card, is a silent loss.
-    fn assert_plan_affects(data: &Value, task_id: &str, op: &str) {
-        assert_eq!(
-            data["_plan"]["_meta"]["affected_task_id"], task_id,
-            "`{op}` must name the affected task in its `_plan` attachment, got: {data}"
-        );
-    }
-
-    /// Register the actor the assign / unassign probes point at.
-    async fn add_probe_actor(tool: &KanbanTool, context: &ToolContext) {
-        run_op(
-            tool,
-            context,
-            json!({"op": "add actor", "id": "assistant", "name": "Assistant", "type": "agent"}),
-        )
-        .await;
-    }
-
-    /// Add one more card to a probe board and return its id.
-    async fn add_probe_task(tool: &KanbanTool, context: &ToolContext, title: &str) -> String {
-        let added = run_op(tool, context, json!({"op": "add task", "title": title})).await;
-        added["id"]
-            .as_str()
-            .unwrap_or_else(|| panic!("`add task` echoes the new card id, got: {added}"))
-            .to_string()
-    }
-
-    /// Borrow the `_plan.entries` array a tool response carries.
-    ///
-    /// Panics naming the whole response, because an absent or unreadable
-    /// entries list is exactly the defect the probes below exist for: the
-    /// failure has to say what the plan did carry.
-    fn plan_entries<'a>(data: &'a Value, op: &str) -> &'a [Value] {
-        data["_plan"]["entries"]
-            .as_array()
-            .unwrap_or_else(|| panic!("`{op}` attached no `_plan.entries` array, got: {data}"))
-    }
-
-    /// Read the plan status `data` carries for the card `task_id`.
-    fn plan_entry_status(data: &Value, task_id: &str, op: &str) -> String {
-        let entry = plan_entries(data, op)
+    /// A write reply names the card it touched and nothing else; any card
+    /// listed here leaked in from the rest of the board.
+    fn leaked_bystanders<'a>(response: &Value, bystanders: &'a [Bystander]) -> Vec<&'a str> {
+        let text = response.to_string();
+        bystanders
             .iter()
-            .find(|entry| entry["_meta"]["id"] == json!(task_id))
-            .unwrap_or_else(|| {
-                panic!("`{op}` left card {task_id} out of `_plan.entries`, got: {data}")
-            });
-
-        entry["status"]
-            .as_str()
-            .unwrap_or_else(|| panic!("`{op}` gave card {task_id} no plan status, got: {data}"))
-            .to_string()
+            .filter(|card| text.contains(&card.id) || text.contains(&card.title))
+            .map(|card| card.title.as_str())
+            .collect()
     }
 
-    /// `_plan.entries` names every card on the board, each carrying the
-    /// status its column implies.
-    ///
-    /// The entries list is the whole point of `_plan` — ACP replaces the
-    /// prior plan entirely on each update, so shipping an empty list tells
-    /// the client the board is empty. `build_plan_data` used to read the
-    /// `list tasks` response OBJECT as if it were an array; `as_array()`
-    /// answered `None` on it, and the `None` became an empty entry list.
+    /// `add task` on a crowded board answers about the new card alone: no
+    /// `_plan`, and no other card's id or title.
     #[tokio::test]
-    async fn test_plan_entries_name_every_card_with_its_column_status() {
+    async fn test_add_task_reply_names_no_other_card() {
         let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan pending card").await;
-        let pending_id = added["id"].as_str().unwrap().to_string();
+        let (tool, context, bystanders) = bystander_board(&temp).await;
 
-        let doing_id = add_probe_task(&tool, &context, "Plan doing card").await;
-        run_op(
-            &tool,
-            &context,
-            json!({"op": "move task", "id": doing_id, "column": "doing"}),
-        )
-        .await;
-
-        let done_id = add_probe_task(&tool, &context, "Plan done card").await;
-        let data = run_op(
-            &tool,
-            &context,
-            json!({"op": "complete task", "id": done_id}),
-        )
-        .await;
-
-        assert_eq!(
-            plan_entry_status(&data, &pending_id, "complete task"),
-            "pending",
-            "a card in the first column plans as pending"
-        );
-        assert_eq!(
-            plan_entry_status(&data, &doing_id, "complete task"),
-            "in_progress",
-            "a card in the doing column plans as in_progress"
-        );
-        assert_eq!(
-            plan_entry_status(&data, &done_id, "complete task"),
-            "completed",
-            "a card in the done column plans as completed"
-        );
-    }
-
-    /// Every card reaches `_plan.entries`, not just the ones on the first
-    /// `list tasks` page.
-    ///
-    /// `list tasks` paginates: it defaults to ten cards and serves at most
-    /// [`MAX_PAGE_SIZE`] per call. A plan built from a single page names
-    /// those cards and no others, so on a busy board — this project's own
-    /// board carries hundreds of cards — the card the caller just touched is
-    /// usually missing from its own plan. The board here is one card wider
-    /// than the widest page, so a builder that reads one page cannot pass.
-    #[tokio::test]
-    async fn test_plan_entries_reach_past_one_list_tasks_page() {
-        let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan page card 0").await;
-
-        let mut ids = vec![added["id"].as_str().unwrap().to_string()];
-        for n in 1..=MAX_PAGE_SIZE {
-            ids.push(add_probe_task(&tool, &context, &format!("Plan page card {n}")).await);
-        }
-
-        let touched = ids.last().expect("the board was seeded").clone();
-        let data = run_op(
-            &tool,
-            &context,
-            json!({"op": "tag task", "id": touched, "tag": "bug"}),
-        )
-        .await;
-
-        let planned: Vec<&Value> = plan_entries(&data, "tag task")
-            .iter()
-            .map(|entry| &entry["_meta"]["id"])
-            .collect();
-
-        for id in &ids {
-            assert!(
-                planned.contains(&&json!(id)),
-                "card {id} is on the board but missing from `_plan.entries` \
-                 ({} of {} cards planned)",
-                planned.len(),
-                ids.len()
-            );
-        }
-    }
-
-    /// A `list tasks` page that carries no readable task array is refused.
-    ///
-    /// This is the guard on the defect itself. `ListTasks::execute` answers
-    /// with an object; the old builder called `as_array()` on that object,
-    /// got `None`, and turned the `None` into an empty entry list. A shape
-    /// it cannot read must fail, so the caller drops the plan loudly instead
-    /// of publishing one that says the board is empty.
-    #[test]
-    fn test_read_task_page_refuses_a_listing_it_cannot_read() {
-        for unreadable in [
-            json!({"count": 0, "total_pages": 1}),
-            json!({"tasks": "not an array", "total_pages": 1}),
-            json!({"tasks": [], "total_pages": "not a number"}),
-            json!({"tasks": []}),
-            json!([]),
-        ] {
-            assert!(
-                read_task_page(&unreadable).is_none(),
-                "an unreadable `list tasks` page must be refused, not read as empty: {unreadable}"
-            );
-        }
-    }
-
-    /// A well-formed `list tasks` page yields its cards and its page count.
-    #[test]
-    fn test_read_task_page_reads_a_well_formed_listing() {
-        let listing = json!({
-            "tasks": [{"id": "01ABC"}],
-            "count": 1,
-            "total": 3,
-            "page": 1,
-            "page_size": 1,
-            "total_pages": 3,
-        });
-
-        let (tasks, total_pages) =
-            read_task_page(&listing).expect("a well-formed listing is readable");
-
-        assert_eq!(tasks, [json!({"id": "01ABC"})]);
-        assert_eq!(total_pages, 3);
-    }
-
-    /// Add one comment to `task_id` and return its member id.
-    async fn add_probe_comment(tool: &KanbanTool, context: &ToolContext, task_id: &str) -> String {
         let added = run_op(
-            tool,
-            context,
-            json!({"op": "add comment", "task_id": task_id, "text": "plan-worthy remark"}),
+            &tool,
+            &context,
+            json!({"op": "add task", "title": "Scoped add target"}),
         )
         .await;
-        added["comment"]["id"]
-            .as_str()
-            .expect("add comment echoes the new member")
-            .to_string()
-    }
 
-    /// `add task` — the plan names the card that was just created.
-    ///
-    /// Anchored on stored state, not on the ack: `_plan._meta.affected_task_id`
-    /// is filled FROM that ack's `id`, so comparing the two to each other would
-    /// only prove a field equals itself. Every other probe here has an
-    /// independent anchor — it feeds the mutation an id obtained earlier.
-    #[tokio::test]
-    async fn test_add_task_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan add target").await;
-
-        let planned = added["_plan"]["_meta"]["affected_task_id"]
-            .as_str()
-            .unwrap_or_else(|| panic!("`add task` named no affected task, got: {added}"));
-        let stored = get_task(&tool, &context, planned).await;
-
-        assert_eq!(
-            stored["title"], "Plan add target",
-            "the plan must name the card `add task` actually stored, got: {stored}"
+        assert!(
+            added.get("_plan").is_none() && leaked_bystanders(&added, &bystanders).is_empty(),
+            "`add task` must answer about its own card only, got: {added}"
         );
     }
 
-    /// `update task` — the response is a thin ack, so its top-level `id` is
-    /// the only source `_plan` has for the affected card.
+    /// `move task` on a crowded board answers about the moved card alone: no
+    /// `_plan`, and no other card's id or title.
     #[tokio::test]
-    async fn test_update_task_plan_carries_affected_task_id() {
+    async fn test_move_task_reply_names_no_other_card() {
         let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan update target").await;
-        let task_id = added["id"].as_str().unwrap().to_string();
-
-        let data = run_op(
+        let (tool, context, bystanders) = bystander_board(&temp).await;
+        let added = run_op(
             &tool,
             &context,
-            json!({"op": "update task", "id": task_id, "title": "Plan target renamed"}),
+            json!({"op": "add task", "title": "Scoped move target"}),
         )
         .await;
+        let task_id = added["id"].as_str().expect("add task echoes the id");
 
-        assert_plan_affects(&data, &task_id, "update task");
-    }
-
-    /// `delete task` — the card is off the board by the time the plan is
-    /// built, so the affected id has to survive in the ack itself.
-    #[tokio::test]
-    async fn test_delete_task_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan delete target").await;
-        let task_id = added["id"].as_str().unwrap().to_string();
-
-        let data = run_op(&tool, &context, json!({"op": "delete task", "id": task_id})).await;
-
-        assert_plan_affects(&data, &task_id, "delete task");
-    }
-
-    /// `move task` — the column change is the whole point of the plan update,
-    /// so the plan must say which card changed column.
-    #[tokio::test]
-    async fn test_move_task_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan move target").await;
-        let task_id = added["id"].as_str().unwrap().to_string();
-
-        let data = run_op(
+        let moved = run_op(
             &tool,
             &context,
             json!({"op": "move task", "id": task_id, "column": "doing"}),
         )
         .await;
 
-        assert_plan_affects(&data, &task_id, "move task");
-    }
-
-    /// `complete task` — a move to the terminal column, acked the same way.
-    #[tokio::test]
-    async fn test_complete_task_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan complete target").await;
-        let task_id = added["id"].as_str().unwrap().to_string();
-
-        let data = run_op(
-            &tool,
-            &context,
-            json!({"op": "complete task", "id": task_id}),
-        )
-        .await;
-
-        assert_plan_affects(&data, &task_id, "complete task");
-    }
-
-    /// `assign task` — the thin ack's top-level `id` must reach `_plan`.
-    #[tokio::test]
-    async fn test_assign_task_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan assign target").await;
-        let task_id = added["id"].as_str().unwrap().to_string();
-        add_probe_actor(&tool, &context).await;
-
-        let data = run_op(
-            &tool,
-            &context,
-            json!({"op": "assign task", "id": task_id, "assignee": "assistant"}),
-        )
-        .await;
-
-        assert_plan_affects(&data, &task_id, "assign task");
-    }
-
-    /// `unassign task` — the inverse of `assign task`, and equally a task
-    /// mutation, so it owes the same `_plan` attachment.
-    #[tokio::test]
-    async fn test_unassign_task_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan unassign target").await;
-        let task_id = added["id"].as_str().unwrap().to_string();
-        add_probe_actor(&tool, &context).await;
-        run_op(
-            &tool,
-            &context,
-            json!({"op": "assign task", "id": task_id, "assignee": "assistant"}),
-        )
-        .await;
-
-        let data = run_op(
-            &tool,
-            &context,
-            json!({"op": "unassign task", "id": task_id, "assignee": "assistant"}),
-        )
-        .await;
-
-        assert_plan_affects(&data, &task_id, "unassign task");
-    }
-
-    /// `tag task` — regression for the previously-missed extraction: the old
-    /// `task_id` key was never picked up by the `_plan` wrapper.
-    #[tokio::test]
-    async fn test_tag_task_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan tag target").await;
-        let task_id = added["id"].as_str().unwrap().to_string();
-
-        let data = run_op(
-            &tool,
-            &context,
-            json!({"op": "tag task", "id": task_id, "tag": "bug"}),
-        )
-        .await;
-
-        assert_plan_affects(&data, &task_id, "tag task");
-    }
-
-    /// `untag task` — the inverse of `tag task`, same ack, same obligation.
-    #[tokio::test]
-    async fn test_untag_task_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan untag target").await;
-        let task_id = added["id"].as_str().unwrap().to_string();
-        run_op(
-            &tool,
-            &context,
-            json!({"op": "tag task", "id": task_id, "tag": "bug"}),
-        )
-        .await;
-
-        let data = run_op(
-            &tool,
-            &context,
-            json!({"op": "untag task", "id": task_id, "tag": "bug"}),
-        )
-        .await;
-
-        assert_plan_affects(&data, &task_id, "untag task");
-    }
-
-    /// `add comment` — a comment ack's top-level `id` is the OWNING task id,
-    /// which is what `_plan` must name. Without the `(Add, Comment)` arm in
-    /// [`TASK_MODIFYING_OPERATIONS`] the wrapper skips `add comment`
-    /// silently, exactly like tag and assign used to be skipped.
-    #[tokio::test]
-    async fn test_add_comment_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan comment target").await;
-        let task_id = added["id"].as_str().unwrap().to_string();
-
-        let data = run_op(
-            &tool,
-            &context,
-            json!({"op": "add comment", "task_id": task_id, "text": "plan-worthy remark"}),
-        )
-        .await;
-
-        assert_plan_affects(&data, &task_id, "add comment");
-    }
-
-    /// `update comment` — the plan must name the owning TASK, not the comment
-    /// member that changed. An agent plans cards, not comments.
-    #[tokio::test]
-    async fn test_update_comment_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan comment update target").await;
-        let task_id = added["id"].as_str().unwrap().to_string();
-        let comment_id = add_probe_comment(&tool, &context, &task_id).await;
-        assert_ne!(
-            comment_id, task_id,
-            "the probe must distinguish the two ids"
-        );
-
-        let data = run_op(
-            &tool,
-            &context,
-            json!({
-                "op": "update comment",
-                "task_id": task_id,
-                "id": comment_id,
-                "text": "revised remark",
-            }),
-        )
-        .await;
-
-        assert_plan_affects(&data, &task_id, "update comment");
-    }
-
-    /// `delete comment` — same rule as `update comment`: the owning task id,
-    /// never the removed member's id.
-    #[tokio::test]
-    async fn test_delete_comment_plan_carries_affected_task_id() {
-        let temp = TempDir::new().unwrap();
-        let (tool, context, added) = plan_probe_board(&temp, "Plan comment delete target").await;
-        let task_id = added["id"].as_str().unwrap().to_string();
-        let comment_id = add_probe_comment(&tool, &context, &task_id).await;
-        assert_ne!(
-            comment_id, task_id,
-            "the probe must distinguish the two ids"
-        );
-
-        let data = run_op(
-            &tool,
-            &context,
-            json!({"op": "delete comment", "task_id": task_id, "id": comment_id}),
-        )
-        .await;
-
-        assert_plan_affects(&data, &task_id, "delete comment");
-    }
-
-    /// Coverage guard: the roster of plan-attaching operations matches the
-    /// read-back tests above one for one, so the two cannot drift apart.
-    ///
-    /// The pair list below is deliberately a SECOND, independently maintained
-    /// copy of [`TASK_MODIFYING_OPERATIONS`] — that is the mechanism of a drift
-    /// guard, not accidental duplication. Pinning the pairs rather than the
-    /// count also catches a substitution, which leaves the length at twelve
-    /// while handing an untested operation a plan.
-    #[test]
-    fn test_every_task_modifying_operation_has_a_plan_read_back_test() {
-        // One entry per test in this section, in the order they appear.
-        let proven_by_a_read_back_test = [
-            (Verb::Add, Noun::Task),
-            (Verb::Update, Noun::Task),
-            (Verb::Delete, Noun::Task),
-            (Verb::Move, Noun::Task),
-            (Verb::Complete, Noun::Task),
-            (Verb::Assign, Noun::Task),
-            (Verb::Unassign, Noun::Task),
-            (Verb::Tag, Noun::Task),
-            (Verb::Untag, Noun::Task),
-            (Verb::Add, Noun::Comment),
-            (Verb::Update, Noun::Comment),
-            (Verb::Delete, Noun::Comment),
-        ];
-
-        assert_eq!(
-            TASK_MODIFYING_OPERATIONS, proven_by_a_read_back_test,
-            "roster changed; add or drop the matching read-back test and restate the pair"
+        assert!(
+            moved.get("_plan").is_none() && leaked_bystanders(&moved, &bystanders).is_empty(),
+            "`move task` must answer about its own card only, got: {moved}"
         );
     }
 
@@ -3672,40 +3013,5 @@ mod tests {
                 "{direction} skip message"
             );
         }
-    }
-
-    /// A single-operation response is a JSON object, so the plan merges in as a
-    /// `_plan` sibling of the operation's own fields.
-    #[test]
-    fn test_attach_plan_merges_into_object_response() {
-        let plan = json!({"entries": [], "_meta": {"trigger": "update task"}});
-
-        let merged = attach_plan(json!({"id": "01ABC", "ok": true}), plan.clone());
-
-        assert_eq!(merged["id"], "01ABC", "got: {merged}");
-        assert_eq!(merged["ok"], true, "got: {merged}");
-        assert_eq!(merged["_plan"], plan, "got: {merged}");
-    }
-
-    /// A batch response is a JSON array, which cannot carry a key. When the
-    /// batch modified a task the array is nested under `result` and the plan
-    /// sits beside it, so a client reading a batch must expect
-    /// `{"result": [...], "_plan": {...}}` rather than a bare array.
-    #[test]
-    fn test_attach_plan_wraps_batch_array_response() {
-        let batch = json!([{"id": "01ABC", "ok": true}, {"id": "01DEF", "ok": true}]);
-        let plan = json!({"entries": [], "_meta": {"trigger": "add task"}});
-
-        let wrapped = attach_plan(batch.clone(), plan.clone());
-
-        assert!(
-            wrapped.is_object(),
-            "a batch carrying plan data must be an object, not a bare array, got: {wrapped}"
-        );
-        assert_eq!(
-            wrapped["result"], batch,
-            "the batch array must survive intact under `result`, got: {wrapped}"
-        );
-        assert_eq!(wrapped["_plan"], plan, "got: {wrapped}");
     }
 }

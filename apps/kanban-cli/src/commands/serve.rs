@@ -148,17 +148,12 @@ impl ServerHandler for KanbanMcpServer {
 /// runtime, so the handler body has to live in a context-free helper to
 /// be testable.
 ///
-/// # Plan notifications
+/// # Response scope
 ///
-/// Note: unlike the in-process `swissarmyhammer-tools::KanbanTool`, this
-/// server deliberately drops the ACP `_plan` side channel. The tools-side
-/// implementation attaches `session/update` plan data to task-modifying
-/// responses so ACP agents can render progress. The CLI MCP server is a
-/// stateless stdio binary with no plan sender wired in, so emitting plans
-/// here would be a no-op at best and misleading at worst. If plan support
-/// ever lands in the CLI, lifting `build_plan_data` from
-/// `swissarmyhammer-tools/src/mcp/tools/kanban/mod.rs` into
-/// `swissarmyhammer-kanban` for shared use is the preferred path.
+/// Like the in-process `swissarmyhammer-tools::KanbanTool`, this server
+/// answers each call with the operations' own results and nothing more: a
+/// write never echoes the rest of the board. Only an explicit read such as
+/// `get board` or `list tasks` returns more than the card it touched.
 async fn dispatch_call_tool_request(
     ctx: &KanbanContext,
     request: CallToolRequestParams,
